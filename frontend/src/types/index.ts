@@ -58,6 +58,7 @@ export interface GainerAnalysis {
   confidence: number;
   related_beneficiaries: string[];
   beneficiary_reasoning?: string;
+  comparison_to_gainers?: string;
 }
 
 export interface StockPrediction {

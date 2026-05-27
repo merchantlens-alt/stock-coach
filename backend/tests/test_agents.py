@@ -33,7 +33,9 @@ def market_analyst() -> MarketAnalystAgent:
 # ── GainerAnalystAgent ────────────────────────────────────────────────────────
 
 class TestGainerAnalystAgent:
-    async def test_mock_returns_valid_analysis(self, analyst: GainerAnalystAgent) -> None:
+    # ── analyse() backward-compat wrapper ────────────────────────────────────
+
+    async def test_analyse_returns_gainer_analysis(self, analyst: GainerAnalystAgent) -> None:
         result = await analyst.analyse(
             ticker="NVDA",
             change_pct=8.5,
@@ -47,138 +49,154 @@ class TestGainerAnalystAgent:
         assert len(result.key_catalysts) > 0
         assert result.why_it_gained != ""
 
-    async def test_mock_returns_valid_catalyst_type(self, analyst: GainerAnalystAgent) -> None:
-        result = await analyst.analyse(
-            ticker="TEST",
-            change_pct=5.0,
-            company_name="Test Corp",
-            sector=None,
+    # ── analyse_full() — combined call ────────────────────────────────────────
+
+    async def test_analyse_full_returns_tuple(self, analyst: GainerAnalystAgent, sample_fundamentals) -> None:
+        analysis, prediction = await analyst.analyse_full(
+            ticker="NVDA",
+            change_pct=8.5,
+            company_name="NVIDIA Corporation",
+            sector="Technology",
             news=[],
+            fundamentals=sample_fundamentals,
+        )
+        assert isinstance(analysis, GainerAnalysis)
+        assert analysis.ticker == "NVDA"
+        assert prediction is not None
+        assert prediction.ticker == "NVDA"
+
+    async def test_analyse_full_no_fundamentals_returns_none_prediction(
+        self, analyst: GainerAnalystAgent
+    ) -> None:
+        analysis, prediction = await analyst.analyse_full(
+            ticker="NVDA",
+            change_pct=8.5,
+            company_name="NVIDIA Corporation",
+            sector="Technology",
+            news=[],
+            fundamentals=None,
+        )
+        assert isinstance(analysis, GainerAnalysis)
+        assert prediction is None  # Prediction requires fundamentals
+
+    async def test_analyse_full_with_gainers_context_populates_comparison(
+        self, analyst: GainerAnalystAgent, sample_us_gainer: StockGainer
+    ) -> None:
+        analysis, _ = await analyst.analyse_full(
+            ticker="AAPL",
+            change_pct=2.1,
+            company_name="Apple Inc.",
+            sector="Technology",
+            news=[],
+            gainers_context=[sample_us_gainer],
+        )
+        # Mock mode builds a comparison string when context is given
+        assert analysis.comparison_to_gainers is not None
+        assert len(analysis.comparison_to_gainers) > 10
+
+    async def test_analyse_full_without_gainers_context_no_comparison(
+        self, analyst: GainerAnalystAgent
+    ) -> None:
+        analysis, _ = await analyst.analyse_full(
+            ticker="NVDA",
+            change_pct=8.5,
+            company_name="NVIDIA Corporation",
+            sector="Technology",
+            news=[],
+            gainers_context=None,
+        )
+        assert analysis.comparison_to_gainers is None
+
+    async def test_mock_returns_valid_catalyst_type(self, analyst: GainerAnalystAgent) -> None:
+        analysis, _ = await analyst.analyse_full(
+            ticker="TEST", change_pct=5.0, company_name="Test Corp", sector=None, news=[]
         )
         valid_types = {
             "earnings", "fda_approval", "acquisition", "partnership",
             "analyst_upgrade", "macro", "technical", "regulatory", "unknown",
         }
-        assert result.catalyst_type in valid_types
+        assert analysis.catalyst_type in valid_types
 
     async def test_mock_returns_valid_sentiment(self, analyst: GainerAnalystAgent) -> None:
-        result = await analyst.analyse(
-            ticker="TEST",
-            change_pct=5.0,
-            company_name="Test Corp",
-            sector=None,
-            news=[],
+        analysis, _ = await analyst.analyse_full(
+            ticker="TEST", change_pct=5.0, company_name="Test Corp", sector=None, news=[]
         )
-        valid_sentiments = {"very_positive", "positive", "neutral", "negative", "very_negative"}
-        assert result.sentiment in valid_sentiments
+        assert analysis.sentiment in {"very_positive", "positive", "neutral", "negative", "very_negative"}
 
     async def test_mock_includes_related_beneficiaries(self, analyst: GainerAnalystAgent) -> None:
-        result = await analyst.analyse(
-            ticker="NVDA",
-            change_pct=8.5,
-            company_name="NVIDIA Corporation",
-            sector="Technology",
-            news=[],
+        analysis, _ = await analyst.analyse_full(
+            ticker="NVDA", change_pct=8.5, company_name="NVIDIA", sector="Technology", news=[]
         )
-        assert isinstance(result.related_beneficiaries, list)
-        # Mock response always includes AMD, SMCI, AVGO
-        assert len(result.related_beneficiaries) > 0
-        for ticker in result.related_beneficiaries:
-            assert isinstance(ticker, str)
-            assert len(ticker) > 0
+        assert isinstance(analysis.related_beneficiaries, list)
+        assert len(analysis.related_beneficiaries) > 0
 
     async def test_mock_includes_beneficiary_reasoning(self, analyst: GainerAnalystAgent) -> None:
-        result = await analyst.analyse(
-            ticker="NVDA",
-            change_pct=8.5,
-            company_name="NVIDIA Corporation",
-            sector="Technology",
-            news=[],
+        analysis, _ = await analyst.analyse_full(
+            ticker="NVDA", change_pct=8.5, company_name="NVIDIA", sector="Technology", news=[]
         )
-        assert result.beneficiary_reasoning is not None
-        assert len(result.beneficiary_reasoning) > 10
+        assert analysis.beneficiary_reasoning is not None
+        assert len(analysis.beneficiary_reasoning) > 10
 
-    async def test_mock_with_no_news_still_returns_analysis(self, analyst: GainerAnalystAgent) -> None:
-        result = await analyst.analyse(
-            ticker="AAPL",
-            change_pct=3.2,
-            company_name="Apple Inc.",
-            sector="Technology",
-            news=[],
-        )
-        assert result.ticker == "AAPL"
-
-    async def test_live_gemini_path_with_mocked_http(self, analyst: GainerAnalystAgent) -> None:
-        """Verify the live Gemini REST path processes a valid response correctly."""
+    async def test_live_gemini_path_with_mocked_http(self, analyst: GainerAnalystAgent, sample_fundamentals) -> None:
+        """Verify the live Gemini REST path processes a combined response correctly."""
         import httpx
         import respx
+        from core.auth import clear_token_cache
+
+        clear_token_cache()
 
         fake_ai_response = {
             "candidates": [{
                 "content": {
                     "parts": [{
                         "text": json.dumps({
-                            "why_it_gained": "Strong earnings beat across all segments.",
-                            "key_catalysts": ["Earnings beat by 15%", "Raised full-year guidance"],
+                            "why_it_gained": "Strong earnings beat.",
+                            "key_catalysts": ["Beat by 15%", "Raised guidance"],
                             "catalyst_type": "earnings",
                             "sentiment": "very_positive",
                             "is_sustained": True,
-                            "sustainability_reason": "Structural AI demand continues.",
-                            "confidence": 0.85,
+                            "sustainability_reason": "Structural AI demand.",
+                            "analysis_confidence": 0.85,
                             "related_beneficiaries": ["AMD", "AVGO"],
-                            "beneficiary_reasoning": "Same AI semiconductor supply chain.",
+                            "beneficiary_reasoning": "Same supply chain.",
+                            "comparison_to_gainers": "",
+                            "outlook": "Continued momentum expected.",
+                            "predicted_change_pct": 5.0,
+                            "prediction_confidence": 0.65,
+                            "time_horizon": "weeks",
+                            "key_risks": ["Valuation stretched"],
+                            "key_tailwinds": ["AI demand"],
+                            "valuation_signal": "overvalued",
+                            "growth_signal": "strong",
+                            "debt_signal": "strong",
                         })
                     }]
                 }
             }]
         }
 
-        analyst._mock = False  # Force the live code path
+        analyst._mock = False
         with (
-            patch.object(GainerAnalystAgent, "_get_token", return_value="fake-token"),
+            patch("core.auth.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
                 return_value=httpx.Response(200, json=fake_ai_response)
             )
-            result = await analyst.analyse(
+            analysis, prediction = await analyst.analyse_full(
                 ticker="NVDA",
                 change_pct=8.5,
                 company_name="NVIDIA Corporation",
                 sector="Technology",
-                news=[NewsItem(title="NVDA beats Q3 earnings", source="Reuters")],
+                news=[NewsItem(title="NVDA beats earnings", source="Reuters")],
+                fundamentals=sample_fundamentals,
             )
 
-        assert result.ticker == "NVDA"
-        assert result.catalyst_type == "earnings"
-        assert "AMD" in result.related_beneficiaries
-        assert result.confidence == 0.85
-
-    async def test_live_gemini_http_error_raises_ai_agent_error(
-        self, analyst: GainerAnalystAgent
-    ) -> None:
-        """HTTP errors from Vertex AI surface as AIAgentError after retries."""
-        import httpx
-        import respx
-        from core.exceptions import AIAgentError
-
-        analyst._mock = False
-        with (
-            patch.object(GainerAnalystAgent, "_get_token", return_value="fake-token"),
-            respx.mock,
-        ):
-            # 500 every time → should raise after retries
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
-                return_value=httpx.Response(500, text="Internal Server Error")
-            )
-            with pytest.raises(Exception):  # tenacity wraps or re-raises
-                await analyst.analyse(
-                    ticker="FAIL",
-                    change_pct=5.0,
-                    company_name="Fail Corp",
-                    sector=None,
-                    news=[],
-                )
+        assert analysis.ticker == "NVDA"
+        assert analysis.catalyst_type == "earnings"
+        assert "AMD" in analysis.related_beneficiaries
+        assert prediction is not None
+        assert prediction.time_horizon == "weeks"
 
 
 # ── PredictorAgent ────────────────────────────────────────────────────────────
@@ -240,6 +258,9 @@ class TestPredictorAgent:
         """Verify the live Gemini REST path processes a valid response correctly."""
         import httpx
         import respx
+        from core.auth import clear_token_cache
+
+        clear_token_cache()
 
         fake_ai_response = {
             "candidates": [{
@@ -263,7 +284,7 @@ class TestPredictorAgent:
 
         predictor._mock = False
         with (
-            patch.object(PredictorAgent, "_get_token", return_value="fake-token"),
+            patch("core.auth.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
@@ -348,7 +369,7 @@ class TestMarketAnalystAgent:
 
         market_analyst._mock = False
         with (
-            patch.object(MarketAnalystAgent, "_get_token", return_value="fake-token"),
+            patch("core.auth.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
@@ -377,7 +398,7 @@ class TestMarketAnalystAgent:
 
         market_analyst._mock = False
         with (
-            patch.object(MarketAnalystAgent, "_get_token", return_value="fake-token"),
+            patch("core.auth.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(

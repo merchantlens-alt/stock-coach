@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowDown, ArrowUp, Minus, Sparkles, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, GitCompare, Minus, Sparkles, X } from "lucide-react";
 import type { GainerDetail } from "../types";
 
 interface Props {
@@ -109,6 +109,21 @@ export function AnalysisPanel({ detail, onClose }: Props) {
                 <strong>{analysis.is_sustained ? "Sustained catalyst:" : "One-time pop:"}</strong>{" "}
                 {analysis.sustainability_reason}
               </span>
+            </div>
+          </section>
+        )}
+
+        {/* Comparison to today's top gainers (only shown for searched tickers not in gainer list) */}
+        {analysis?.comparison_to_gainers && (
+          <section>
+            <div className="flex items-center gap-2 mb-2">
+              <GitCompare size={14} className="text-violet-500" />
+              <h3 className="font-semibold text-gray-900">vs. Today's top gainers</h3>
+            </div>
+            <div className="rounded-xl border border-violet-100 bg-violet-50 p-3">
+              <p className="text-sm text-violet-800 leading-relaxed">
+                {analysis.comparison_to_gainers}
+              </p>
             </div>
           </section>
         )}

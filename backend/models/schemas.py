@@ -135,6 +135,7 @@ class GainerAnalysis(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     related_beneficiaries: list[str] = Field(default_factory=list)
     beneficiary_reasoning: Optional[str] = None
+    comparison_to_gainers: Optional[str] = None
 
 
 class StockPrediction(BaseModel):

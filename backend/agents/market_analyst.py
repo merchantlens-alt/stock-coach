@@ -5,6 +5,7 @@ from typing import Any
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from core.auth import get_cached_token
 from core.config import Settings
 from core.exceptions import AIAgentError
 from core.logging import get_logger
@@ -101,7 +102,7 @@ class MarketAnalystAgent:
             },
         }
 
-        token = await asyncio.to_thread(self._get_token)
+        token = await asyncio.to_thread(get_cached_token)
         project = self._settings.google_cloud_project
         region = self._settings.google_cloud_region
         model = self._settings.vertex_ai_model_flash
@@ -120,11 +121,3 @@ class MarketAnalystAgent:
         except json.JSONDecodeError as exc:
             raise AIAgentError(f"Gemini returned invalid JSON: {text[:200]}") from exc
 
-    @staticmethod
-    def _get_token() -> str:
-        import google.auth
-        import google.auth.transport.requests
-
-        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-        creds.refresh(google.auth.transport.requests.Request())
-        return creds.token  # type: ignore[return-value]

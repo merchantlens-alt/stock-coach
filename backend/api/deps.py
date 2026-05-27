@@ -6,7 +6,6 @@ from fastapi import Depends
 
 from agents.gainer_analyst import GainerAnalystAgent
 from agents.market_analyst import MarketAnalystAgent
-from agents.predictor import PredictorAgent
 from core.config import Settings, get_settings
 from services.cache import CacheBackend, build_cache
 from services.market_data import MarketDataService
@@ -19,7 +18,6 @@ _market_data: MarketDataService | None = None
 _news_fetcher: NewsFetcher | None = None
 _gainer_analyst: GainerAnalystAgent | None = None
 _market_analyst: MarketAnalystAgent | None = None
-_predictor: PredictorAgent | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -61,8 +59,3 @@ def get_market_analyst(
     return _market_analyst
 
 
-def get_predictor(settings: Annotated[Settings, Depends(get_settings)]) -> PredictorAgent:
-    global _predictor
-    if _predictor is None:
-        _predictor = PredictorAgent(settings)
-    return _predictor
