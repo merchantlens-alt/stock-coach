@@ -26,9 +26,11 @@ frontend/dist/
 frontend/.vite/
 *.local
 
-# GCP
-*.json
-!backend/tests/fixtures/*.json
+# GCP — only ignore service account credential files, not all JSON
+*-credentials.json
+*-service-account.json
+service-account*.json
+gcp-key*.json
 
 # IDE
 .vscode/
