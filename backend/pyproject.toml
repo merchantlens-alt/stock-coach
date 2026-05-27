@@ -13,6 +13,7 @@ pydantic-settings = "^2.5.0"
 yfinance = "^0.2.50"
 httpx = "^0.27.0"
 google-auth = {extras = ["requests"], version = "^2.35.0"}
+aiofiles = "^24.1.0"
 redis = {extras = ["hiredis"], version = "^5.1.0"}
 structlog = "^24.4.0"
 python-dotenv = "^1.0.0"
