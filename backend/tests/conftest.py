@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from models.schemas import (
     FundamentalsData,
     GainerAnalysis,
+    MarketSummary,
     NewsItem,
     StockGainer,
     StockPrediction,
@@ -23,6 +24,25 @@ def mock_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOCK_AI", "true")
     monkeypatch.setenv("REDIS_URL", "")
     monkeypatch.setenv("NEWS_API_KEY", "")
+
+
+@pytest.fixture(autouse=True)
+def reset_singletons() -> None:
+    """
+    Reset all module-level dep singletons and the settings cache before each
+    test so tests start from a clean state (no stale cache entries, no stale
+    agent instances carrying incorrect config).
+    """
+    import api.deps as deps
+    from core.config import get_settings
+
+    deps._cache = None
+    deps._market_data = None
+    deps._news_fetcher = None
+    deps._gainer_analyst = None
+    deps._market_analyst = None
+    deps._predictor = None
+    get_settings.cache_clear()
 
 
 # ── Shared fixtures ────────────────────────────────────────────────────────────
@@ -96,6 +116,30 @@ def sample_gainer_analysis(sample_us_gainer: StockGainer) -> GainerAnalysis:
         is_sustained=True,
         sustainability_reason="AI chip demand is structural, not a one-time event.",
         confidence=0.85,
+        related_beneficiaries=["AMD", "AVGO", "SMCI"],
+        beneficiary_reasoning=(
+            "AMD and AVGO are in the same semiconductor supply chain. "
+            "SMCI benefits directly from AI server demand driven by NVDA chips."
+        ),
+    )
+
+
+@pytest.fixture
+def sample_market_summary() -> MarketSummary:
+    return MarketSummary(
+        market="us",
+        narrative=(
+            "Today's gainers are concentrated in AI infrastructure and semiconductor names, "
+            "suggesting institutional rotation into high-growth tech ahead of upcoming earnings."
+        ),
+        themes=["AI infrastructure demand", "Semiconductor supply chain recovery"],
+        dominant_sector="Technology",
+        sentiment="bullish",
+        watch_list=["NVDA", "AMD", "SMCI"],
+        watch_reason=(
+            "Semiconductor names not yet in today's list may follow in 1-3 days "
+            "as institutional rotation broadens."
+        ),
     )
 
 
