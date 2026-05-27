@@ -90,7 +90,7 @@ async def list_gainers(
         log.error("gainers.list_fetch_error", market=market, error=str(exc))
         raise upstream_error("market data", str(exc))
 
-    gainers = _apply_quality_scores(gainers)
+    # Quality scores are now computed inside market_data._build_gainers()
 
     # Fire market summary AI call in parallel with cache write
     async def _get_summary() -> MarketSummary | None:

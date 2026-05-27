@@ -18,9 +18,6 @@ class Settings(BaseSettings):
     vertex_ai_model_flash: str = "gemini-2.5-flash"
     vertex_ai_model_pro: str = "gemini-2.5-flash"
 
-    # Market data
-    alpha_vantage_api_key: str = ""
-
     # News
     news_api_key: str = ""
 

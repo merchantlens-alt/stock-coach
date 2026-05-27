@@ -5,20 +5,35 @@ import { AnalysisPanel } from "../components/AnalysisPanel";
 import { GainerCard } from "../components/GainerCard";
 import { MarketNarrative } from "../components/MarketNarrative";
 import { MarketToggle } from "../components/MarketToggle";
+import { SearchBar } from "../components/SearchBar";
 import { useGainerDetail, useGainers } from "../hooks/useGainers";
 import type { Market } from "../types";
 
 export function Dashboard() {
   const [market, setMarket] = useState<Market>("us");
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+  const [searchedTicker, setSearchedTicker] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
+  // Active ticker is either a searched one or one clicked from the list
+  const activeTicker = searchedTicker ?? selectedTicker;
+
   const { data: gainersData, isLoading: gainersLoading, error: gainersError, refetch } = useGainers(market);
-  const { data: detail, isLoading: detailLoading } = useGainerDetail(market, selectedTicker);
+  const { data: detail, isLoading: detailLoading, error: detailError } = useGainerDetail(market, activeTicker);
 
   function handleMarketChange(m: Market) {
     setMarket(m);
     setSelectedTicker(null);
+    setSearchedTicker(null);
+  }
+
+  function handleSearch(ticker: string) {
+    setSearchedTicker(ticker);
+    setSelectedTicker(null);
+  }
+
+  function handleClearSearch() {
+    setSearchedTicker(null);
   }
 
   function handleRefresh() {
@@ -42,6 +57,14 @@ export function Dashboard() {
             <RefreshCw size={15} className={gainersLoading ? "animate-spin" : ""} />
           </button>
         </div>
+
+        {/* Search */}
+        <SearchBar
+          market={market}
+          onSearch={handleSearch}
+          onClear={handleClearSearch}
+          isSearching={!!searchedTicker && detailLoading}
+        />
 
         {/* Summary bar */}
         {gainersData && (
@@ -87,11 +110,12 @@ export function Dashboard() {
               <GainerCard
                 key={gainer.ticker}
                 gainer={gainer}
-                isSelected={selectedTicker === gainer.ticker}
-                isLoading={selectedTicker === gainer.ticker && detailLoading}
-                onClick={() =>
-                  setSelectedTicker(selectedTicker === gainer.ticker ? null : gainer.ticker)
-                }
+                isSelected={activeTicker === gainer.ticker}
+                isLoading={activeTicker === gainer.ticker && detailLoading}
+                onClick={() => {
+                  setSearchedTicker(null);
+                  setSelectedTicker(selectedTicker === gainer.ticker ? null : gainer.ticker);
+                }}
               />
             ))}
 
@@ -107,18 +131,38 @@ export function Dashboard() {
       {/* Right pane — analysis */}
       <div className="flex-1 overflow-hidden">
         {detail ? (
-          <AnalysisPanel detail={detail} onClose={() => setSelectedTicker(null)} />
+          <AnalysisPanel
+            detail={detail}
+            onClose={() => { setSelectedTicker(null); setSearchedTicker(null); }}
+          />
         ) : (
           <div className="h-full flex flex-col items-center justify-center text-gray-400 gap-3 p-8">
             {detailLoading ? (
               <div className="text-center">
                 <div className="w-10 h-10 rounded-full border-2 border-green-500 border-t-transparent animate-spin mx-auto mb-3" />
-                <p className="text-sm">AI is analysing the stock…</p>
-                <p className="text-xs mt-1 text-gray-300">This takes 15–30 seconds on first load</p>
+                <p className="text-sm font-medium text-gray-600">
+                  {searchedTicker ? `Analysing ${searchedTicker}…` : "AI is analysing the stock…"}
+                </p>
+                <p className="text-xs mt-1 text-gray-400">Fetching data · Running AI agents · 15–30 sec</p>
+              </div>
+            ) : detailError && activeTicker ? (
+              <div className="text-center">
+                <p className="text-sm font-medium text-red-500">
+                  Could not find <span className="font-bold">{activeTicker}</span>
+                </p>
+                <p className="text-xs mt-1 text-gray-400">
+                  Check the ticker symbol and try again
+                </p>
+                <button
+                  onClick={() => { setSelectedTicker(null); setSearchedTicker(null); }}
+                  className="mt-3 text-xs text-blue-500 hover:underline"
+                >
+                  Clear
+                </button>
               </div>
             ) : (
               <>
-                <p className="text-sm">Select a stock to see AI analysis</p>
+                <p className="text-sm">Select a stock or search any ticker</p>
                 <p className="text-xs text-gray-300">Why it gained · 30-day outlook · Who else benefits</p>
               </>
             )}
