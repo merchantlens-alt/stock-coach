@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     google_cloud_region: str = "asia-south1"
 
     # Vertex AI
-    vertex_ai_model_flash: str = "gemini-1.5-flash-002"
-    vertex_ai_model_pro: str = "gemini-1.5-pro-002"
+    vertex_ai_model_flash: str = "gemini-2.5-flash"
+    vertex_ai_model_pro: str = "gemini-2.5-flash"
 
     # News
     news_api_key: str = ""

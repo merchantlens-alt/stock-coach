@@ -70,24 +70,6 @@ class GainerAnalystAgent:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._mock = settings.mock_ai
-        self._model: Any = None
-
-        if not self._mock:
-            self._init_vertex()
-
-    def _init_vertex(self) -> None:
-        import vertexai
-        from vertexai.generative_models import GenerativeModel
-
-        vertexai.init(
-            project=self._settings.google_cloud_project,
-            location=self._settings.google_cloud_region,
-        )
-        self._model = GenerativeModel(
-            self._settings.vertex_ai_model_flash,
-            system_instruction=_SYSTEM_PROMPT,
-        )
-        log.info("gainer_analyst.vertex_ai_ready", model=self._settings.vertex_ai_model_flash)
 
     async def analyse(
         self,
@@ -116,8 +98,10 @@ class GainerAnalystAgent:
         sector: str | None,
         news: list[NewsItem],
     ) -> dict[str, Any]:
-        from vertexai.generative_models import GenerationConfig
         import asyncio
+        import httpx
+        import google.auth
+        import google.auth.transport.requests
 
         headlines = "\n".join(f"- {n.title} ({n.source})" for n in news[:8])
         prompt = (
@@ -128,18 +112,42 @@ class GainerAnalystAgent:
             "Analyse why this stock gained today and whether the momentum is likely to continue."
         )
 
-        config = GenerationConfig(
-            temperature=0.1,
-            max_output_tokens=800,
-            response_mime_type="application/json",
-            response_schema=_RESPONSE_SCHEMA,
+        payload = {
+            "system_instruction": {"parts": [{"text": _SYSTEM_PROMPT}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": 800,
+                "responseMimeType": "application/json",
+                "responseSchema": _RESPONSE_SCHEMA,
+            },
+        }
+
+        token = await asyncio.to_thread(self._get_token)
+        project = self._settings.google_cloud_project
+        region = self._settings.google_cloud_region
+        model = self._settings.vertex_ai_model_flash
+        url = (
+            f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}"
+            f"/locations/{region}/publishers/google/models/{model}:generateContent"
         )
 
-        response = await asyncio.to_thread(
-            self._model.generate_content, prompt, generation_config=config
-        )
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload, headers={"Authorization": f"Bearer {token}"})
+            resp.raise_for_status()
 
+        data = resp.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
         try:
-            return json.loads(response.text)
+            return json.loads(text)
         except json.JSONDecodeError as exc:
-            raise AIAgentError(f"Gemini returned invalid JSON: {response.text[:200]}") from exc
+            raise AIAgentError(f"Gemini returned invalid JSON: {text[:200]}") from exc
+
+    @staticmethod
+    def _get_token() -> str:
+        import google.auth
+        import google.auth.transport.requests
+
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        creds.refresh(google.auth.transport.requests.Request())
+        return creds.token  # type: ignore[return-value]

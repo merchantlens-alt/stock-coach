@@ -86,25 +86,6 @@ class PredictorAgent:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._mock = settings.mock_ai
-        self._model: Any = None
-
-        if not self._mock:
-            self._init_vertex()
-
-    def _init_vertex(self) -> None:
-        import vertexai
-        from vertexai.generative_models import GenerativeModel
-
-        vertexai.init(
-            project=self._settings.google_cloud_project,
-            location=self._settings.google_cloud_region,
-        )
-        # Use Pro model for predictions — more thorough reasoning
-        self._model = GenerativeModel(
-            self._settings.vertex_ai_model_pro,
-            system_instruction=_SYSTEM_PROMPT,
-        )
-        log.info("predictor.vertex_ai_ready", model=self._settings.vertex_ai_model_pro)
 
     async def predict(
         self,
@@ -131,8 +112,8 @@ class PredictorAgent:
         fundamentals: FundamentalsData,
         analysis: GainerAnalysis,
     ) -> dict[str, Any]:
-        from vertexai.generative_models import GenerationConfig
         import asyncio
+        import httpx
 
         fund_text = _format_fundamentals(fundamentals)
         prompt = (
@@ -147,21 +128,45 @@ class PredictorAgent:
             "Based on these fundamentals and the catalyst, predict the 30-day outlook."
         )
 
-        config = GenerationConfig(
-            temperature=0.1,
-            max_output_tokens=1000,
-            response_mime_type="application/json",
-            response_schema=_RESPONSE_SCHEMA,
+        payload = {
+            "system_instruction": {"parts": [{"text": _SYSTEM_PROMPT}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": 1000,
+                "responseMimeType": "application/json",
+                "responseSchema": _RESPONSE_SCHEMA,
+            },
+        }
+
+        token = await asyncio.to_thread(self._get_token)
+        project = self._settings.google_cloud_project
+        region = self._settings.google_cloud_region
+        model = self._settings.vertex_ai_model_pro
+        url = (
+            f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}"
+            f"/locations/{region}/publishers/google/models/{model}:generateContent"
         )
 
-        response = await asyncio.to_thread(
-            self._model.generate_content, prompt, generation_config=config
-        )
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(url, json=payload, headers={"Authorization": f"Bearer {token}"})
+            resp.raise_for_status()
 
+        data = resp.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
         try:
-            return json.loads(response.text)
+            return json.loads(text)
         except json.JSONDecodeError as exc:
-            raise AIAgentError(f"Gemini returned invalid JSON: {response.text[:200]}") from exc
+            raise AIAgentError(f"Gemini returned invalid JSON: {text[:200]}") from exc
+
+    @staticmethod
+    def _get_token() -> str:
+        import google.auth
+        import google.auth.transport.requests
+
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        creds.refresh(google.auth.transport.requests.Request())
+        return creds.token  # type: ignore[return-value]
 
 
 def _format_fundamentals(f: FundamentalsData) -> str:
@@ -182,6 +187,6 @@ def _format_fundamentals(f: FundamentalsData) -> str:
         lines.append(f"- Profit margin: {f.profit_margin:.1%}")
     if f.analyst_recommendation:
         lines.append(f"- Analyst consensus: {f.analyst_recommendation}")
-    if f.analyst_target_price and f.fifty_two_week_high:
+    if f.analyst_target_price:
         lines.append(f"- Analyst target price: {f.analyst_target_price:.2f}")
     return "\n".join(lines) if lines else "No fundamental data available."

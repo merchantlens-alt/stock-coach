@@ -1,10 +1,10 @@
 # ── Stage 1: Build React frontend ─────────────────────────────────────────────
-FROM node:20-slim AS frontend-builder
+FROM node:20-alpine AS frontend-builder
 
 WORKDIR /frontend
 
 COPY frontend/package.json ./
-RUN npm install --silent
+RUN npm install --no-audit --no-fund
 
 COPY frontend/ ./
 RUN npm run build
