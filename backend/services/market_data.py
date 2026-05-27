@@ -65,27 +65,48 @@ class MarketDataService:
             raw_gainers = data.get("top_gainers", [])
             gainers: list[StockGainer] = []
 
-            for q in raw_gainers[: self._top_n]:
+            for q in raw_gainers:
                 try:
+                    ticker = str(q.get("ticker", ""))
+                    price = float(q.get("price", 0))
+                    volume = int(q.get("volume", 0))
                     change_pct_str = q.get("change_percentage", "0%").replace("%", "")
                     change_pct = float(change_pct_str)
+
+                    # Filter out low-quality stocks:
+                    # - Penny stocks under $5
+                    # - Warrants (ticker ends in W)
+                    # - Rights/units (ticker ends in R or U)
+                    # - Very low volume (< 500k) — likely illiquid
+                    # - Tickers longer than 5 chars (usually special securities)
+                    if price < 5.0:
+                        continue
+                    if volume < 500_000:
+                        continue
+                    if ticker.endswith(("W", "R", "U")):
+                        continue
+                    if len(ticker) > 5:
+                        continue
                     if change_pct <= 0:
                         continue
+
                     gainers.append(
                         StockGainer(
-                            ticker=str(q.get("ticker", "")),
-                            name=str(q.get("ticker", "")),  # AV doesn't return name here
+                            ticker=ticker,
+                            name=ticker,
                             market="us",
-                            price=float(q.get("price", 0)),
+                            price=price,
                             change_pct=change_pct,
                             change_abs=float(q.get("change_amount", 0)),
-                            volume=int(q.get("volume", 0)),
+                            volume=volume,
                             avg_volume=None,
                             market_cap=None,
                             sector=None,
                             industry=None,
                         )
                     )
+                    if len(gainers) >= self._top_n:
+                        break
                 except Exception:
                     continue
 
