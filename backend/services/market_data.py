@@ -44,64 +44,65 @@ class MarketDataService:
         self._top_n = settings.top_gainers_count
 
     async def get_us_gainers(self) -> list[StockGainer]:
-        """Fetch top US gainers using the yfinance built-in screener."""
+        """Fetch top US gainers directly from Yahoo Finance screener API."""
+        import httpx
+
         try:
-            gainers = await asyncio.to_thread(self._fetch_us_gainers_sync)
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved",
+                    params={
+                        "scrIds": "day_gainers",
+                        "count": self._top_n + 10,
+                        "formatted": "false",
+                        "lang": "en-US",
+                        "region": "US",
+                    },
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/120.0.0.0 Safari/537.36"
+                        )
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            result = data.get("finance", {}).get("result", [])
+            quotes = result[0].get("quotes", []) if result else []
+
+            gainers: list[StockGainer] = []
+            for q in quotes:
+                change_pct = q.get("regularMarketChangePercent", 0)
+                if not change_pct or float(change_pct) <= 0:
+                    continue
+                try:
+                    gainers.append(
+                        StockGainer(
+                            ticker=str(q.get("symbol", "")),
+                            name=str(q.get("shortName", q.get("symbol", ""))),
+                            market="us",
+                            price=float(q.get("regularMarketPrice", 0)),
+                            change_pct=float(change_pct),
+                            change_abs=float(q.get("regularMarketChange", 0)),
+                            volume=int(q.get("regularMarketVolume", 0)),
+                            avg_volume=_safe_int(q.get("averageDailyVolume3Month")),
+                            market_cap=_safe_float(q.get("marketCap")),
+                            sector=q.get("sector"),
+                            industry=q.get("industry"),
+                        )
+                    )
+                except Exception:
+                    continue
+
+            gainers = sorted(gainers, key=lambda g: g.change_pct, reverse=True)
             log.info("market_data.us_gainers_fetched", count=len(gainers))
             return gainers[: self._top_n]
+
         except Exception as exc:
             log.error("market_data.us_gainers_error", error=str(exc))
             raise MarketDataError(f"Failed to fetch US gainers: {exc}") from exc
-
-    def _fetch_us_gainers_sync(self) -> list[StockGainer]:
-        screener = yf.Screener()
-        screener.set_predefined_screener("day_gainers")
-
-        # yfinance >= 0.2.40: use .quotes (DataFrame), not .df
-        try:
-            df = screener.quotes
-        except Exception:
-            df = None
-
-        # Fallback: try .body directly
-        if df is None or (hasattr(df, "empty") and df.empty):
-            try:
-                quotes = screener.body.get("quotes", [])
-                if not quotes:
-                    return []
-                import pandas as pd
-                df = pd.DataFrame(quotes)
-            except Exception:
-                return []
-
-        if df is None or df.empty:
-            return []
-
-        gainers: list[StockGainer] = []
-        for _, row in df.iterrows():
-            change_pct = row.get("regularMarketChangePercent", 0)
-            if not change_pct or float(change_pct) <= 0:
-                continue
-            try:
-                gainers.append(
-                    StockGainer(
-                        ticker=str(row.get("symbol", "")),
-                        name=str(row.get("shortName", row.get("symbol", ""))),
-                        market="us",
-                        price=float(row.get("regularMarketPrice", 0)),
-                        change_pct=float(change_pct),
-                        change_abs=float(row.get("regularMarketChange", 0)),
-                        volume=int(row.get("regularMarketVolume", 0)),
-                        avg_volume=_safe_int(row.get("averageDailyVolume3Month")),
-                        market_cap=_safe_float(row.get("marketCap")),
-                        sector=row.get("sector"),
-                        industry=row.get("industry"),
-                    )
-                )
-            except Exception:
-                continue
-
-        return sorted(gainers, key=lambda g: g.change_pct, reverse=True)
 
     async def get_india_gainers(self) -> list[StockGainer]:
         """Fetch top NSE gainers by scanning the Nifty 100 universe."""
