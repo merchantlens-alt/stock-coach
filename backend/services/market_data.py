@@ -163,7 +163,7 @@ class MarketDataService:
         parts = data["candidates"][0]["content"].get("parts", [])
         text = "".join(p.get("text", "") for p in parts)
 
-        log.debug("market_data.gemini_raw", market=market, chars=len(text), preview=text[:300])
+        log.info("market_data.gemini_raw", market=market, chars=len(text), preview=text[:500])
         return _parse_pipe_table(text)
 
     # ── Builder ───────────────────────────────────────────────────────────────
@@ -232,46 +232,65 @@ def _parse_pipe_table(text: str) -> list[dict[str, Any]]:
       TICKER|NAME|PRICE|CHANGE_PCT|CHANGE_ABS|VOLUME|SECTOR
 
     Tolerant of:
-    - Extra whitespace / blank lines
-    - Missing SECTOR column
-    - Header lines (skipped if TICKER is non-numeric and PRICE is non-numeric)
-    - Markdown table separators (---)
+    - Markdown table format with surrounding pipes: | NVDA | NVIDIA | ...
+    - Volume with unit suffixes: 45.2M, 500K, 1.2B
+    - Extra whitespace / blank lines / missing SECTOR column
+    - Header lines (skipped because PRICE is non-numeric)
+    - Markdown table separators (---|---|)
+    - Markdown bold/italic formatting on ticker: **NVDA**
     """
     results: list[dict[str, Any]] = []
     for line in text.splitlines():
         line = line.strip()
         if not line or "|" not in line:
             continue
-        # Skip markdown separators like |---|---|
+        # Skip markdown separators like |---|---| or |:--|--:|
         if re.match(r"^[\s|:\-]+$", line):
             continue
 
         parts = [p.strip() for p in line.split("|")]
+
+        # ── Handle markdown table rows: | A | B | C | → strip empty edge fields ──
+        # When Gemini wraps each row in pipes the split produces an empty string
+        # at index 0 and the last position.  Without this fix parts[0] == "" and
+        # the ticker check below skips every row → 0 gainers.
+        if parts and not parts[0]:
+            parts = parts[1:]
+        if parts and not parts[-1]:
+            parts = parts[:-1]
+
         if len(parts) < 6:
             continue
 
-        ticker = parts[0].upper()
+        # Strip markdown formatting from ticker (**NVDA** → NVDA)
+        raw_ticker = re.sub(r"[^A-Z0-9]", "", parts[0].upper())
         name = parts[1]
         price_str = parts[2]
         change_pct_str = parts[3]
         change_abs_str = parts[4]
         volume_str = parts[5]
-        sector = parts[6] if len(parts) > 6 else None
+        sector = parts[6].strip() if len(parts) > 6 else None
 
-        # Skip header rows (price field is not numeric)
+        # Skip header rows (price field is not numeric) and blank tickers
+        if not raw_ticker or len(raw_ticker) > 10:
+            continue
+
         try:
-            price = float(price_str.replace(",", "").replace("$", "").replace("₹", ""))
-            change_pct = float(change_pct_str.replace("%", "").replace("+", ""))
-            change_abs = float(change_abs_str.replace(",", "").replace("$", "").replace("₹", ""))
-            volume = int(volume_str.replace(",", "").replace(".", ""))
+            price = float(
+                price_str.replace(",", "").replace("$", "").replace("₹", "").replace(" ", "")
+            )
+            change_pct = float(
+                change_pct_str.replace("%", "").replace("+", "").replace(" ", "")
+            )
+            change_abs = float(
+                change_abs_str.replace(",", "").replace("$", "").replace("₹", "").replace(" ", "")
+            )
+            volume = _parse_volume(volume_str)
         except (ValueError, AttributeError):
             continue  # header row or malformed — skip
 
-        if not ticker or not ticker.isalpha():
-            continue
-
         results.append({
-            "ticker": ticker,
+            "ticker": raw_ticker,
             "name": name,
             "price": price,
             "change_pct": change_pct,
@@ -280,15 +299,51 @@ def _parse_pipe_table(text: str) -> list[dict[str, Any]]:
             "sector": sector if sector else None,
         })
 
-    log.debug("market_data.pipe_table_parsed", rows=len(results))
+    if results:
+        log.info("market_data.pipe_table_parsed", rows=len(results))
+    else:
+        log.warning(
+            "market_data.pipe_table_empty",
+            hint="Gemini may have returned an unexpected format — see gemini_raw log for the raw text",
+        )
     return results
+
+
+def _parse_volume(s: str) -> int:
+    """
+    Parse a volume string that may include unit suffixes.
+
+    Examples handled:
+      "500000"    → 500000
+      "500,000"   → 500000
+      "500K"      → 500000
+      "45.2M"     → 45200000
+      "1.2B"      → 1200000000
+      "500000.0"  → 500000   (avoids the bug in int(s.replace(".", "")) → 5000000)
+    """
+    s = s.strip().upper().replace(",", "").replace(" ", "")
+    for suffix, mult in [("B", 1_000_000_000), ("M", 1_000_000), ("K", 1_000)]:
+        if s.endswith(suffix):
+            return int(float(s[:-1]) * mult)
+    return int(float(s))
 
 
 async def resolve_ticker_by_name(query: str, market: Market) -> str | None:
     """
-    Resolve a company name (e.g. "NVIDIA") to its ticker (e.g. "NVDA")
-    via Yahoo Finance search. Called as fallback when direct ticker lookup fails.
+    Resolve a company name (e.g. "SANDISK") to its ticker (e.g. "SNDK").
+
+    Strategy (in order):
+      1. Gemini — primary resolver. Uses training knowledge, no googleSearch,
+         no rate limits, ~1 s. Reliable for any well-known company.
+      2. Yahoo Finance search — fallback only. Yahoo Finance has previously
+         returned 429/403 errors so we don't rely on it as the primary path.
     """
+    # ── 1. Gemini (primary — reliable, no external API dependency) ────────────
+    result = await _resolve_ticker_via_gemini(query, market)
+    if result:
+        return result
+
+    # ── 2. Yahoo Finance search (fallback) ────────────────────────────────────
     params = {
         "q": query,
         "quotesCount": 8,
@@ -301,30 +356,109 @@ async def resolve_ticker_by_name(query: str, market: Market) -> str | None:
             resp = await client.get(_YF_SEARCH_URL, params=params, headers=_YF_HEADERS)
             resp.raise_for_status()
         quotes = resp.json().get("quotes", [])
+
+        for q in quotes:
+            if q.get("quoteType") != "EQUITY":
+                continue
+            symbol: str = q.get("symbol", "")
+            exchange: str = q.get("exchange", "")
+
+            if market == "india":
+                if symbol.endswith(".NS"):
+                    return symbol[:-3]
+                if symbol.endswith(".BO"):
+                    return symbol[:-3]
+                if exchange in ("NSE", "BSE"):
+                    return symbol
+            else:
+                if "." not in symbol and len(symbol) <= 5 and exchange in _US_EXCHANGES:
+                    return symbol
+                if "." not in symbol and len(symbol) <= 5 and not exchange:
+                    return symbol
     except Exception as exc:
-        log.warning("market_data.name_resolve_failed", query=query, error=str(exc))
-        return None
-
-    for q in quotes:
-        if q.get("quoteType") != "EQUITY":
-            continue
-        symbol: str = q.get("symbol", "")
-        exchange: str = q.get("exchange", "")
-
-        if market == "india":
-            if symbol.endswith(".NS"):
-                return symbol[:-3]
-            if symbol.endswith(".BO"):
-                return symbol[:-3]
-            if exchange in ("NSE", "BSE"):
-                return symbol
-        else:
-            if "." not in symbol and len(symbol) <= 5 and exchange in _US_EXCHANGES:
-                return symbol
-            if "." not in symbol and len(symbol) <= 5 and not exchange:
-                return symbol
+        log.warning("market_data.yf_name_resolve_failed", query=query, error=str(exc))
 
     return None
+
+
+async def _resolve_ticker_via_gemini(query: str, market: str) -> str | None:
+    """
+    Ask Gemini (without googleSearch) to map a company name to its ticker.
+    Uses the model's training knowledge — very fast (~1 s) and no rate limits.
+    Returns the ticker string or None if unknown / Gemini not configured.
+    """
+    from core.config import get_settings as _get_settings  # avoid circular import
+
+    settings = _get_settings()
+    if not settings.google_cloud_project:
+        return None
+
+    exchange_hint = "NASDAQ or NYSE" if market == "us" else "NSE India"
+    prompt = (
+        f"What is the {exchange_hint} stock ticker symbol for the company '{query}'?\n"
+        "Reply with ONLY the ticker symbol — no explanation, no punctuation.\n"
+        "If you are not sure, reply with UNKNOWN."
+    )
+
+    try:
+        token = await asyncio.to_thread(get_cached_token)
+        region = settings.google_cloud_region
+        project = settings.google_cloud_project
+        model = settings.vertex_ai_model_flash
+        url = (
+            f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}"
+            f"/locations/{region}/publishers/google/models/{model}:generateContent"
+        )
+        payload: dict[str, Any] = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.0,
+                "maxOutputTokens": 15,  # ticker is at most ~10 chars
+            },
+        }
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                url, json=payload, headers={"Authorization": f"Bearer {token}"}
+            )
+            if not resp.is_success:
+                log.warning(
+                    "market_data.gemini_ticker_resolve_http_error",
+                    status=resp.status_code,
+                )
+                return None
+
+        parts = resp.json()["candidates"][0]["content"].get("parts", [])
+        raw = "".join(p.get("text", "") for p in parts).strip().upper()
+        # Validate: must be alphanumeric, 1-10 chars, not "UNKNOWN"
+        raw = re.sub(r"[^A-Z0-9]", "", raw)
+        if raw and raw != "UNKNOWN" and 1 <= len(raw) <= 10:
+            log.info("market_data.gemini_ticker_resolved", query=query, ticker=raw, market=market)
+            return raw
+    except Exception as exc:
+        log.warning("market_data.gemini_ticker_resolve_failed", query=query, error=str(exc))
+
+    return None
+
+
+def fundamentals_from_info(info: dict[str, Any]) -> FundamentalsData:
+    """
+    Build a FundamentalsData from an already-fetched yfinance `.info` dict.
+    Used to avoid a second `yf.Ticker().info` call when the data was already
+    retrieved during gainer resolution.
+    """
+    return FundamentalsData(
+        pe_ratio=_safe_float(info.get("trailingPE")),
+        forward_pe=_safe_float(info.get("forwardPE")),
+        roe=_safe_float(info.get("returnOnEquity")),
+        debt_equity=_safe_float(info.get("debtToEquity")),
+        revenue_growth_yoy=_safe_float(info.get("revenueGrowth")),
+        earnings_growth_yoy=_safe_float(info.get("earningsGrowth")),
+        profit_margin=_safe_float(info.get("profitMargins")),
+        fifty_two_week_high=_safe_float(info.get("fiftyTwoWeekHigh")),
+        fifty_two_week_low=_safe_float(info.get("fiftyTwoWeekLow")),
+        analyst_target_price=_safe_float(info.get("targetMeanPrice")),
+        analyst_recommendation=info.get("recommendationKey"),
+    )
 
 
 def _safe_float(v: object) -> Optional[float]:

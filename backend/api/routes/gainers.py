@@ -19,6 +19,7 @@ from core.config import Settings, get_settings
 from core.exceptions import ticker_not_found, upstream_error
 from core.logging import get_logger
 from models.schemas import (
+    FundamentalsData,
     GainerDetail,
     GainersListResponse,
     Market,
@@ -28,7 +29,12 @@ from models.schemas import (
     compute_quality_score,
 )
 from services.cache import CacheBackend
-from services.market_data import MarketDataService, resolve_ticker_by_name, today_str
+from services.market_data import (
+    MarketDataService,
+    fundamentals_from_info,
+    resolve_ticker_by_name,
+    today_str,
+)
 from services.news_fetcher import NewsFetcher
 
 router = APIRouter(prefix="/gainers", tags=["gainers"])
@@ -99,6 +105,13 @@ async def list_gainers(
         log.error("gainers.list_fetch_error", market=market, error=str(exc))
         raise upstream_error("market data", str(exc))
 
+    # Never cache an empty result — let the next request try Gemini again.
+    if not gainers:
+        log.warning("gainers.empty_result_not_cached", market=market)
+        return GainersListResponse(
+            market=market, date=today_str(), gainers=[], summary=None, from_cache=False,
+        )
+
     # Fire market summary AI call in parallel with cache write
     async def _get_summary() -> MarketSummary | None:
         try:
@@ -148,29 +161,40 @@ async def get_gainer_detail(
             log.info("gainers.data_cache_hit", ticker=ticker, market=market)
             return GainerDetail(**cached)
 
-    # Resolve gainer — check gainers list first (instant), fall back to yfinance
-    gainer = await _resolve_gainer(ticker, market, market_data)
+    # _resolve_gainer returns the raw yfinance info dict alongside the StockGainer.
+    # When the gainer came from the cached gainers list the dict is empty ({}),
+    # meaning we still need a separate fundamentals call.  When it came from a
+    # live yfinance lookup the dict is already populated and we can extract
+    # fundamentals directly — saving a full second round-trip to Yahoo Finance.
+    gainer, yf_info = await _resolve_gainer(ticker, market, market_data)
     if gainer is None:
         raise ticker_not_found(ticker)
 
-    # Fetch fundamentals and news concurrently (yfinance + news API both ~1-3 s)
-    fundamentals, news = await asyncio.gather(
-        market_data.get_fundamentals(ticker, market),
+    async def _get_fundamentals() -> FundamentalsData | None:
+        if yf_info:
+            # Reuse data already fetched during gainer resolution — no extra call.
+            return fundamentals_from_info(yf_info)
+        try:
+            return await market_data.get_fundamentals(ticker, market)
+        except Exception as exc:
+            log.warning("gainers.fundamentals_failed", ticker=ticker, error=str(exc))
+            return None
+
+    fundamentals_result, news = await asyncio.gather(
+        _get_fundamentals(),
         news_fetcher.get_news(ticker, gainer.name),
         return_exceptions=True,
     )
 
-    if isinstance(fundamentals, Exception):
-        log.warning("gainers.fundamentals_failed", ticker=ticker, error=str(fundamentals))
-        fundamentals = None
+    fundamentals = fundamentals_result if not isinstance(fundamentals_result, Exception) else None
     if isinstance(news, Exception):
         log.warning("gainers.news_failed", ticker=ticker, error=str(news))
         news = []
 
     detail = GainerDetail(
         gainer=gainer,
-        fundamentals=fundamentals if not isinstance(fundamentals, Exception) else None,
-        news=news if not isinstance(news, Exception) else [],
+        fundamentals=fundamentals,
+        news=news,
         from_cache=False,
         fetched_at=datetime.utcnow(),
     )
@@ -210,7 +234,7 @@ async def get_gainer_analysis(
             return StockAnalysisResponse(**cached)
 
     # Resolve gainer + gainers list in parallel (list used for comparison context)
-    gainer, gainers_list = await asyncio.gather(
+    (gainer, _yf_info), gainers_list = await asyncio.gather(
         _resolve_gainer(ticker, market, market_data),
         _safe_get_gainers(market, market_data),
     )
@@ -222,16 +246,24 @@ async def get_gainer_analysis(
     in_gainers = any(g.ticker == ticker for g in gainers_list)
     gainers_context = gainers_list[:3] if not in_gainers and gainers_list else None
 
-    # Fetch fundamentals + news (needed for AI prompt quality)
-    fundamentals, news = await asyncio.gather(
-        market_data.get_fundamentals(ticker, market),
+    # Fetch fundamentals + news (needed for AI prompt quality).
+    # If yfinance info was already fetched during gainer resolution reuse it.
+    async def _get_analysis_fundamentals():
+        if _yf_info:
+            return fundamentals_from_info(_yf_info)
+        try:
+            return await market_data.get_fundamentals(ticker, market)
+        except Exception as exc:
+            log.warning("gainers.analysis_fundamentals_failed", ticker=ticker, error=str(exc))
+            return None
+
+    fundamentals_result, news = await asyncio.gather(
+        _get_analysis_fundamentals(),
         news_fetcher.get_news(ticker, gainer.name),
         return_exceptions=True,
     )
 
-    if isinstance(fundamentals, Exception):
-        log.warning("gainers.analysis_fundamentals_failed", ticker=ticker, error=str(fundamentals))
-        fundamentals = None
+    fundamentals = fundamentals_result if not isinstance(fundamentals_result, Exception) else None
     if isinstance(news, Exception):
         log.warning("gainers.analysis_news_failed", ticker=ticker, error=str(news))
         news = []
@@ -289,25 +321,31 @@ async def invalidate_cache(
 
 async def _resolve_gainer(
     ticker: str, market: Market, market_data: MarketDataService
-) -> StockGainer | None:
+) -> tuple[StockGainer | None, dict]:
     """
-    Resolve a ticker to a StockGainer record.
+    Resolve a ticker string to a StockGainer record.
+
+    Returns (gainer, raw_yf_info) where:
+      - raw_yf_info is non-empty when the gainer was resolved via yfinance
+        (callers can extract FundamentalsData directly without a second call).
+      - raw_yf_info is {} when the gainer came from the cached gainers list
+        (callers should fetch fundamentals via market_data.get_fundamentals).
 
     Strategy:
-      1. Check today's gainer list (instant, cached).
-      2. Look up directly via yfinance.
-      3. If yfinance fails (e.g. user typed a company name like "NVIDIA"),
-         use Yahoo Finance search to resolve name → real ticker, then retry.
+      1. Check today's cached gainer list (instant).
+      2. Direct yfinance lookup.
+      3. If yfinance returns no price, resolve company name → ticker via
+         Yahoo Finance search + Gemini fallback, then retry yfinance.
     """
     import yfinance as yf
     from services.market_data import _safe_float, _safe_int
 
-    # ── Step 1: today's gainer list ──────────────────────────────────────────
+    # ── Step 1: today's gainer list (cache hit → instant) ────────────────────
     try:
         gainers = await market_data.get_gainers(market)
         match = next((g for g in gainers if g.ticker == ticker), None)
         if match:
-            return match
+            return match, {}   # {} signals: fetch fundamentals separately
     except Exception:
         pass
 
@@ -323,8 +361,9 @@ async def _resolve_gainer(
         pass
 
     # ── Step 3: name resolution fallback ──────────────────────────────────────
-    # If yfinance returned no meaningful data, the user probably typed a company
-    # name (e.g. "NVIDIA", "SANDISK"). Try Yahoo Finance search to resolve it.
+    # If yfinance returned no market price the user probably typed a company name
+    # (e.g. "SANDISK" → should resolve to "SNDK"). We try Yahoo Finance search
+    # first, then Gemini (training knowledge) as a reliable secondary.
     if not info or not info.get("regularMarketPrice"):
         resolved = await resolve_ticker_by_name(ticker, market)
         if resolved and resolved.upper() != ticker:
@@ -341,13 +380,13 @@ async def _resolve_gainer(
                 pass
 
     if not info or not info.get("regularMarketPrice"):
-        return None
+        return None, {}
 
     change_pct = info.get("regularMarketChangePercent") or 0.0
     if change_pct < 0:
-        change_pct = 0.01  # minimum so validator passes for searched non-gainers
+        change_pct = 0.01  # minimum so the validator passes for searched non-gainers
 
-    return StockGainer(
+    gainer = StockGainer(
         ticker=ticker,
         name=info.get("shortName") or info.get("longName") or ticker,
         market=market,
@@ -360,6 +399,7 @@ async def _resolve_gainer(
         sector=info.get("sector"),
         industry=info.get("industry"),
     )
+    return gainer, info   # info passed back so caller can extract fundamentals
 
 
 async def _safe_get_gainers(
