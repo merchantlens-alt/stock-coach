@@ -3,7 +3,6 @@ name = "stockcoach-backend"
 version = "0.1.0"
 description = "StockCoach AI — top gainers analysis and prediction engine"
 authors = ["StockCoach Team"]
-python = "^3.11"
 
 [tool.poetry.dependencies]
 python = "^3.11"

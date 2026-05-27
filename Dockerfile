@@ -1,5 +1,16 @@
-# ── Build stage ────────────────────────────────────────────────────────────────
-FROM python:3.11-slim AS builder
+# ── Stage 1: Build React frontend ─────────────────────────────────────────────
+FROM node:20-slim AS frontend-builder
+
+WORKDIR /frontend
+
+COPY frontend/package*.json ./
+RUN npm ci --silent
+
+COPY frontend/ ./
+RUN npm run build
+
+# ── Stage 2: Install Python dependencies ──────────────────────────────────────
+FROM python:3.11-slim AS python-builder
 
 WORKDIR /app
 
@@ -9,22 +20,23 @@ COPY backend/pyproject.toml ./
 RUN poetry config virtualenvs.in-project true && \
     poetry install --only main --no-root --no-interaction
 
-# ── Runtime stage ──────────────────────────────────────────────────────────────
+# ── Stage 3: Runtime ──────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-# Copy virtual env from builder
-COPY --from=builder /app/.venv ./.venv
+# Python deps
+COPY --from=python-builder /app/.venv ./.venv
 
-# Copy application code
+# Backend code
 COPY backend/ ./
+
+# Frontend build output — served by FastAPI as static files
+COPY --from=frontend-builder /frontend/dist ./static
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
-
-# Cloud Run sets PORT; default to 8080
 ENV PORT=8080
 
 EXPOSE 8080
