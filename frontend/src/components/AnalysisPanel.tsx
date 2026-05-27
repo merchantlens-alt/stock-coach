@@ -1,8 +1,12 @@
 import { AlertTriangle, ArrowDown, ArrowUp, GitCompare, Minus, Sparkles, X } from "lucide-react";
-import type { GainerDetail } from "../types";
+import type { GainerDetail, StockAnalysisResponse } from "../types";
 
 interface Props {
   detail: GainerDetail;
+  /** AI analysis response from the slow /analyse endpoint */
+  analysis?: StockAnalysisResponse | null;
+  /** True while the /analyse request is in-flight */
+  analysisLoading?: boolean;
   onClose: () => void;
 }
 
@@ -38,8 +42,55 @@ function FundamentalRow({ label, value }: { label: string; value?: number | stri
   );
 }
 
-export function AnalysisPanel({ detail, onClose }: Props) {
-  const { gainer, fundamentals, news, analysis, prediction } = detail;
+/** Pulsing skeleton lines shown while AI analysis is loading */
+function AISkeleton() {
+  return (
+    <div className="space-y-5">
+      {/* Why it gained skeleton */}
+      <section>
+        <div className="flex items-center gap-2 mb-3">
+          <div className="h-4 w-36 bg-indigo-100 rounded animate-pulse" />
+          <div className="h-5 w-20 bg-green-100 rounded animate-pulse" />
+        </div>
+        <div className="space-y-2">
+          <div className="h-3 w-full bg-gray-100 rounded animate-pulse" />
+          <div className="h-3 w-[92%] bg-gray-100 rounded animate-pulse" />
+          <div className="h-3 w-[78%] bg-gray-100 rounded animate-pulse" />
+        </div>
+        <div className="mt-3 space-y-1.5">
+          {[85, 70, 60].map((w) => (
+            <div key={w} className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-green-100 animate-pulse shrink-0" />
+              <div className={`h-3 bg-gray-100 rounded animate-pulse`} style={{ width: `${w}%` }} />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* 30-day outlook skeleton */}
+      <section>
+        <div className="h-4 w-28 bg-gray-100 rounded animate-pulse mb-3" />
+        <div className="rounded-lg border border-gray-100 p-3 flex items-center gap-3">
+          <div className="h-8 w-16 bg-green-100 rounded animate-pulse" />
+          <div className="flex-1 space-y-1.5">
+            <div className="h-3 w-full bg-gray-100 rounded animate-pulse" />
+            <div className="h-3 w-4/5 bg-gray-100 rounded animate-pulse" />
+          </div>
+        </div>
+      </section>
+
+      {/* AI loading notice */}
+      <div className="flex items-center gap-2 text-xs text-indigo-500 bg-indigo-50 rounded-lg px-3 py-2.5">
+        <div className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin shrink-0" />
+        AI is analysing this stock — takes 10–20 s
+      </div>
+    </div>
+  );
+}
+
+export function AnalysisPanel({ detail, analysis, analysisLoading, onClose }: Props) {
+  const { gainer, fundamentals, news } = detail;
+  const aiData = analysis;
   const currency = gainer.market === "india" ? "₹" : "$";
 
   return (
@@ -61,7 +112,7 @@ export function AnalysisPanel({ detail, onClose }: Props) {
       </div>
 
       <div className="flex-1 px-5 py-4 space-y-6">
-        {/* Price row */}
+        {/* Price row — available immediately */}
         <div className="flex gap-4 text-sm">
           <div>
             <span className="text-gray-400">Price</span>
@@ -72,9 +123,21 @@ export function AnalysisPanel({ detail, onClose }: Props) {
           <div>
             <span className="text-gray-400">Change</span>
             <p className="font-semibold text-green-600">
-              +{currency}{gainer.change_abs.toFixed(2)}
+              +{currency}{Math.abs(gainer.change_abs).toFixed(2)}
             </p>
           </div>
+          {gainer.volume > 0 && (
+            <div>
+              <span className="text-gray-400">Volume</span>
+              <p className="font-semibold text-gray-900">
+                {gainer.volume >= 1_000_000
+                  ? `${(gainer.volume / 1_000_000).toFixed(1)}M`
+                  : gainer.volume >= 1_000
+                    ? `${(gainer.volume / 1_000).toFixed(0)}K`
+                    : gainer.volume.toLocaleString()}
+              </p>
+            </div>
+          )}
           {gainer.sector && (
             <div>
               <span className="text-gray-400">Sector</span>
@@ -83,119 +146,159 @@ export function AnalysisPanel({ detail, onClose }: Props) {
           )}
         </div>
 
-        {/* Why it gained */}
-        {analysis && (
-          <section>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="font-semibold text-gray-900">Why it gained today</h3>
-              <ConfidenceBadge value={analysis.confidence} />
-            </div>
-            <p className="text-sm text-gray-700 leading-relaxed">{analysis.why_it_gained}</p>
-            <ul className="mt-3 space-y-1">
-              {analysis.key_catalysts.map((c, i) => (
-                <li key={i} className="flex items-start gap-2 text-sm text-gray-600">
-                  <ArrowUp size={13} className="text-green-500 mt-0.5 shrink-0" />
-                  {c}
-                </li>
-              ))}
-            </ul>
-            <div className="mt-3 rounded-lg bg-gray-50 p-3 text-xs text-gray-600 flex items-start gap-2">
-              {analysis.is_sustained ? (
-                <ArrowUp size={13} className="text-green-500 mt-0.5 shrink-0" />
-              ) : (
-                <Minus size={13} className="text-yellow-500 mt-0.5 shrink-0" />
-              )}
-              <span>
-                <strong>{analysis.is_sustained ? "Sustained catalyst:" : "One-time pop:"}</strong>{" "}
-                {analysis.sustainability_reason}
-              </span>
-            </div>
-          </section>
-        )}
-
-        {/* Comparison to today's top gainers (only shown for searched tickers not in gainer list) */}
-        {analysis?.comparison_to_gainers && (
-          <section>
-            <div className="flex items-center gap-2 mb-2">
-              <GitCompare size={14} className="text-violet-500" />
-              <h3 className="font-semibold text-gray-900">vs. Today's top gainers</h3>
-            </div>
-            <div className="rounded-xl border border-violet-100 bg-violet-50 p-3">
-              <p className="text-sm text-violet-800 leading-relaxed">
-                {analysis.comparison_to_gainers}
-              </p>
-            </div>
-          </section>
-        )}
-
-        {/* 30-day prediction */}
-        {prediction && (
-          <section>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="font-semibold text-gray-900">30-day outlook</h3>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-400 capitalize">{prediction.time_horizon} horizon</span>
-                <ConfidenceBadge value={prediction.confidence} />
-              </div>
-            </div>
-            <div className="rounded-lg border border-gray-200 p-3 mb-3 flex items-center gap-3">
-              <div
-                className={`text-2xl font-bold ${prediction.predicted_change_pct >= 0 ? "text-green-600" : "text-red-500"}`}
-              >
-                {prediction.predicted_change_pct >= 0 ? "+" : ""}
-                {prediction.predicted_change_pct.toFixed(1)}%
-              </div>
-              <p className="text-sm text-gray-600 flex-1">{prediction.outlook}</p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <p className="text-xs font-semibold text-green-600 mb-1.5 uppercase tracking-wide">Tailwinds</p>
-                <ul className="space-y-1">
-                  {prediction.key_tailwinds.map((t, i) => (
-                    <li key={i} className="flex items-start gap-1.5 text-xs text-gray-600">
-                      <ArrowUp size={11} className="text-green-500 mt-0.5 shrink-0" />
-                      {t}
+        {/* ── AI section — skeleton while loading, content when ready ── */}
+        {analysisLoading && !aiData ? (
+          <AISkeleton />
+        ) : (
+          <>
+            {/* Why it gained */}
+            {aiData?.analysis && (
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-semibold text-gray-900">Why it gained today</h3>
+                  <ConfidenceBadge value={aiData.analysis.confidence} />
+                </div>
+                <p className="text-sm text-gray-700 leading-relaxed">{aiData.analysis.why_it_gained}</p>
+                <ul className="mt-3 space-y-1">
+                  {aiData.analysis.key_catalysts.map((c, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-gray-600">
+                      <ArrowUp size={13} className="text-green-500 mt-0.5 shrink-0" />
+                      {c}
                     </li>
                   ))}
                 </ul>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-red-500 mb-1.5 uppercase tracking-wide">Risks</p>
-                <ul className="space-y-1">
-                  {prediction.key_risks.map((r, i) => (
-                    <li key={i} className="flex items-start gap-1.5 text-xs text-gray-600">
-                      <ArrowDown size={11} className="text-red-400 mt-0.5 shrink-0" />
-                      {r}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
+                <div className="mt-3 rounded-lg bg-gray-50 p-3 text-xs text-gray-600 flex items-start gap-2">
+                  {aiData.analysis.is_sustained ? (
+                    <ArrowUp size={13} className="text-green-500 mt-0.5 shrink-0" />
+                  ) : (
+                    <Minus size={13} className="text-yellow-500 mt-0.5 shrink-0" />
+                  )}
+                  <span>
+                    <strong>{aiData.analysis.is_sustained ? "Sustained catalyst:" : "One-time pop:"}</strong>{" "}
+                    {aiData.analysis.sustainability_reason}
+                  </span>
+                </div>
+              </section>
+            )}
 
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              {(
-                [
-                  ["Valuation", prediction.valuation_signal],
-                  ["Growth", prediction.growth_signal],
-                  ["Debt", prediction.debt_signal],
-                ] as [string, string][]
-              ).map(([label, signal]) => (
-                <div key={label} className="rounded-lg bg-gray-50 p-2 text-center">
-                  <p className="text-xs text-gray-400 mb-1">{label}</p>
-                  <div className="flex items-center justify-center gap-1.5">
-                    <SignalDot signal={signal} />
-                    <span className="text-xs font-medium capitalize text-gray-700">
-                      {signal.replace("_", " ")}
-                    </span>
+            {/* vs. Today's top gainers comparison */}
+            {aiData?.analysis?.comparison_to_gainers && (
+              <section>
+                <div className="flex items-center gap-2 mb-2">
+                  <GitCompare size={14} className="text-violet-500" />
+                  <h3 className="font-semibold text-gray-900">vs. Today's top gainers</h3>
+                </div>
+                <div className="rounded-xl border border-violet-100 bg-violet-50 p-3">
+                  <p className="text-sm text-violet-800 leading-relaxed">
+                    {aiData.analysis.comparison_to_gainers}
+                  </p>
+                </div>
+              </section>
+            )}
+
+            {/* 30-day prediction */}
+            {aiData?.prediction && (
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-semibold text-gray-900">30-day outlook</h3>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400 capitalize">{aiData.prediction.time_horizon} horizon</span>
+                    <ConfidenceBadge value={aiData.prediction.confidence} />
                   </div>
                 </div>
-              ))}
-            </div>
-          </section>
+                <div className="rounded-lg border border-gray-200 p-3 mb-3 flex items-center gap-3">
+                  <div
+                    className={`text-2xl font-bold ${aiData.prediction.predicted_change_pct >= 0 ? "text-green-600" : "text-red-500"}`}
+                  >
+                    {aiData.prediction.predicted_change_pct >= 0 ? "+" : ""}
+                    {aiData.prediction.predicted_change_pct.toFixed(1)}%
+                  </div>
+                  <p className="text-sm text-gray-600 flex-1">{aiData.prediction.outlook}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-xs font-semibold text-green-600 mb-1.5 uppercase tracking-wide">Tailwinds</p>
+                    <ul className="space-y-1">
+                      {aiData.prediction.key_tailwinds.map((t, i) => (
+                        <li key={i} className="flex items-start gap-1.5 text-xs text-gray-600">
+                          <ArrowUp size={11} className="text-green-500 mt-0.5 shrink-0" />
+                          {t}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-red-500 mb-1.5 uppercase tracking-wide">Risks</p>
+                    <ul className="space-y-1">
+                      {aiData.prediction.key_risks.map((r, i) => (
+                        <li key={i} className="flex items-start gap-1.5 text-xs text-gray-600">
+                          <ArrowDown size={11} className="text-red-400 mt-0.5 shrink-0" />
+                          {r}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      ["Valuation", aiData.prediction.valuation_signal],
+                      ["Growth", aiData.prediction.growth_signal],
+                      ["Debt", aiData.prediction.debt_signal],
+                    ] as [string, string][]
+                  ).map(([label, signal]) => (
+                    <div key={label} className="rounded-lg bg-gray-50 p-2 text-center">
+                      <p className="text-xs text-gray-400 mb-1">{label}</p>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <SignalDot signal={signal} />
+                        <span className="text-xs font-medium capitalize text-gray-700">
+                          {signal.replace("_", " ")}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Related beneficiaries */}
+            {aiData?.analysis?.related_beneficiaries && aiData.analysis.related_beneficiaries.length > 0 && (
+              <section>
+                <div className="flex items-center gap-2 mb-2">
+                  <Sparkles size={14} className="text-indigo-500" />
+                  <h3 className="font-semibold text-gray-900">Who else may benefit</h3>
+                </div>
+                <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3">
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {aiData.analysis.related_beneficiaries.map((ticker) => (
+                      <span
+                        key={ticker}
+                        className="text-sm font-bold bg-white border border-indigo-200 text-indigo-700 px-2.5 py-1 rounded-lg"
+                      >
+                        {ticker}
+                      </span>
+                    ))}
+                  </div>
+                  {aiData.analysis.beneficiary_reasoning && (
+                    <p className="text-xs text-indigo-600 leading-relaxed">{aiData.analysis.beneficiary_reasoning}</p>
+                  )}
+                </div>
+              </section>
+            )}
+
+            {/* Disclaimer */}
+            {aiData?.prediction?.disclaimer && (
+              <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+                <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                {aiData.prediction.disclaimer}
+              </div>
+            )}
+          </>
         )}
 
-        {/* Fundamentals */}
+        {/* Fundamentals — available immediately with data endpoint */}
         {fundamentals && (
           <section>
             <h3 className="font-semibold text-gray-900 mb-2">Fundamentals</h3>
@@ -232,7 +335,7 @@ export function AnalysisPanel({ detail, onClose }: Props) {
           </section>
         )}
 
-        {/* News */}
+        {/* News — available immediately with data endpoint */}
         {news.length > 0 && (
           <section>
             <h3 className="font-semibold text-gray-900 mb-2">Recent news</h3>
@@ -256,39 +359,6 @@ export function AnalysisPanel({ detail, onClose }: Props) {
               ))}
             </ul>
           </section>
-        )}
-
-        {/* Related beneficiaries */}
-        {analysis?.related_beneficiaries && analysis.related_beneficiaries.length > 0 && (
-          <section>
-            <div className="flex items-center gap-2 mb-2">
-              <Sparkles size={14} className="text-indigo-500" />
-              <h3 className="font-semibold text-gray-900">Who else may benefit</h3>
-            </div>
-            <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3">
-              <div className="flex flex-wrap gap-2 mb-2">
-                {analysis.related_beneficiaries.map((ticker) => (
-                  <span
-                    key={ticker}
-                    className="text-sm font-bold bg-white border border-indigo-200 text-indigo-700 px-2.5 py-1 rounded-lg"
-                  >
-                    {ticker}
-                  </span>
-                ))}
-              </div>
-              {analysis.beneficiary_reasoning && (
-                <p className="text-xs text-indigo-600 leading-relaxed">{analysis.beneficiary_reasoning}</p>
-              )}
-            </div>
-          </section>
-        )}
-
-        {/* Disclaimer */}
-        {prediction?.disclaimer && (
-          <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
-            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-            {prediction.disclaimer}
-          </div>
         )}
       </div>
     </div>

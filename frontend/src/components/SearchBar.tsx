@@ -3,9 +3,14 @@ import { useRef, useState } from "react";
 
 interface Props {
   market: "us" | "india";
-  onSearch: (ticker: string) => void;
+  onSearch: (query: string) => void;
   onClear: () => void;
   isSearching: boolean;
+}
+
+/** Heuristic: looks like a ticker (short, all-caps, no spaces) vs a company name */
+function looksLikeTicker(value: string): boolean {
+  return value.length <= 6 && !/\s/.test(value);
 }
 
 export function SearchBar({ market, onSearch, onClear, isSearching }: Props) {
@@ -14,9 +19,9 @@ export function SearchBar({ market, onSearch, onClear, isSearching }: Props) {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const ticker = value.trim().toUpperCase();
-    if (ticker.length < 1) return;
-    onSearch(ticker);
+    const query = value.trim();
+    if (query.length < 1) return;
+    onSearch(query.toUpperCase());
   }
 
   function handleClear() {
@@ -25,7 +30,11 @@ export function SearchBar({ market, onSearch, onClear, isSearching }: Props) {
     inputRef.current?.focus();
   }
 
-  const placeholder = market === "india" ? "Search NSE ticker e.g. RELIANCE" : "Search ticker e.g. NVDA";
+  const isName = value.trim().length > 0 && !looksLikeTicker(value.trim());
+  const placeholder =
+    market === "india"
+      ? "Ticker or company — e.g. RELIANCE or Infosys"
+      : "Ticker or company — e.g. NVDA or NVIDIA";
 
   return (
     <form onSubmit={handleSubmit} className="px-3 py-2 border-b border-gray-100 bg-white">
@@ -38,12 +47,12 @@ export function SearchBar({ market, onSearch, onClear, isSearching }: Props) {
           ref={inputRef}
           type="text"
           value={value}
-          onChange={(e) => setValue(e.target.value.toUpperCase())}
+          onChange={(e) => setValue(e.target.value)}
           placeholder={placeholder}
           className="w-full pl-8 pr-8 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg
                      focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent
                      placeholder:text-gray-400 uppercase tracking-wide"
-          maxLength={10}
+          maxLength={40}
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
@@ -60,7 +69,18 @@ export function SearchBar({ market, onSearch, onClear, isSearching }: Props) {
       </div>
       {value && (
         <p className="text-xs text-gray-400 mt-1 px-1">
-          Press Enter to analyse <span className="font-bold text-gray-600">{value}</span>
+          {isName ? (
+            <>
+              Press Enter to search for{" "}
+              <span className="font-bold text-gray-600">{value.trim()}</span>
+              {" "}— ticker resolved automatically
+            </>
+          ) : (
+            <>
+              Press Enter to analyse{" "}
+              <span className="font-bold text-gray-600">{value.trim().toUpperCase()}</span>
+            </>
+          )}
         </p>
       )}
     </form>

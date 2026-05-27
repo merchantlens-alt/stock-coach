@@ -170,9 +170,19 @@ class MarketSummary(BaseModel):
 
 
 class GainerDetail(BaseModel):
+    """Fast data response — gainer info, fundamentals, news. No AI. ~3-5 s cold."""
     gainer: StockGainer
     fundamentals: Optional[FundamentalsData] = None
     news: list[NewsItem] = Field(default_factory=list)
+    # analysis / prediction intentionally absent — served by /analyse sub-endpoint
+    from_cache: bool = False
+    fetched_at: Optional[datetime] = None
+
+
+class StockAnalysisResponse(BaseModel):
+    """Slow AI response — analysis + 30-day prediction. ~10-15 s cold, cached 6 h."""
+    ticker: str
+    market: Market
     analysis: Optional[GainerAnalysis] = None
     prediction: Optional[StockPrediction] = None
     from_cache: bool = False

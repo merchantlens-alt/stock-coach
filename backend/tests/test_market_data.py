@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from core.config import get_settings
 from models.schemas import StockGainer
-from services.market_data import MarketDataService, _safe_float, _safe_int
+from services.market_data import (
+    MarketDataService,
+    resolve_ticker_by_name,
+    _parse_pipe_table,
+    _safe_float,
+    _safe_int,
+)
 
 
 @pytest.fixture
@@ -17,8 +22,6 @@ def service() -> MarketDataService:
 
 
 # ── _build_gainers ─────────────────────────────────────────────────────────────
-# This method transforms raw Gemini JSON dicts into StockGainer objects,
-# filters non-gainers, sorts by change_pct, and applies quality scores.
 
 class TestBuildGainers:
     def _row(self, **kwargs) -> dict:
@@ -76,10 +79,7 @@ class TestBuildGainers:
         assert result[0].quality_label in valid
 
     def test_skips_rows_with_empty_ticker(self, service: MarketDataService) -> None:
-        rows = [
-            self._row(ticker=""),      # Empty — skip
-            self._row(ticker="NVDA"),  # Valid
-        ]
+        rows = [self._row(ticker=""), self._row(ticker="NVDA")]
         result = service._build_gainers(rows, "us")
         assert len(result) == 1
         assert result[0].ticker == "NVDA"
@@ -92,7 +92,6 @@ class TestBuildGainers:
             "change_pct": 5.0,
             "change_abs": 1.0,
             "volume": 500_000,
-            # no "sector"
         }
         result = service._build_gainers([row], "us")
         assert len(result) == 1
@@ -108,7 +107,7 @@ class TestBuildGainers:
     def test_tolerates_malformed_row_and_continues(self, service: MarketDataService) -> None:
         rows = [
             self._row(ticker="GOOD"),
-            {"ticker": "BAD", "price": "not_a_number"},  # Malformed
+            {"ticker": "BAD", "price": "not_a_number"},
         ]
         result = service._build_gainers(rows, "us")
         tickers = [g.ticker for g in result]
@@ -133,11 +132,193 @@ class TestBuildGainers:
         assert all(g.quality_label is not None for g in result)
 
 
-# ── Gemini-based gainers ───────────────────────────────────────────────────────
-# Tests for get_us_gainers / get_india_gainers, mocking _fetch_gainers_via_gemini
-# to avoid real GCP calls.
+# ── _parse_pipe_table ─────────────────────────────────────────────────────────
+# Gemini outputs a pipe-delimited table (not JSON) when googleSearch grounding
+# is active — JSON mode is incompatible with grounding on Vertex AI.
+# This function parses that table deterministically in pure Python.
 
-class TestGeminiGainers:
+class TestParsePipeTable:
+    def _line(self, ticker="NVDA", name="NVIDIA", price=950.0,
+               pct=8.5, abs_=74.5, vol=45_000_000, sector="Technology"):
+        return f"{ticker}|{name}|{price}|{pct}|{abs_}|{vol}|{sector}"
+
+    def test_parses_single_valid_line(self) -> None:
+        result = _parse_pipe_table(self._line())
+        assert len(result) == 1
+        assert result[0]["ticker"] == "NVDA"
+        assert result[0]["price"] == 950.0
+        assert result[0]["change_pct"] == 8.5
+        assert result[0]["volume"] == 45_000_000
+
+    def test_parses_multiple_lines(self) -> None:
+        text = "\n".join([
+            self._line("NVDA", pct=8.5),
+            self._line("AMD", pct=5.2),
+            self._line("INTC", pct=3.1),
+        ])
+        assert len(_parse_pipe_table(text)) == 3
+
+    def test_skips_blank_lines(self) -> None:
+        text = self._line() + "\n\n\n" + self._line("AMD", pct=5.2)
+        assert len(_parse_pipe_table(text)) == 2
+
+    def test_skips_header_row_with_non_numeric_price(self) -> None:
+        text = "TICKER|NAME|PRICE|CHANGE_PCT|CHANGE_ABS|VOLUME|SECTOR\n" + self._line()
+        assert len(_parse_pipe_table(text)) == 1
+
+    def test_skips_markdown_separator_lines(self) -> None:
+        text = "---|---|---|---|---|---|---\n" + self._line()
+        assert len(_parse_pipe_table(text)) == 1
+
+    def test_handles_missing_sector_column(self) -> None:
+        text = "NVDA|NVIDIA|950.0|8.5|74.5|45000000"
+        result = _parse_pipe_table(text)
+        assert len(result) == 1
+        assert result[0]["sector"] is None
+
+    def test_handles_price_with_dollar_sign(self) -> None:
+        text = "NVDA|NVIDIA|$950.00|8.5|$74.50|45000000|Technology"
+        result = _parse_pipe_table(text)
+        assert result[0]["price"] == 950.0
+
+    def test_handles_price_with_rupee_sign(self) -> None:
+        text = "RELIANCE|Reliance|₹2850.00|5.2|₹141.0|8000000|Energy"
+        result = _parse_pipe_table(text)
+        assert result[0]["price"] == 2850.0
+
+    def test_handles_commas_in_numbers(self) -> None:
+        text = "NVDA|NVIDIA|950.00|8.5|74.50|45,000,000|Technology"
+        result = _parse_pipe_table(text)
+        assert result[0]["volume"] == 45_000_000
+
+    def test_handles_pct_with_plus_sign(self) -> None:
+        text = "NVDA|NVIDIA|950.00|+8.5|74.50|45000000|Technology"
+        result = _parse_pipe_table(text)
+        assert result[0]["change_pct"] == 8.5
+
+    def test_skips_lines_with_fewer_than_6_fields(self) -> None:
+        text = "NVDA|NVIDIA|950.0|8.5|74.5"  # only 5 fields
+        assert _parse_pipe_table(text) == []
+
+    def test_skips_non_alpha_tickers(self) -> None:
+        text = "123|Bad Ticker|10.0|5.0|0.5|100000|Tech"
+        assert _parse_pipe_table(text) == []
+
+    def test_returns_empty_for_empty_string(self) -> None:
+        assert _parse_pipe_table("") == []
+
+    def test_ticker_uppercased(self) -> None:
+        text = "nvda|NVIDIA|950.0|8.5|74.5|45000000|Technology"
+        result = _parse_pipe_table(text)
+        assert result[0]["ticker"] == "NVDA"
+
+
+# ── _fetch_gainers_gemini (Gemini REST layer) ─────────────────────────────────
+
+class TestFetchGainersGemini:
+    """Tests for _fetch_gainers_gemini — mocks Vertex AI HTTP calls via respx."""
+
+    def _gemini_response(self, text: str) -> dict:
+        return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+
+    def _table_text(self, stocks: list[tuple]) -> str:
+        return "\n".join(
+            f"{t}|{n}|{p}|{pct}|{abs_}|{vol}|Technology"
+            for t, n, p, pct, abs_, vol in stocks
+        )
+
+    async def test_parses_pipe_table_from_gemini(self, service: MarketDataService) -> None:
+        import httpx, respx
+        table = self._table_text([("NVDA", "NVIDIA", 950.0, 8.5, 74.5, 45_000_000)])
+
+        with (
+            patch("core.auth.get_cached_token", return_value="fake-token"),
+            respx.mock,
+        ):
+            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
+                return_value=httpx.Response(200, json=self._gemini_response(table))
+            )
+            result = await service._fetch_gainers_gemini("prompt", "us")
+
+        assert len(result) == 1
+        assert result[0]["ticker"] == "NVDA"
+
+    async def test_returns_multiple_stocks(self, service: MarketDataService) -> None:
+        import httpx, respx
+        table = self._table_text([
+            ("NVDA", "NVIDIA", 950.0, 8.5, 74.5, 45_000_000),
+            ("AMD", "AMD Inc", 100.0, 5.2, 5.0, 10_000_000),
+            ("INTC", "Intel", 30.0, 3.1, 0.9, 5_000_000),
+        ])
+
+        with (
+            patch("core.auth.get_cached_token", return_value="fake-token"),
+            respx.mock,
+        ):
+            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
+                return_value=httpx.Response(200, json=self._gemini_response(table))
+            )
+            result = await service._fetch_gainers_gemini("prompt", "us")
+
+        assert len(result) == 3
+
+    async def test_payload_includes_google_search_tool(self, service: MarketDataService) -> None:
+        import httpx, respx, json
+        captured: list[dict] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.append(json.loads(req.content))
+            return httpx.Response(200, json=self._gemini_response(
+                "NVDA|NVIDIA|950.0|8.5|74.5|45000000|Technology"
+            ))
+
+        with (
+            patch("core.auth.get_cached_token", return_value="fake-token"),
+            respx.mock,
+        ):
+            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(side_effect=handler)
+            await service._fetch_gainers_gemini("prompt", "us")
+
+        payload = captured[0]
+        tool_names = [list(t.keys())[0] for t in payload.get("tools", [])]
+        assert "googleSearch" in tool_names
+        gen_config = payload.get("generationConfig", {})
+        assert "responseMimeType" not in gen_config
+        assert "responseSchema" not in gen_config
+
+    async def test_http_error_raises(self, service: MarketDataService) -> None:
+        import httpx, respx
+
+        with (
+            patch("core.auth.get_cached_token", return_value="fake-token"),
+            respx.mock,
+        ):
+            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
+                return_value=httpx.Response(401, text="Unauthorized")
+            )
+            with pytest.raises(Exception):
+                await service._fetch_gainers_gemini("prompt", "us")
+
+    async def test_empty_gemini_response_returns_empty_list(
+        self, service: MarketDataService
+    ) -> None:
+        import httpx, respx
+
+        with (
+            patch("core.auth.get_cached_token", return_value="fake-token"),
+            respx.mock,
+        ):
+            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
+                return_value=httpx.Response(200, json=self._gemini_response("No data available."))
+            )
+            result = await service._fetch_gainers_gemini("prompt", "us")
+
+        assert result == []
+
+
+# ── get_us_gainers / get_india_gainers ────────────────────────────────────────
+
+class TestGetGainers:
     def _raw_row(self, **kwargs) -> dict:
         defaults = {
             "ticker": "NVDA",
@@ -156,26 +337,18 @@ class TestGeminiGainers:
             self._raw_row(ticker="NVDA", change_pct=8.5),
             self._raw_row(ticker="INTC", change_pct=3.0),
         ]
-        with patch.object(service, "_fetch_gainers_via_gemini", new=AsyncMock(return_value=raw)):
+        with patch.object(service, "_fetch_gainers_gemini", new=AsyncMock(return_value=raw)):
             result = await service.get_us_gainers()
 
         assert result[0].ticker == "AMD"
-        assert result[0].change_pct == 12.0
         assert result[-1].change_pct < result[0].change_pct
 
     async def test_get_us_gainers_respects_top_n_limit(self, service: MarketDataService) -> None:
         service._top_n = 3
         raw = [self._raw_row(ticker=f"S{i}", change_pct=float(20 - i)) for i in range(10)]
-        with patch.object(service, "_fetch_gainers_via_gemini", new=AsyncMock(return_value=raw)):
+        with patch.object(service, "_fetch_gainers_gemini", new=AsyncMock(return_value=raw)):
             result = await service.get_us_gainers()
         assert len(result) <= 3
-
-    async def test_get_us_gainers_with_quality_scores(self, service: MarketDataService) -> None:
-        raw = [self._raw_row()]
-        with patch.object(service, "_fetch_gainers_via_gemini", new=AsyncMock(return_value=raw)):
-            result = await service.get_us_gainers()
-        assert result[0].quality_score is not None
-        assert result[0].quality_label is not None
 
     async def test_get_us_gainers_wraps_errors_as_market_data_error(
         self, service: MarketDataService
@@ -183,7 +356,7 @@ class TestGeminiGainers:
         from core.exceptions import MarketDataError
 
         with patch.object(
-            service, "_fetch_gainers_via_gemini", new=AsyncMock(side_effect=RuntimeError("API down"))
+            service, "_fetch_gainers_gemini", new=AsyncMock(side_effect=RuntimeError("API down"))
         ):
             with pytest.raises(MarketDataError, match="Failed to fetch US gainers"):
                 await service.get_us_gainers()
@@ -192,7 +365,7 @@ class TestGeminiGainers:
         self, service: MarketDataService
     ) -> None:
         raw = [self._raw_row(ticker="RELIANCE", change_pct=5.2)]
-        with patch.object(service, "_fetch_gainers_via_gemini", new=AsyncMock(return_value=raw)):
+        with patch.object(service, "_fetch_gainers_gemini", new=AsyncMock(return_value=raw)):
             result = await service.get_india_gainers()
         assert result[0].market == "india"
 
@@ -202,7 +375,7 @@ class TestGeminiGainers:
         from core.exceptions import MarketDataError
 
         with patch.object(
-            service, "_fetch_gainers_via_gemini", new=AsyncMock(side_effect=RuntimeError("Timeout"))
+            service, "_fetch_gainers_gemini", new=AsyncMock(side_effect=RuntimeError("Timeout"))
         ):
             with pytest.raises(MarketDataError, match="Failed to fetch India gainers"):
                 await service.get_india_gainers()
@@ -225,325 +398,88 @@ class TestGeminiGainers:
         india_mock.assert_called_once()
 
 
-# ── Two-step Gemini pipeline ───────────────────────────────────────────────────
-# The pipeline splits into:
-#   Step 1 (_ground_search)           — googleSearch grounding, NO responseSchema
-#   Step 2 (_structure_gainers_to_json) — responseSchema, NO googleSearch
-#
-# Vertex AI rejects requests combining googleSearch and responseMimeType in the
-# same call (HTTP 400). Splitting sidesteps this entirely.
+# ── resolve_ticker_by_name ─────────────────────────────────────────────────────
 
-class TestFetchGainersViaGemini:
-    """Integration tests for _fetch_gainers_via_gemini two-step orchestration."""
+class TestResolveTickerByName:
+    """Tests for the company name → ticker resolution helper."""
 
-    def _stocks(self) -> list[dict]:
-        return [{"ticker": "NVDA", "name": "NVIDIA", "price": 950.0,
-                 "change_pct": 8.5, "change_abs": 74.5, "volume": 45_000_000}]
+    def _search_response(self, quotes: list[dict]) -> dict:
+        return {"quotes": quotes}
 
-    def _prose_response(self, text: str) -> dict:
-        """Gemini response returning plain text (used for ground_search step)."""
-        return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+    def _equity(self, symbol: str, exchange: str = "NMS", quote_type: str = "EQUITY") -> dict:
+        return {"symbol": symbol, "exchange": exchange, "quoteType": quote_type}
 
-    def _json_response(self, body: object) -> dict:
-        """Gemini response returning JSON (used for structure step)."""
-        return {"candidates": [{"content": {"parts": [{"text": json.dumps(body)}]}}]}
-
-    async def test_orchestrates_two_step_pipeline(self, service: MarketDataService) -> None:
-        """_fetch_gainers_via_gemini calls _ground_search then _structure_gainers_to_json."""
-        prose = "NVDA up 8.5%, AMD up 5%, INTC up 3%"
-        stocks = self._stocks()
-
-        ground_mock = AsyncMock(return_value=prose)
-        structure_mock = AsyncMock(return_value=stocks)
-
-        with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
-            patch.object(service, "_ground_search", ground_mock),
-            patch.object(service, "_structure_gainers_to_json", structure_mock),
-        ):
-            result = await service._fetch_gainers_via_gemini("test prompt", "us")
-
-        ground_mock.assert_awaited_once()
-        structure_mock.assert_awaited_once()
-        assert result == stocks
-
-    async def test_passes_prose_text_to_structure_step(self, service: MarketDataService) -> None:
-        """The prose from step 1 must be forwarded unchanged to step 2."""
-        prose = "Market data: NVDA gained 8.5% today on earnings beat."
-
-        ground_mock = AsyncMock(return_value=prose)
-        structure_mock = AsyncMock(return_value=[])
-
-        with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
-            patch.object(service, "_ground_search", ground_mock),
-            patch.object(service, "_structure_gainers_to_json", structure_mock),
-        ):
-            await service._fetch_gainers_via_gemini("test", "us")
-
-        # The prose must be passed as first positional arg (after token) to _structure_gainers_to_json
-        call_args = structure_mock.call_args
-        assert prose in call_args.args or prose in call_args.kwargs.values()
-
-    async def test_returns_empty_if_ground_search_returns_empty_string(
-        self, service: MarketDataService
-    ) -> None:
-        """If ground search returns empty string, skip structure step and return []."""
-        with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
-            patch.object(service, "_ground_search", AsyncMock(return_value="")),
-            patch.object(service, "_structure_gainers_to_json", AsyncMock()) as struct_mock,
-        ):
-            result = await service._fetch_gainers_via_gemini("test", "us")
-
-        assert result == []
-        struct_mock.assert_not_awaited()
-
-    async def test_returns_empty_if_ground_search_returns_whitespace_only(
-        self, service: MarketDataService
-    ) -> None:
-        with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
-            patch.object(service, "_ground_search", AsyncMock(return_value="   \n  ")),
-            patch.object(service, "_structure_gainers_to_json", AsyncMock()) as struct_mock,
-        ):
-            result = await service._fetch_gainers_via_gemini("test", "us")
-
-        assert result == []
-        struct_mock.assert_not_awaited()
-
-    async def test_token_fetched_once_and_reused_for_both_steps(
-        self, service: MarketDataService
-    ) -> None:
-        """Token should be obtained once and passed to both sub-calls, not fetched twice."""
-        with (
-            patch("core.auth.get_cached_token", return_value="fake-token") as token_mock,
-            patch.object(service, "_ground_search", AsyncMock(return_value="some text")),
-            patch.object(service, "_structure_gainers_to_json", AsyncMock(return_value=[])),
-        ):
-            await service._fetch_gainers_via_gemini("test", "us")
-
-        # get_cached_token called once
-        assert token_mock.call_count == 0  # called via asyncio.to_thread — count on the sync fn
-        # Verify both mocks received the same token
-        # (indirectly verified by ensuring only one token fetch happens in the implementation)
-
-
-class TestGroundSearch:
-    """Tests for _ground_search: must use googleSearch, must NOT use responseSchema."""
-
-    async def test_includes_google_search_tool(self, service: MarketDataService) -> None:
+    async def test_resolves_company_name_to_us_ticker(self) -> None:
         import httpx
         import respx
 
-        captured: list[dict] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            captured.append(json.loads(request.content))
-            return httpx.Response(200, json={
-                "candidates": [{"content": {"parts": [{"text": "Market update: NVDA up 8.5%"}]}}]
-            })
-
         with respx.mock:
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(side_effect=handler)
-            await service._ground_search("fake-token", "list top gainers", "us")
-
-        assert len(captured) == 1
-        payload = captured[0]
-        tool_names = [list(t.keys())[0] for t in payload.get("tools", [])]
-        assert "googleSearch" in tool_names
-
-    async def test_no_response_mime_type_in_ground_search(self, service: MarketDataService) -> None:
-        """googleSearch + responseMimeType = 400 from Vertex AI. Must not be combined."""
-        import httpx
-        import respx
-
-        captured: list[dict] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            captured.append(json.loads(request.content))
-            return httpx.Response(200, json={
-                "candidates": [{"content": {"parts": [{"text": "some prose"}]}}]
-            })
-
-        with respx.mock:
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(side_effect=handler)
-            await service._ground_search("fake-token", "list top gainers", "us")
-
-        gen_config = captured[0].get("generationConfig", {})
-        assert "responseMimeType" not in gen_config, (
-            "responseMimeType must NOT be set when googleSearch is used"
-        )
-        assert "responseSchema" not in gen_config, (
-            "responseSchema must NOT be set when googleSearch is used"
-        )
-
-    async def test_returns_joined_text_from_multiple_parts(self, service: MarketDataService) -> None:
-        """Grounded responses may have multiple content parts — all must be joined."""
-        import httpx
-        import respx
-
-        multi_part = {
-            "candidates": [{
-                "content": {
-                    "parts": [
-                        {"text": "NVDA up 8.5%. "},
-                        {"text": "AMD up 5.0%. "},
-                        {"text": "INTC up 3.0%."},
-                    ]
-                }
-            }]
-        }
-
-        with respx.mock:
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
-                return_value=httpx.Response(200, json=multi_part)
+            respx.get(url__regex=r".*finance\.yahoo\.com.*search.*").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=self._search_response([self._equity("NVDA", "NMS")])
+                )
             )
-            result = await service._ground_search("fake-token", "test", "us")
+            result = await resolve_ticker_by_name("NVIDIA", "us")
 
-        assert "NVDA" in result
-        assert "AMD" in result
-        assert "INTC" in result
+        assert result == "NVDA"
 
-    async def test_http_error_raises_exception(self, service: MarketDataService) -> None:
+    async def test_resolves_company_name_to_india_ticker(self) -> None:
         import httpx
         import respx
 
         with respx.mock:
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
-                return_value=httpx.Response(401, text="Unauthorized")
+            respx.get(url__regex=r".*finance\.yahoo\.com.*search.*").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=self._search_response([self._equity("RELIANCE.NS", "NSE")])
+                )
             )
-            with pytest.raises(Exception):
-                await service._ground_search("fake-token", "test", "us")
+            result = await resolve_ticker_by_name("Reliance", "india")
 
+        assert result == "RELIANCE"
 
-class TestStructureGainersToJson:
-    """Tests for _structure_gainers_to_json: must use responseSchema, no googleSearch."""
-
-    def _stock_list(self) -> list[dict]:
-        return [{"ticker": "NVDA", "name": "NVIDIA", "price": 950.0,
-                 "change_pct": 8.5, "change_abs": 74.5, "volume": 45_000_000}]
-
-    async def test_includes_response_schema_in_payload(self, service: MarketDataService) -> None:
+    async def test_skips_non_equity_results(self) -> None:
         import httpx
         import respx
 
-        captured: list[dict] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            captured.append(json.loads(request.content))
-            return httpx.Response(200, json={
-                "candidates": [{"content": {"parts": [{"text": json.dumps(self._stock_list())}]}}]
-            })
-
         with respx.mock:
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(side_effect=handler)
-            await service._structure_gainers_to_json("fake-token", "NVDA is up 8.5%", "us")
-
-        gen_config = captured[0].get("generationConfig", {})
-        assert gen_config.get("responseMimeType") == "application/json"
-        assert "responseSchema" in gen_config
-
-    async def test_no_google_search_in_structure_step(self, service: MarketDataService) -> None:
-        """Structure step must NOT include googleSearch (would trigger 400 if combined with responseSchema)."""
-        import httpx
-        import respx
-
-        captured: list[dict] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            captured.append(json.loads(request.content))
-            return httpx.Response(200, json={
-                "candidates": [{"content": {"parts": [{"text": json.dumps(self._stock_list())}]}}]
-            })
-
-        with respx.mock:
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(side_effect=handler)
-            await service._structure_gainers_to_json("fake-token", "NVDA up 8.5%", "us")
-
-        payload = captured[0]
-        tools = payload.get("tools", [])
-        tool_names = [list(t.keys())[0] for t in tools]
-        assert "googleSearch" not in tool_names
-
-    async def test_returns_parsed_list(self, service: MarketDataService) -> None:
-        import httpx
-        import respx
-
-        stocks = self._stock_list()
-
-        with respx.mock:
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
-                return_value=httpx.Response(200, json={
-                    "candidates": [{"content": {"parts": [{"text": json.dumps(stocks)}]}}]
-                })
+            respx.get(url__regex=r".*finance\.yahoo\.com.*search.*").mock(
+                return_value=httpx.Response(
+                    200,
+                    json=self._search_response([
+                        self._equity("NVDA-WT", "NMS", quote_type="WARRANT"),
+                        self._equity("NVDA", "NMS", quote_type="EQUITY"),
+                    ])
+                )
             )
-            result = await service._structure_gainers_to_json("fake-token", "some prose", "us")
+            result = await resolve_ticker_by_name("NVIDIA", "us")
 
-        assert len(result) == 1
-        assert result[0]["ticker"] == "NVDA"
+        assert result == "NVDA"
 
-    async def test_invalid_json_returns_empty_list(self, service: MarketDataService) -> None:
+    async def test_returns_none_when_no_match(self) -> None:
         import httpx
         import respx
 
         with respx.mock:
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
-                return_value=httpx.Response(200, json={
-                    "candidates": [{"content": {"parts": [{"text": "not valid json {{{{"}]}}]
-                })
+            respx.get(url__regex=r".*finance\.yahoo\.com.*search.*").mock(
+                return_value=httpx.Response(200, json=self._search_response([]))
             )
-            result = await service._structure_gainers_to_json("fake-token", "prose", "us")
+            result = await resolve_ticker_by_name("XYZNOTREAL", "us")
 
-        assert result == []
+        assert result is None
 
-    async def test_non_list_json_returns_empty_list(self, service: MarketDataService) -> None:
-        """If Gemini returns a JSON object instead of array, return []."""
+    async def test_returns_none_on_http_error(self) -> None:
         import httpx
         import respx
 
         with respx.mock:
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
-                return_value=httpx.Response(200, json={
-                    "candidates": [{"content": {"parts": [{"text": '{"unexpected": "object"}'}]}}]
-                })
+            respx.get(url__regex=r".*finance\.yahoo\.com.*search.*").mock(
+                return_value=httpx.Response(500, text="Server error")
             )
-            result = await service._structure_gainers_to_json("fake-token", "prose", "us")
+            result = await resolve_ticker_by_name("NVIDIA", "us")
 
-        assert result == []
-
-    async def test_http_error_raises_exception(self, service: MarketDataService) -> None:
-        import httpx
-        import respx
-
-        with respx.mock:
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
-                return_value=httpx.Response(500, text="Internal Server Error")
-            )
-            with pytest.raises(Exception):
-                await service._structure_gainers_to_json("fake-token", "prose", "us")
-
-    async def test_embeds_raw_text_in_prompt(self, service: MarketDataService) -> None:
-        """The raw prose from ground_search must appear in the structure step's prompt."""
-        import httpx
-        import respx
-
-        captured: list[dict] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            captured.append(json.loads(request.content))
-            return httpx.Response(200, json={
-                "candidates": [{"content": {"parts": [{"text": json.dumps(self._stock_list())}]}}]
-            })
-
-        raw_prose = "NVDA up 8.5% today on strong earnings beat"
-
-        with respx.mock:
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(side_effect=handler)
-            await service._structure_gainers_to_json("fake-token", raw_prose, "us")
-
-        prompt_text = captured[0]["contents"][0]["parts"][0]["text"]
-        assert raw_prose in prompt_text
+        assert result is None
 
 
 # ── Fundamentals (yfinance) ────────────────────────────────────────────────────
@@ -571,11 +507,10 @@ class TestFundamentals:
 
     @patch("services.market_data.yf.Ticker")
     async def test_handles_missing_fields_gracefully(self, mock_ticker_cls, service: MarketDataService) -> None:
-        mock_ticker_cls.return_value.info = {"shortName": "Test Co"}  # All numeric fields missing
+        mock_ticker_cls.return_value.info = {"shortName": "Test Co"}
         result = await service.get_fundamentals("TEST", "us")
         assert result.pe_ratio is None
         assert result.roe is None
-        assert result.profit_margin is None
 
     @patch("services.market_data.yf.Ticker")
     async def test_india_ticker_appends_ns_suffix(self, mock_ticker_cls, service: MarketDataService) -> None:

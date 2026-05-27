@@ -1,4 +1,4 @@
-import type { GainerDetail, GainersListResponse, Market } from "../types";
+import type { GainerDetail, GainersListResponse, Market, StockAnalysisResponse } from "../types";
 
 const BASE_URL = "/api";
 
@@ -17,6 +17,10 @@ export const api = {
 
   getGainerDetail: (market: Market, ticker: string, refresh = false): Promise<GainerDetail> =>
     fetchJSON(`/gainers/${market}/${ticker}${refresh ? "?refresh=true" : ""}`),
+
+  /** Slow AI endpoint (~10-15 s cold). Fetch in parallel with getGainerDetail. */
+  getGainerAnalysis: (market: Market, ticker: string, refresh = false): Promise<StockAnalysisResponse> =>
+    fetchJSON(`/gainers/${market}/${ticker}/analyse${refresh ? "?refresh=true" : ""}`),
 
   invalidateCache: (market: Market, ticker: string): Promise<{ status: string }> =>
     fetchJSON(`/gainers/${market}/${ticker}/cache`, { method: "DELETE" }),

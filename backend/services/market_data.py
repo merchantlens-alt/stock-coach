@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import re
 from datetime import date
 from typing import Any, Optional
 
+import httpx
 import yfinance as yf
 
 from core.auth import get_cached_token
@@ -15,52 +16,56 @@ from models.schemas import FundamentalsData, Market, StockGainer, compute_qualit
 
 log = get_logger(__name__)
 
-# ── Step 1: Google Search grounding prompts (natural language — no JSON) ───────
-
-_US_SEARCH_PROMPT = (
-    "Use Google Search to find today's top US stock gainers right now.\n\n"
-    "List the top 50 stocks with the highest percentage gain today on NYSE or NASDAQ.\n"
-    "For each stock include: ticker symbol, company name, current price, "
-    "percentage gain, absolute price change, trading volume, and sector.\n"
-    "Only include stocks priced above $5 with volume above 500,000 shares. "
-    "Exclude warrants, rights, units (tickers ending in W, R, or U). "
-    "Ticker must be 5 characters or fewer."
-)
-
-_INDIA_SEARCH_PROMPT = (
-    "Use Google Search to find today's top Indian stock gainers on NSE right now.\n\n"
-    "List the top 50 NSE-listed stocks with the highest percentage gain today.\n"
-    "For each stock include: NSE ticker symbol (without .NS suffix), company name, "
-    "current price in INR, percentage gain, absolute price change in INR, "
-    "trading volume, and sector.\n"
-    "Only include stocks priced above ₹50 with volume above 100,000 shares."
-)
-
-# ── Step 2: responseSchema for structured JSON output (no googleSearch) ────────
-
-_GAINERS_SCHEMA: dict[str, Any] = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {
-            "ticker":      {"type": "string"},
-            "name":        {"type": "string"},
-            "price":       {"type": "number"},
-            "change_pct":  {"type": "number"},
-            "change_abs":  {"type": "number"},
-            "volume":      {"type": "integer"},
-            "sector":      {"type": "string"},
-        },
-        "required": ["ticker", "name", "price", "change_pct", "change_abs", "volume"],
-    },
+# ── Yahoo Finance search (company name → ticker) ───────────────────────────────
+_YF_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
+_YF_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
 }
 
-_STRUCTURE_PROMPT_TEMPLATE = (
-    "Convert the following stock market data into a structured JSON array.\n"
-    "Extract every stock mentioned and output the required fields.\n"
-    "Use the exact ticker symbols as given. "
-    "If sector is not mentioned for a stock, omit that field.\n\n"
-    "Market data:\n{raw_text}"
+_US_EXCHANGES = {"NMS", "NYQ", "NGM", "PCX", "BATS", "ASE", "OPR"}
+
+# ── Gemini + Google Search prompts ────────────────────────────────────────────
+# We ask Gemini to output a pipe-delimited table instead of JSON.
+# Reason: Vertex AI blocks responseSchema when googleSearch grounding is active
+# (returns HTTP 400). Prose is hard to parse. Pipe-delimited text is easy to
+# parse deterministically in Python with no second AI call needed.
+
+_TABLE_FORMAT = """
+Output ONLY a pipe-delimited data table — no headers, no prose, no markdown.
+One stock per line in this exact format:
+TICKER|NAME|PRICE|CHANGE_PCT|CHANGE_ABS|VOLUME|SECTOR
+
+Example:
+ASTC|Astrotech Corporation|6.55|165.2|4.08|500000|Industrials
+NVDA|NVIDIA Corporation|950.00|8.5|74.50|45000000|Technology
+
+Output at least 20 stocks. Sort by CHANGE_PCT descending."""
+
+_US_PROMPT = (
+    "Use Google Search to find today's top 50 US stock gainers on NYSE and NASDAQ right now.\n\n"
+    "Only include stocks where ALL of these are true:\n"
+    "- Listed on NYSE or NASDAQ (not OTC or pink sheets)\n"
+    "- Current price above $5\n"
+    "- Today's trading volume above 500,000 shares\n"
+    "- Ticker symbol is 5 characters or fewer\n"
+    "- Not a warrant/right/unit (ticker does not end in W, R, or U)\n\n"
+    + _TABLE_FORMAT
+)
+
+_INDIA_PROMPT = (
+    "Use Google Search to find today's top 50 NSE (National Stock Exchange of India) "
+    "stock gainers right now.\n\n"
+    "Only include stocks where ALL of these are true:\n"
+    "- Listed on NSE India\n"
+    "- Current price above ₹50\n"
+    "- Today's trading volume above 100,000 shares\n\n"
+    "Use the NSE ticker symbol WITHOUT the .NS suffix.\n"
+    "Use INR values for PRICE and CHANGE_ABS.\n\n"
+    + _TABLE_FORMAT
 )
 
 
@@ -78,7 +83,7 @@ class MarketDataService:
 
     async def get_us_gainers(self) -> list[StockGainer]:
         try:
-            raw = await self._fetch_gainers_via_gemini(_US_SEARCH_PROMPT, "us")
+            raw = await self._fetch_gainers_gemini(_US_PROMPT, "us")
             gainers = self._build_gainers(raw, "us")
             log.info("market_data.us_gainers_fetched", count=len(gainers))
             return gainers[: self._top_n]
@@ -88,7 +93,7 @@ class MarketDataService:
 
     async def get_india_gainers(self) -> list[StockGainer]:
         try:
-            raw = await self._fetch_gainers_via_gemini(_INDIA_SEARCH_PROMPT, "india")
+            raw = await self._fetch_gainers_gemini(_INDIA_PROMPT, "india")
             gainers = self._build_gainers(raw, "india")
             log.info("market_data.india_gainers_fetched", count=len(gainers))
             return gainers[: self._top_n]
@@ -105,93 +110,49 @@ class MarketDataService:
             log.error("market_data.fundamentals_error", ticker=ticker, error=str(exc))
             raise MarketDataError(f"Failed to fetch fundamentals for {ticker}: {exc}") from exc
 
-    # ── Two-step Gemini pipeline ──────────────────────────────────────────────
+    # ── Gemini + Google Search (pipe-delimited table) ─────────────────────────
 
-    async def _fetch_gainers_via_gemini(
-        self, search_prompt: str, market: str
+    async def _fetch_gainers_gemini(
+        self, prompt: str, market: str
     ) -> list[dict[str, Any]]:
         """
-        Two-step pipeline:
-          Step 1 — Google Search grounding: ask Gemini to search live market data
-                   and return a natural-language summary (no responseSchema).
-          Step 2 — Structured extraction: ask Gemini (no grounding) to convert
-                   the prose into a typed JSON array using responseSchema.
+        Ask Gemini (with Google Search grounding) to return a pipe-delimited
+        table of today's top gainers.
 
-        Vertex AI rejects requests that combine googleSearch grounding with
-        responseMimeType / responseSchema in the same call (returns HTTP 400).
-        Splitting into two calls sidesteps this limitation completely.
+        Why pipe-delimited instead of JSON?
+        Vertex AI rejects requests combining googleSearch grounding with
+        responseMimeType/responseSchema (HTTP 400). Prose is unpredictable.
+        Pipe-delimited text is structured enough for Gemini to produce
+        consistently and trivial to parse in Python — no second AI call needed.
         """
         token = await asyncio.to_thread(get_cached_token)
+        project = self._settings.google_cloud_project
+        region = self._settings.google_cloud_region
+        model = self._settings.vertex_ai_model_flash
+        url = (
+            f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}"
+            f"/locations/{region}/publishers/google/models/{model}:generateContent"
+        )
 
-        # Step 1: live search → prose text
-        raw_text = await self._ground_search(token, search_prompt, market)
-        if not raw_text.strip():
-            log.warning("market_data.ground_search_empty", market=market)
-            return []
-
-        log.debug("market_data.ground_search_done", market=market, chars=len(raw_text))
-
-        # Step 2: prose → structured JSON
-        return await self._structure_gainers_to_json(token, raw_text, market)
-
-    async def _ground_search(
-        self, token: str, prompt: str, market: str
-    ) -> str:
-        """Call Gemini with googleSearch grounding. Returns raw prose text."""
-        import httpx
-
-        url = self._vertex_url(self._settings.vertex_ai_model_flash)
         payload: dict[str, Any] = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "tools": [{"googleSearch": {}}],
             "generationConfig": {
                 "temperature": 0.0,
                 "maxOutputTokens": 4096,
+                # NOTE: responseMimeType / responseSchema intentionally omitted —
+                # Vertex AI returns HTTP 400 when combined with googleSearch.
             },
         }
 
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                url, json=payload, headers={"Authorization": f"Bearer {token}"}
+                url, json=payload,
+                headers={"Authorization": f"Bearer {token}"},
             )
             if not resp.is_success:
                 log.error(
-                    "market_data.ground_search_http_error",
-                    market=market,
-                    status=resp.status_code,
-                    body=resp.text[:400],
-                )
-            resp.raise_for_status()
-
-        data = resp.json()
-        parts = data["candidates"][0]["content"].get("parts", [])
-        return "".join(p.get("text", "") for p in parts)
-
-    async def _structure_gainers_to_json(
-        self, token: str, raw_text: str, market: str
-    ) -> list[dict[str, Any]]:
-        """Call Gemini with responseSchema (no grounding) to convert prose → JSON array."""
-        import httpx
-
-        prompt = _STRUCTURE_PROMPT_TEMPLATE.format(raw_text=raw_text)
-        url = self._vertex_url(self._settings.vertex_ai_model_flash)
-        payload: dict[str, Any] = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.0,
-                "maxOutputTokens": 8192,
-                "responseMimeType": "application/json",
-                "responseSchema": _GAINERS_SCHEMA,
-            },
-        }
-
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                url, json=payload, headers={"Authorization": f"Bearer {token}"}
-            )
-            if not resp.is_success:
-                log.error(
-                    "market_data.structure_json_http_error",
+                    "market_data.gemini_http_error",
                     market=market,
                     status=resp.status_code,
                     body=resp.text[:400],
@@ -202,23 +163,10 @@ class MarketDataService:
         parts = data["candidates"][0]["content"].get("parts", [])
         text = "".join(p.get("text", "") for p in parts)
 
-        try:
-            result = json.loads(text)
-            if isinstance(result, list):
-                return result
-            log.warning("market_data.structure_json_not_list", market=market, preview=text[:200])
-            return []
-        except json.JSONDecodeError:
-            log.warning("market_data.structure_json_parse_failed", market=market, preview=text[:300])
-            return []
+        log.debug("market_data.gemini_raw", market=market, chars=len(text), preview=text[:300])
+        return _parse_pipe_table(text)
 
-    def _vertex_url(self, model: str) -> str:
-        project = self._settings.google_cloud_project
-        region = self._settings.google_cloud_region
-        return (
-            f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}"
-            f"/locations/{region}/publishers/google/models/{model}:generateContent"
-        )
+    # ── Builder ───────────────────────────────────────────────────────────────
 
     def _build_gainers(
         self, raw: list[dict[str, Any]], market: Market
@@ -255,7 +203,7 @@ class MarketDataService:
 
         return sorted(gainers, key=lambda g: g.change_pct, reverse=True)
 
-    # ── yfinance for fundamentals (different endpoint, less rate-limited) ─────
+    # ── yfinance for fundamentals ─────────────────────────────────────────────
 
     def _fetch_fundamentals_sync(self, yf_ticker: str) -> FundamentalsData:
         info = yf.Ticker(yf_ticker).info
@@ -274,6 +222,109 @@ class MarketDataService:
             analyst_target_price=_safe_float(info.get("targetMeanPrice")),
             analyst_recommendation=info.get("recommendationKey"),
         )
+
+
+def _parse_pipe_table(text: str) -> list[dict[str, Any]]:
+    """
+    Parse Gemini's pipe-delimited table response into a list of stock dicts.
+
+    Expected line format (Gemini is instructed to produce this):
+      TICKER|NAME|PRICE|CHANGE_PCT|CHANGE_ABS|VOLUME|SECTOR
+
+    Tolerant of:
+    - Extra whitespace / blank lines
+    - Missing SECTOR column
+    - Header lines (skipped if TICKER is non-numeric and PRICE is non-numeric)
+    - Markdown table separators (---)
+    """
+    results: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or "|" not in line:
+            continue
+        # Skip markdown separators like |---|---|
+        if re.match(r"^[\s|:\-]+$", line):
+            continue
+
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 6:
+            continue
+
+        ticker = parts[0].upper()
+        name = parts[1]
+        price_str = parts[2]
+        change_pct_str = parts[3]
+        change_abs_str = parts[4]
+        volume_str = parts[5]
+        sector = parts[6] if len(parts) > 6 else None
+
+        # Skip header rows (price field is not numeric)
+        try:
+            price = float(price_str.replace(",", "").replace("$", "").replace("₹", ""))
+            change_pct = float(change_pct_str.replace("%", "").replace("+", ""))
+            change_abs = float(change_abs_str.replace(",", "").replace("$", "").replace("₹", ""))
+            volume = int(volume_str.replace(",", "").replace(".", ""))
+        except (ValueError, AttributeError):
+            continue  # header row or malformed — skip
+
+        if not ticker or not ticker.isalpha():
+            continue
+
+        results.append({
+            "ticker": ticker,
+            "name": name,
+            "price": price,
+            "change_pct": change_pct,
+            "change_abs": change_abs,
+            "volume": volume,
+            "sector": sector if sector else None,
+        })
+
+    log.debug("market_data.pipe_table_parsed", rows=len(results))
+    return results
+
+
+async def resolve_ticker_by_name(query: str, market: Market) -> str | None:
+    """
+    Resolve a company name (e.g. "NVIDIA") to its ticker (e.g. "NVDA")
+    via Yahoo Finance search. Called as fallback when direct ticker lookup fails.
+    """
+    params = {
+        "q": query,
+        "quotesCount": 8,
+        "newsCount": 0,
+        "listsCount": 0,
+        "enableFuzzyQuery": "true",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(_YF_SEARCH_URL, params=params, headers=_YF_HEADERS)
+            resp.raise_for_status()
+        quotes = resp.json().get("quotes", [])
+    except Exception as exc:
+        log.warning("market_data.name_resolve_failed", query=query, error=str(exc))
+        return None
+
+    for q in quotes:
+        if q.get("quoteType") != "EQUITY":
+            continue
+        symbol: str = q.get("symbol", "")
+        exchange: str = q.get("exchange", "")
+
+        if market == "india":
+            if symbol.endswith(".NS"):
+                return symbol[:-3]
+            if symbol.endswith(".BO"):
+                return symbol[:-3]
+            if exchange in ("NSE", "BSE"):
+                return symbol
+        else:
+            if "." not in symbol and len(symbol) <= 5 and exchange in _US_EXCHANGES:
+                return symbol
+            if "." not in symbol and len(symbol) <= 5 and not exchange:
+                return symbol
+
+    return None
 
 
 def _safe_float(v: object) -> Optional[float]:

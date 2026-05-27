@@ -91,6 +91,14 @@ export interface GainerDetail {
   gainer: StockGainer;
   fundamentals?: FundamentalsData;
   news: NewsItem[];
+  from_cache: boolean;
+  fetched_at?: string;
+}
+
+/** Returned by GET /gainers/{market}/{ticker}/analyse — slow AI endpoint */
+export interface StockAnalysisResponse {
+  ticker: string;
+  market: Market;
   analysis?: GainerAnalysis;
   prediction?: StockPrediction;
   from_cache: boolean;

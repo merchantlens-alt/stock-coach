@@ -17,6 +17,7 @@ log = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    import asyncio
     settings = get_settings()
     log.info(
         "stockcoach.startup",
@@ -24,8 +25,42 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis=settings.use_redis,
         region=settings.google_cloud_region,
     )
+    # Pre-warm the gainers cache in background so the first user never waits.
+    # Cloud Run keeps the container alive between requests, so this is free.
+    if not settings.mock_ai:
+        asyncio.create_task(_warm_gainers_cache())
     yield
     log.info("stockcoach.shutdown")
+
+
+async def _warm_gainers_cache() -> None:
+    """Fetch US and India gainers on startup so the 30-min cache is already hot."""
+    import asyncio
+    from api.deps import get_cache, get_market_data
+    from core.config import get_settings as _get_settings
+    from services.market_data import today_str
+
+    try:
+        _settings = _get_settings()
+        cache = get_cache(_settings)
+        market_data = get_market_data(_settings)
+
+        async def _fetch_if_stale(market: str) -> None:
+            key = f"gainers:{market}:{today_str()}"
+            if await cache.get(key):
+                log.info("startup.cache_already_warm", market=market)
+                return
+            log.info("startup.warming_cache", market=market)
+            await market_data.get_gainers(market)  # type: ignore[arg-type]
+            log.info("startup.cache_warmed", market=market)
+
+        await asyncio.gather(
+            _fetch_if_stale("us"),
+            _fetch_if_stale("india"),
+            return_exceptions=True,
+        )
+    except Exception as exc:
+        log.warning("startup.cache_warm_failed", error=str(exc))
 
 
 def create_app() -> FastAPI:

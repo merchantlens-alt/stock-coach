@@ -6,7 +6,7 @@ import { GainerCard } from "../components/GainerCard";
 import { MarketNarrative } from "../components/MarketNarrative";
 import { MarketToggle } from "../components/MarketToggle";
 import { SearchBar } from "../components/SearchBar";
-import { useGainerDetail, useGainers } from "../hooks/useGainers";
+import { useGainerAnalysis, useGainerDetail, useGainers } from "../hooks/useGainers";
 import type { Market } from "../types";
 
 export function Dashboard() {
@@ -19,7 +19,11 @@ export function Dashboard() {
   const activeTicker = searchedTicker ?? selectedTicker;
 
   const { data: gainersData, isLoading: gainersLoading, error: gainersError, refetch } = useGainers(market);
+
+  // Two parallel hooks: fast data (~3-5 s) + slow AI (~10-15 s).
+  // The panel renders as soon as the data hook returns; AI fills in when ready.
   const { data: detail, isLoading: detailLoading, error: detailError } = useGainerDetail(market, activeTicker);
+  const { data: analysisData, isLoading: analysisLoading } = useGainerAnalysis(market, activeTicker);
 
   function handleMarketChange(m: Market) {
     setMarket(m);
@@ -27,8 +31,10 @@ export function Dashboard() {
     setSearchedTicker(null);
   }
 
-  function handleSearch(ticker: string) {
-    setSearchedTicker(ticker);
+  function handleSearch(query: string) {
+    // Strip whitespace; the backend resolves company names → tickers automatically
+    const cleaned = query.trim().toUpperCase().replace(/\s+/g, "");
+    setSearchedTicker(cleaned);
     setSelectedTicker(null);
   }
 
@@ -131,8 +137,11 @@ export function Dashboard() {
       {/* Right pane — analysis */}
       <div className="flex-1 overflow-hidden">
         {detail ? (
+          /* Data arrived (~3-5 s) — show panel immediately; AI fills in via analysisLoading */
           <AnalysisPanel
             detail={detail}
+            analysis={analysisData}
+            analysisLoading={analysisLoading}
             onClose={() => { setSelectedTicker(null); setSearchedTicker(null); }}
           />
         ) : (
@@ -141,9 +150,11 @@ export function Dashboard() {
               <div className="text-center">
                 <div className="w-10 h-10 rounded-full border-2 border-green-500 border-t-transparent animate-spin mx-auto mb-3" />
                 <p className="text-sm font-medium text-gray-600">
-                  {searchedTicker ? `Analysing ${searchedTicker}…` : "AI is analysing the stock…"}
+                  {searchedTicker ? `Looking up ${searchedTicker}…` : "Fetching stock data…"}
                 </p>
-                <p className="text-xs mt-1 text-gray-400">Fetching data · Running AI agents · 15–30 sec</p>
+                <p className="text-xs mt-1 text-gray-400">
+                  Resolving ticker · Fetching fundamentals · 3–5 sec
+                </p>
               </div>
             ) : detailError && activeTicker ? (
               <div className="text-center">

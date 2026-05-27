@@ -23,22 +23,31 @@ from models.schemas import (
     GainersListResponse,
     Market,
     MarketSummary,
+    StockAnalysisResponse,
     StockGainer,
     compute_quality_score,
 )
 from services.cache import CacheBackend
-from services.market_data import MarketDataService, today_str
+from services.market_data import MarketDataService, resolve_ticker_by_name, today_str
 from services.news_fetcher import NewsFetcher
 
 router = APIRouter(prefix="/gainers", tags=["gainers"])
 log = get_logger(__name__)
 
 
+# ── Cache key helpers ─────────────────────────────────────────────────────────
+
 def _list_cache_key(market: Market) -> str:
     return f"gainers:{market}:{today_str()}"
 
 
+def _data_cache_key(ticker: str, market: Market) -> str:
+    """Fast data endpoint (gainer + fundamentals + news, no AI). 30-min TTL."""
+    return f"data:{market}:{ticker}:{today_str()}"
+
+
 def _analysis_cache_key(ticker: str, market: Market) -> str:
+    """Slow AI endpoint. 6-hour TTL so switching stocks doesn't re-run AI."""
     return f"analysis:{market}:{ticker}:{today_str()}"
 
 
@@ -53,6 +62,8 @@ def _apply_quality_scores(gainers: list[StockGainer]) -> list[StockGainer]:
         g.quality_label = label
     return gainers
 
+
+# ── List gainers ──────────────────────────────────────────────────────────────
 
 @router.get("/{market}", response_model=GainersListResponse)
 async def list_gainers(
@@ -109,6 +120,8 @@ async def list_gainers(
     )
 
 
+# ── Fast data endpoint ────────────────────────────────────────────────────────
+
 @router.get("/{market}/{ticker}", response_model=GainerDetail)
 async def get_gainer_detail(
     market: Annotated[Market, Path()],
@@ -117,52 +130,35 @@ async def get_gainer_detail(
     cache: Annotated[CacheBackend, Depends(get_cache)],
     market_data: Annotated[MarketDataService, Depends(get_market_data)],
     news_fetcher: Annotated[NewsFetcher, Depends(get_news_fetcher)],
-    analyst: Annotated[GainerAnalystAgent, Depends(get_gainer_analyst)],
     refresh: Annotated[bool, Query(description="Force bypass cache")] = False,
 ) -> GainerDetail:
     """
-    Return full AI-powered analysis for a single stock.
+    Fast data endpoint — returns gainer info, fundamentals, and recent news.
+    No AI call; typical cold response time 3–5 s.
 
-    Speed: makes ONE combined Gemini call for both analysis and 30-day prediction
-    instead of two sequential calls — roughly 40-50% faster than the old design.
-
-    Comparison: when the searched ticker is not in today's top-gainer list the
-    response includes a `comparison_to_gainers` field explaining how this stock's
-    move differs from the day's biggest winners.
+    Call /analyse for AI-powered analysis and 30-day prediction (separate,
+    slower endpoint that the frontend fetches in parallel).
     """
     ticker = ticker.upper()
-    key = _analysis_cache_key(ticker, market)
+    key = _data_cache_key(ticker, market)
 
     if not refresh:
         cached = await cache.get(key)
         if cached:
-            log.info("gainers.detail_cache_hit", ticker=ticker, market=market)
+            log.info("gainers.data_cache_hit", ticker=ticker, market=market)
             return GainerDetail(**cached)
 
-    # Resolve gainer data and check whether ticker is in today's gainer list.
-    # Both operations run in parallel to save an extra round-trip.
-    gainer, gainers_list = await asyncio.gather(
-        _resolve_gainer(ticker, market, market_data),
-        _safe_get_gainers(market, market_data),
-    )
-
+    # Resolve gainer — check gainers list first (instant), fall back to yfinance
+    gainer = await _resolve_gainer(ticker, market, market_data)
     if gainer is None:
         raise ticker_not_found(ticker)
 
-    # Only provide comparison context when the ticker is NOT in today's list.
-    in_gainers = any(g.ticker == ticker for g in gainers_list)
-    gainers_context = gainers_list[:3] if not in_gainers and gainers_list else None
-
-    # Fetch fundamentals and news in parallel
-    try:
-        fundamentals, news = await asyncio.gather(
-            market_data.get_fundamentals(ticker, market),
-            news_fetcher.get_news(ticker, gainer.name),
-            return_exceptions=True,
-        )
-    except Exception as exc:
-        log.error("gainers.detail_fetch_error", ticker=ticker, error=str(exc))
-        raise upstream_error("market data / news", str(exc))
+    # Fetch fundamentals and news concurrently (yfinance + news API both ~1-3 s)
+    fundamentals, news = await asyncio.gather(
+        market_data.get_fundamentals(ticker, market),
+        news_fetcher.get_news(ticker, gainer.name),
+        return_exceptions=True,
+    )
 
     if isinstance(fundamentals, Exception):
         log.warning("gainers.fundamentals_failed", ticker=ticker, error=str(fundamentals))
@@ -171,7 +167,76 @@ async def get_gainer_detail(
         log.warning("gainers.news_failed", ticker=ticker, error=str(news))
         news = []
 
-    # Single combined AI call — analysis + prediction in one Gemini request.
+    detail = GainerDetail(
+        gainer=gainer,
+        fundamentals=fundamentals if not isinstance(fundamentals, Exception) else None,
+        news=news if not isinstance(news, Exception) else [],
+        from_cache=False,
+        fetched_at=datetime.utcnow(),
+    )
+
+    await cache.set(key, detail.model_dump(), settings.gainers_list_ttl)
+    return detail
+
+
+# ── Slow AI analysis endpoint ─────────────────────────────────────────────────
+
+@router.get("/{market}/{ticker}/analyse", response_model=StockAnalysisResponse)
+async def get_gainer_analysis(
+    market: Annotated[Market, Path()],
+    ticker: Annotated[str, Path(description="Stock ticker symbol")],
+    settings: Annotated[Settings, Depends(get_settings)],
+    cache: Annotated[CacheBackend, Depends(get_cache)],
+    market_data: Annotated[MarketDataService, Depends(get_market_data)],
+    news_fetcher: Annotated[NewsFetcher, Depends(get_news_fetcher)],
+    analyst: Annotated[GainerAnalystAgent, Depends(get_gainer_analyst)],
+    refresh: Annotated[bool, Query(description="Force bypass cache")] = False,
+) -> StockAnalysisResponse:
+    """
+    Slow AI endpoint — returns GainerAnalysis + StockPrediction.
+    Typical cold response time 10–15 s (one Gemini call).
+    Cached 6 hours so switching stocks and coming back is instant.
+
+    Designed to be fetched in parallel with GET /{market}/{ticker} so the
+    frontend can show data immediately and fill in AI content when ready.
+    """
+    ticker = ticker.upper()
+    key = _analysis_cache_key(ticker, market)
+
+    if not refresh:
+        cached = await cache.get(key)
+        if cached:
+            log.info("gainers.analysis_cache_hit", ticker=ticker, market=market)
+            return StockAnalysisResponse(**cached)
+
+    # Resolve gainer + gainers list in parallel (list used for comparison context)
+    gainer, gainers_list = await asyncio.gather(
+        _resolve_gainer(ticker, market, market_data),
+        _safe_get_gainers(market, market_data),
+    )
+
+    if gainer is None:
+        raise ticker_not_found(ticker)
+
+    # Determine whether this ticker is in today's gainer list
+    in_gainers = any(g.ticker == ticker for g in gainers_list)
+    gainers_context = gainers_list[:3] if not in_gainers and gainers_list else None
+
+    # Fetch fundamentals + news (needed for AI prompt quality)
+    fundamentals, news = await asyncio.gather(
+        market_data.get_fundamentals(ticker, market),
+        news_fetcher.get_news(ticker, gainer.name),
+        return_exceptions=True,
+    )
+
+    if isinstance(fundamentals, Exception):
+        log.warning("gainers.analysis_fundamentals_failed", ticker=ticker, error=str(fundamentals))
+        fundamentals = None
+    if isinstance(news, Exception):
+        log.warning("gainers.analysis_news_failed", ticker=ticker, error=str(news))
+        news = []
+
+    # Single combined Gemini call — analysis + 30-day prediction
     analysis = None
     prediction = None
     try:
@@ -180,27 +245,28 @@ async def get_gainer_detail(
             change_pct=gainer.change_pct,
             company_name=gainer.name,
             sector=gainer.sector,
-            news=news or [],
+            news=news if not isinstance(news, Exception) else [],
             fundamentals=fundamentals if not isinstance(fundamentals, Exception) else None,
             gainers_context=gainers_context,
         )
     except Exception as exc:
         log.error("gainers.ai_failed", ticker=ticker, error=str(exc))
-        # Return partial result rather than failing entirely
+        # Return partial result (analysis=None) rather than a 500 — frontend handles gracefully
 
-    detail = GainerDetail(
-        gainer=gainer,
-        fundamentals=fundamentals if not isinstance(fundamentals, Exception) else None,
-        news=news if not isinstance(news, Exception) else [],
+    response = StockAnalysisResponse(
+        ticker=ticker,
+        market=market,
         analysis=analysis,
         prediction=prediction,
         from_cache=False,
         analysed_at=datetime.utcnow(),
     )
 
-    await cache.set(key, detail.model_dump(), settings.analysis_ttl)
-    return detail
+    await cache.set(key, response.model_dump(), settings.analysis_ttl)
+    return response
 
+
+# ── Cache invalidation ────────────────────────────────────────────────────────
 
 @router.delete("/{market}/{ticker}/cache", tags=["system"])
 async def invalidate_cache(
@@ -208,19 +274,35 @@ async def invalidate_cache(
     ticker: Annotated[str, Path()],
     cache: Annotated[CacheBackend, Depends(get_cache)],
 ) -> dict[str, str]:
-    """Manually invalidate the cached analysis for a ticker."""
-    key = _analysis_cache_key(ticker.upper(), market)
-    await cache.delete(key)
-    return {"status": "invalidated", "key": key}
+    """Manually invalidate both data and analysis caches for a ticker."""
+    ticker = ticker.upper()
+    data_key = _data_cache_key(ticker, market)
+    analysis_key = _analysis_cache_key(ticker, market)
+    await asyncio.gather(
+        cache.delete(data_key),
+        cache.delete(analysis_key),
+    )
+    return {"status": "invalidated", "ticker": ticker}
 
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
 
 async def _resolve_gainer(
     ticker: str, market: Market, market_data: MarketDataService
 ) -> StockGainer | None:
     """
-    Try to get gainer metadata from the daily list.
-    Falls back to fetching the ticker directly via yfinance if not in the list.
+    Resolve a ticker to a StockGainer record.
+
+    Strategy:
+      1. Check today's gainer list (instant, cached).
+      2. Look up directly via yfinance.
+      3. If yfinance fails (e.g. user typed a company name like "NVIDIA"),
+         use Yahoo Finance search to resolve name → real ticker, then retry.
     """
+    import yfinance as yf
+    from services.market_data import _safe_float, _safe_int
+
+    # ── Step 1: today's gainer list ──────────────────────────────────────────
     try:
         gainers = await market_data.get_gainers(market)
         match = next((g for g in gainers if g.ticker == ticker), None)
@@ -229,35 +311,55 @@ async def _resolve_gainer(
     except Exception:
         pass
 
-    # Not in today's gainer list — build a minimal record from yfinance
+    # ── Step 2: direct yfinance lookup ────────────────────────────────────────
+    async def _yf_lookup(sym: str) -> dict:
+        yf_sym = f"{sym}.NS" if market == "india" else sym
+        return await asyncio.to_thread(lambda: yf.Ticker(yf_sym).info)
+
+    info: dict = {}
     try:
-        yf_ticker = f"{ticker}.NS" if market == "india" else ticker
-        import yfinance as yf
-
-        info = await asyncio.to_thread(lambda: yf.Ticker(yf_ticker).info)
-        if not info:
-            return None
-        from services.market_data import _safe_float, _safe_int
-
-        change_pct = info.get("regularMarketChangePercent", 0)
-        if change_pct is None or change_pct <= 0:
-            change_pct = 0.01  # Minimum to pass validator
-
-        return StockGainer(
-            ticker=ticker,
-            name=info.get("shortName", ticker),
-            market=market,
-            price=float(info.get("regularMarketPrice", 0)),
-            change_pct=float(change_pct),
-            change_abs=float(info.get("regularMarketChange", 0)),
-            volume=int(info.get("regularMarketVolume", 0)),
-            avg_volume=_safe_int(info.get("averageDailyVolume3Month")),
-            market_cap=_safe_float(info.get("marketCap")),
-            sector=info.get("sector"),
-            industry=info.get("industry"),
-        )
+        info = await _yf_lookup(ticker)
     except Exception:
+        pass
+
+    # ── Step 3: name resolution fallback ──────────────────────────────────────
+    # If yfinance returned no meaningful data, the user probably typed a company
+    # name (e.g. "NVIDIA", "SANDISK"). Try Yahoo Finance search to resolve it.
+    if not info or not info.get("regularMarketPrice"):
+        resolved = await resolve_ticker_by_name(ticker, market)
+        if resolved and resolved.upper() != ticker:
+            log.info(
+                "gainers.ticker_resolved",
+                query=ticker,
+                resolved=resolved,
+                market=market,
+            )
+            ticker = resolved.upper()
+            try:
+                info = await _yf_lookup(ticker)
+            except Exception:
+                pass
+
+    if not info or not info.get("regularMarketPrice"):
         return None
+
+    change_pct = info.get("regularMarketChangePercent") or 0.0
+    if change_pct < 0:
+        change_pct = 0.01  # minimum so validator passes for searched non-gainers
+
+    return StockGainer(
+        ticker=ticker,
+        name=info.get("shortName") or info.get("longName") or ticker,
+        market=market,
+        price=float(info.get("regularMarketPrice", 0)),
+        change_pct=float(change_pct),
+        change_abs=float(info.get("regularMarketChange", 0)),
+        volume=int(info.get("regularMarketVolume", 0)),
+        avg_volume=_safe_int(info.get("averageDailyVolume3Month")),
+        market_cap=_safe_float(info.get("marketCap")),
+        sector=info.get("sector"),
+        industry=info.get("industry"),
+    )
 
 
 async def _safe_get_gainers(
