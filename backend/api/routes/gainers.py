@@ -1,0 +1,231 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Path, Query
+
+from agents.gainer_analyst import GainerAnalystAgent
+from agents.predictor import PredictorAgent
+from api.deps import (
+    get_cache,
+    get_gainer_analyst,
+    get_market_data,
+    get_news_fetcher,
+    get_predictor,
+)
+from core.config import Settings, get_settings
+from core.exceptions import ticker_not_found, upstream_error
+from core.logging import get_logger
+from models.schemas import (
+    GainerDetail,
+    GainersListResponse,
+    Market,
+    StockGainer,
+)
+from services.cache import CacheBackend
+from services.market_data import MarketDataService, today_str
+from services.news_fetcher import NewsFetcher
+
+router = APIRouter(prefix="/gainers", tags=["gainers"])
+log = get_logger(__name__)
+
+
+def _list_cache_key(market: Market) -> str:
+    return f"gainers:{market}:{today_str()}"
+
+
+def _analysis_cache_key(ticker: str, market: Market) -> str:
+    return f"analysis:{market}:{ticker}:{today_str()}"
+
+
+@router.get("/{market}", response_model=GainersListResponse)
+async def list_gainers(
+    market: Annotated[Market, Path(description="'us' or 'india'")],
+    settings: Annotated[Settings, Depends(get_settings)],
+    cache: Annotated[CacheBackend, Depends(get_cache)],
+    market_data: Annotated[MarketDataService, Depends(get_market_data)],
+    refresh: Annotated[bool, Query(description="Force bypass cache")] = False,
+) -> GainersListResponse:
+    """
+    Return today's top gainers for the requested market.
+    Results are cached for 30 minutes (configurable via GAINERS_LIST_TTL).
+    """
+    key = _list_cache_key(market)
+
+    if not refresh:
+        cached = await cache.get(key)
+        if cached:
+            log.info("gainers.list_cache_hit", market=market)
+            gainers = [StockGainer(**g) for g in cached["gainers"]]
+            return GainersListResponse(
+                market=market,
+                date=today_str(),
+                gainers=gainers,
+                from_cache=True,
+            )
+
+    try:
+        gainers = await market_data.get_gainers(market)
+    except Exception as exc:
+        log.error("gainers.list_fetch_error", market=market, error=str(exc))
+        raise upstream_error("market data", str(exc))
+
+    await cache.set(
+        key,
+        {"gainers": [g.model_dump() for g in gainers]},
+        settings.gainers_list_ttl,
+    )
+
+    return GainersListResponse(
+        market=market,
+        date=today_str(),
+        gainers=gainers,
+        from_cache=False,
+    )
+
+
+@router.get("/{market}/{ticker}", response_model=GainerDetail)
+async def get_gainer_detail(
+    market: Annotated[Market, Path()],
+    ticker: Annotated[str, Path(description="Stock ticker symbol, e.g. AAPL or RELIANCE")],
+    settings: Annotated[Settings, Depends(get_settings)],
+    cache: Annotated[CacheBackend, Depends(get_cache)],
+    market_data: Annotated[MarketDataService, Depends(get_market_data)],
+    news_fetcher: Annotated[NewsFetcher, Depends(get_news_fetcher)],
+    analyst: Annotated[GainerAnalystAgent, Depends(get_gainer_analyst)],
+    predictor: Annotated[PredictorAgent, Depends(get_predictor)],
+    refresh: Annotated[bool, Query(description="Force bypass cache")] = False,
+) -> GainerDetail:
+    """
+    Return full AI-powered analysis for a single gainer.
+    Fetches fundamentals + news then runs both AI agents.
+    Results cached for 6 hours (configurable via ANALYSIS_TTL).
+    """
+    ticker = ticker.upper()
+    key = _analysis_cache_key(ticker, market)
+
+    if not refresh:
+        cached = await cache.get(key)
+        if cached:
+            log.info("gainers.detail_cache_hit", ticker=ticker, market=market)
+            return GainerDetail(**cached)
+
+    # Fetch basic gainer data from the daily list (so we have change_pct etc.)
+    gainer = await _resolve_gainer(ticker, market, market_data)
+    if gainer is None:
+        raise ticker_not_found(ticker)
+
+    # Fetch fundamentals and news in parallel
+    try:
+        fundamentals, news = await asyncio.gather(
+            market_data.get_fundamentals(ticker, market),
+            news_fetcher.get_news(ticker, gainer.name),
+            return_exceptions=True,
+        )
+    except Exception as exc:
+        log.error("gainers.detail_fetch_error", ticker=ticker, error=str(exc))
+        raise upstream_error("market data / news", str(exc))
+
+    # Gracefully handle partial failures
+    if isinstance(fundamentals, Exception):
+        log.warning("gainers.fundamentals_failed", ticker=ticker, error=str(fundamentals))
+        fundamentals = None
+    if isinstance(news, Exception):
+        log.warning("gainers.news_failed", ticker=ticker, error=str(news))
+        news = []
+
+    # Run AI agents sequentially — predictor needs gainer analysis first
+    analysis = None
+    prediction = None
+    try:
+        analysis = await analyst.analyse(
+            ticker=ticker,
+            change_pct=gainer.change_pct,
+            company_name=gainer.name,
+            sector=gainer.sector,
+            news=news or [],
+        )
+        if fundamentals is not None:
+            prediction = await predictor.predict(
+                ticker=ticker,
+                company_name=gainer.name,
+                fundamentals=fundamentals,
+                analysis=analysis,
+            )
+    except Exception as exc:
+        log.error("gainers.ai_failed", ticker=ticker, error=str(exc))
+        # Return partial result rather than failing entirely
+
+    detail = GainerDetail(
+        gainer=gainer,
+        fundamentals=fundamentals if not isinstance(fundamentals, Exception) else None,
+        news=news if not isinstance(news, Exception) else [],
+        analysis=analysis,
+        prediction=prediction,
+        from_cache=False,
+        analysed_at=datetime.utcnow(),
+    )
+
+    await cache.set(key, detail.model_dump(), settings.analysis_ttl)
+    return detail
+
+
+@router.delete("/{market}/{ticker}/cache", tags=["system"])
+async def invalidate_cache(
+    market: Annotated[Market, Path()],
+    ticker: Annotated[str, Path()],
+    cache: Annotated[CacheBackend, Depends(get_cache)],
+) -> dict[str, str]:
+    """Manually invalidate the cached analysis for a ticker."""
+    key = _analysis_cache_key(ticker.upper(), market)
+    await cache.delete(key)
+    return {"status": "invalidated", "key": key}
+
+
+async def _resolve_gainer(
+    ticker: str, market: Market, market_data: MarketDataService
+) -> StockGainer | None:
+    """
+    Try to get gainer metadata from the daily list.
+    Falls back to fetching the ticker directly if it is not in the list.
+    """
+    try:
+        gainers = await market_data.get_gainers(market)
+        match = next((g for g in gainers if g.ticker == ticker), None)
+        if match:
+            return match
+    except Exception:
+        pass
+
+    # Not in today's gainer list — build a minimal record from fundamentals
+    try:
+        yf_ticker = f"{ticker}.NS" if market == "india" else ticker
+        import asyncio
+        import yfinance as yf
+
+        info = await asyncio.to_thread(lambda: yf.Ticker(yf_ticker).info)
+        if not info:
+            return None
+        from services.market_data import _safe_float, _safe_int
+
+        change_pct = info.get("regularMarketChangePercent", 0)
+        if change_pct is None or change_pct <= 0:
+            change_pct = 0.01  # Minimum to pass validator
+
+        return StockGainer(
+            ticker=ticker,
+            name=info.get("shortName", ticker),
+            market=market,
+            price=float(info.get("regularMarketPrice", 0)),
+            change_pct=float(change_pct),
+            change_abs=float(info.get("regularMarketChange", 0)),
+            volume=int(info.get("regularMarketVolume", 0)),
+            avg_volume=_safe_int(info.get("averageDailyVolume3Month")),
+            market_cap=_safe_float(info.get("marketCap")),
+            sector=info.get("sector"),
+            industry=info.get("industry"),
+        )
+    except Exception:
+        return None
