@@ -56,14 +56,31 @@ class MarketDataService:
     def _fetch_us_gainers_sync(self) -> list[StockGainer]:
         screener = yf.Screener()
         screener.set_predefined_screener("day_gainers")
-        df = screener.df
+
+        # yfinance >= 0.2.40: use .quotes (DataFrame), not .df
+        try:
+            df = screener.quotes
+        except Exception:
+            df = None
+
+        # Fallback: try .body directly
+        if df is None or (hasattr(df, "empty") and df.empty):
+            try:
+                quotes = screener.body.get("quotes", [])
+                if not quotes:
+                    return []
+                import pandas as pd
+                df = pd.DataFrame(quotes)
+            except Exception:
+                return []
+
         if df is None or df.empty:
             return []
 
         gainers: list[StockGainer] = []
         for _, row in df.iterrows():
             change_pct = row.get("regularMarketChangePercent", 0)
-            if change_pct <= 0:
+            if not change_pct or float(change_pct) <= 0:
                 continue
             try:
                 gainers.append(
