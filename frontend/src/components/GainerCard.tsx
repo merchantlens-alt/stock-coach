@@ -1,5 +1,5 @@
 import { TrendingUp } from "lucide-react";
-import type { StockGainer } from "../types";
+import type { QualityLabel, StockGainer } from "../types";
 
 interface Props {
   gainer: StockGainer;
@@ -8,21 +8,22 @@ interface Props {
   onClick: () => void;
 }
 
-function formatMarketCap(cap?: number): string {
-  if (!cap) return "—";
-  if (cap >= 1e12) return `$${(cap / 1e12).toFixed(1)}T`;
-  if (cap >= 1e9) return `$${(cap / 1e9).toFixed(1)}B`;
-  return `$${(cap / 1e6).toFixed(0)}M`;
-}
-
 function formatVolume(vol: number): string {
   if (vol >= 1e9) return `${(vol / 1e9).toFixed(1)}B`;
   if (vol >= 1e6) return `${(vol / 1e6).toFixed(1)}M`;
   return `${(vol / 1e3).toFixed(0)}K`;
 }
 
+const QUALITY_STYLES: Record<QualityLabel, string> = {
+  Strong:   "bg-emerald-100 text-emerald-700 border-emerald-200",
+  Moderate: "bg-blue-50 text-blue-600 border-blue-200",
+  Watch:    "bg-amber-50 text-amber-600 border-amber-200",
+  Risky:    "bg-red-50 text-red-500 border-red-200",
+};
+
 export function GainerCard({ gainer, isSelected, isLoading, onClick }: Props) {
   const currency = gainer.market === "india" ? "₹" : "$";
+  const qualityStyle = gainer.quality_label ? QUALITY_STYLES[gainer.quality_label] : "";
 
   return (
     <button
@@ -37,16 +38,24 @@ export function GainerCard({ gainer, isSelected, isLoading, onClick }: Props) {
       ].join(" ")}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="font-bold text-gray-900 text-sm">{gainer.ticker}</span>
+            {gainer.quality_label && (
+              <span className={`text-xs px-1.5 py-0.5 rounded border font-medium ${qualityStyle}`}>
+                {gainer.quality_label}
+                {gainer.quality_score != null && (
+                  <span className="ml-1 opacity-70">{gainer.quality_score.toFixed(1)}</span>
+                )}
+              </span>
+            )}
             {gainer.sector && (
               <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
                 {gainer.sector}
               </span>
             )}
           </div>
-          <p className="text-xs text-gray-500 mt-0.5 truncate">{gainer.name}</p>
+          <p className="text-xs text-gray-500 mt-0.5 truncate">{gainer.name !== gainer.ticker ? gainer.name : ""}</p>
         </div>
 
         <div className="flex items-center gap-1 shrink-0 bg-green-100 text-green-700 font-bold text-sm px-2 py-1 rounded-lg">
@@ -57,17 +66,10 @@ export function GainerCard({ gainer, isSelected, isLoading, onClick }: Props) {
 
       <div className="mt-3 flex items-center justify-between text-xs text-gray-500">
         <span>
-          {currency}
-          {gainer.price.toLocaleString()}
-          <span className="text-green-600 ml-1">
-            (+{currency}
-            {gainer.change_abs.toFixed(2)})
-          </span>
+          {currency}{gainer.price.toLocaleString()}
+          <span className="text-green-600 ml-1">(+{currency}{gainer.change_abs.toFixed(2)})</span>
         </span>
-        <div className="flex gap-3">
-          <span>Vol {formatVolume(gainer.volume)}</span>
-          <span>{formatMarketCap(gainer.market_cap)}</span>
-        </div>
+        <span>Vol {formatVolume(gainer.volume)}</span>
       </div>
 
       {isLoading && (

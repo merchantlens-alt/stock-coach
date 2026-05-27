@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 Market = Literal["us", "india"]
 Sentiment = Literal["very_positive", "positive", "neutral", "negative", "very_negative"]
+MarketSentiment = Literal["very_bullish", "bullish", "mixed", "bearish", "very_bearish"]
 CatalystType = Literal[
     "earnings", "fda_approval", "acquisition", "partnership",
     "analyst_upgrade", "macro", "technical", "regulatory", "unknown"
@@ -15,6 +16,67 @@ CatalystType = Literal[
 OutlookHorizon = Literal["days", "weeks", "months"]
 FundamentalSignal = Literal["strong", "moderate", "weak", "unknown"]
 ValuationSignal = Literal["undervalued", "fairly_valued", "overvalued", "unknown"]
+QualityLabel = Literal["Strong", "Moderate", "Watch", "Risky"]
+
+
+def compute_quality_score(
+    price: float, volume: int, change_pct: float, ticker: str
+) -> tuple[float, QualityLabel]:
+    score = 0.0
+
+    # Price: higher price = more established company
+    if price >= 50:
+        score += 2.5
+    elif price >= 20:
+        score += 2.0
+    elif price >= 10:
+        score += 1.5
+    else:
+        score += 1.0
+
+    # Volume: more volume = real institutional interest
+    if volume >= 20_000_000:
+        score += 3.0
+    elif volume >= 5_000_000:
+        score += 2.5
+    elif volume >= 2_000_000:
+        score += 2.0
+    elif volume >= 1_000_000:
+        score += 1.5
+    else:
+        score += 1.0
+
+    # Change % sweet spot — 5-20% is genuine buying, >60% is suspicious
+    if 5 <= change_pct <= 15:
+        score += 2.5
+    elif 15 < change_pct <= 25:
+        score += 2.0
+    elif 25 < change_pct <= 40:
+        score += 1.5
+    elif 40 < change_pct <= 60:
+        score += 1.0
+    else:
+        score += 0.3
+
+    # Ticker length: short tickers = major exchange listing
+    if len(ticker) <= 4:
+        score += 1.0
+    else:
+        score += 0.5
+
+    # Normalize to 0–10
+    score = min(10.0, round(score * 10 / 9, 1))
+
+    if score >= 7.5:
+        label: QualityLabel = "Strong"
+    elif score >= 5.5:
+        label = "Moderate"
+    elif score >= 3.5:
+        label = "Watch"
+    else:
+        label = "Risky"
+
+    return score, label
 
 
 class StockGainer(BaseModel):
@@ -29,6 +91,8 @@ class StockGainer(BaseModel):
     market_cap: Optional[float] = None
     sector: Optional[str] = None
     industry: Optional[str] = None
+    quality_score: Optional[float] = None
+    quality_label: Optional[QualityLabel] = None
 
     @field_validator("change_pct")
     @classmethod
@@ -61,26 +125,22 @@ class NewsItem(BaseModel):
 
 
 class GainerAnalysis(BaseModel):
-    """Output from the Gainer Analyst AI agent."""
     ticker: str
-    why_it_gained: str = Field(description="Plain-English explanation of the gain catalyst")
-    key_catalysts: list[str] = Field(description="Bullet list of specific catalysts")
+    why_it_gained: str
+    key_catalysts: list[str]
     catalyst_type: CatalystType
     sentiment: Sentiment
-    is_sustained: bool = Field(
-        description="True if the catalyst likely drives sustained momentum vs a one-time pop"
-    )
+    is_sustained: bool
     sustainability_reason: str
     confidence: float = Field(ge=0.0, le=1.0)
+    related_beneficiaries: list[str] = Field(default_factory=list)
+    beneficiary_reasoning: Optional[str] = None
 
 
 class StockPrediction(BaseModel):
-    """Output from the Predictor AI agent."""
     ticker: str
-    outlook: str = Field(description="Plain-English 30-day outlook for a beginner investor")
-    predicted_change_pct: float = Field(
-        description="AI estimated % price change over the horizon"
-    )
+    outlook: str
+    predicted_change_pct: float
     confidence: float = Field(ge=0.0, le=1.0)
     time_horizon: OutlookHorizon
     key_risks: list[str]
@@ -96,8 +156,19 @@ class StockPrediction(BaseModel):
     )
 
 
+class MarketSummary(BaseModel):
+    market: Market
+    narrative: str
+    themes: list[str]
+    dominant_sector: Optional[str] = None
+    sentiment: MarketSentiment
+    watch_list: list[str]
+    watch_reason: str
+    from_cache: bool = False
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class GainerDetail(BaseModel):
-    """Full detail response for a single gainer ticker."""
     gainer: StockGainer
     fundamentals: Optional[FundamentalsData] = None
     news: list[NewsItem] = Field(default_factory=list)
@@ -111,6 +182,7 @@ class GainersListResponse(BaseModel):
     market: Market
     date: str
     gainers: list[StockGainer]
+    summary: Optional[MarketSummary] = None
     from_cache: bool = False
     fetched_at: datetime = Field(default_factory=datetime.utcnow)
 

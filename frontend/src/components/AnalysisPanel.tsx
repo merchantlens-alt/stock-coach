@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowDown, ArrowUp, Minus, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Minus, Sparkles, X } from "lucide-react";
 import type { GainerDetail } from "../types";
 
 interface Props {
@@ -240,6 +240,31 @@ export function AnalysisPanel({ detail, onClose }: Props) {
                 </li>
               ))}
             </ul>
+          </section>
+        )}
+
+        {/* Related beneficiaries */}
+        {analysis?.related_beneficiaries && analysis.related_beneficiaries.length > 0 && (
+          <section>
+            <div className="flex items-center gap-2 mb-2">
+              <Sparkles size={14} className="text-indigo-500" />
+              <h3 className="font-semibold text-gray-900">Who else may benefit</h3>
+            </div>
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3">
+              <div className="flex flex-wrap gap-2 mb-2">
+                {analysis.related_beneficiaries.map((ticker) => (
+                  <span
+                    key={ticker}
+                    className="text-sm font-bold bg-white border border-indigo-200 text-indigo-700 px-2.5 py-1 rounded-lg"
+                  >
+                    {ticker}
+                  </span>
+                ))}
+              </div>
+              {analysis.beneficiary_reasoning && (
+                <p className="text-xs text-indigo-600 leading-relaxed">{analysis.beneficiary_reasoning}</p>
+              )}
+            </div>
           </section>
         )}
 

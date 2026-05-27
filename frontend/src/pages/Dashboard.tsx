@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnalysisPanel } from "../components/AnalysisPanel";
 import { GainerCard } from "../components/GainerCard";
+import { MarketNarrative } from "../components/MarketNarrative";
 import { MarketToggle } from "../components/MarketToggle";
 import { useGainerDetail, useGainers } from "../hooks/useGainers";
 import type { Market } from "../types";
@@ -28,7 +29,7 @@ export function Dashboard() {
   return (
     <div className="flex-1 flex overflow-hidden">
       {/* Left pane — gainer list */}
-      <div className="w-full md:w-96 lg:w-[420px] shrink-0 flex flex-col border-r border-gray-200">
+      <div className="w-full md:w-96 lg:w-[440px] shrink-0 flex flex-col border-r border-gray-200">
         {/* Controls */}
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3 bg-gray-50">
           <MarketToggle market={market} onChange={handleMarketChange} />
@@ -54,44 +55,52 @@ export function Dashboard() {
           </div>
         )}
 
-        {/* List */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+        {/* Scrollable list + narrative */}
+        <div className="flex-1 overflow-y-auto pb-3">
+          {/* AI Market Narrative */}
+          {gainersData?.summary && (
+            <MarketNarrative summary={gainersData.summary} />
+          )}
+
+          {/* Skeleton while loading narrative */}
           {gainersLoading && (
-            <div className="space-y-2">
-              {Array.from({ length: 8 }).map((_, i) => (
+            <div className="mx-3 mt-3 h-36 rounded-xl bg-indigo-50 animate-pulse" />
+          )}
+
+          <div className="p-3 space-y-2 mt-1">
+            {gainersLoading && !gainersData && (
+              Array.from({ length: 8 }).map((_, i) => (
                 <div key={i} className="h-24 rounded-xl bg-gray-100 animate-pulse" />
-              ))}
-            </div>
-          )}
+              ))
+            )}
 
-          {gainersError && (
-            <div className="text-center py-12 text-sm text-red-500">
-              <p>Failed to load gainers.</p>
-              <button onClick={handleRefresh} className="mt-2 text-blue-500 hover:underline">
-                Try again
-              </button>
-            </div>
-          )}
+            {gainersError && (
+              <div className="text-center py-12 text-sm text-red-500">
+                <p>Failed to load gainers.</p>
+                <button onClick={handleRefresh} className="mt-2 text-blue-500 hover:underline">
+                  Try again
+                </button>
+              </div>
+            )}
 
-          {gainersData?.gainers.map((gainer) => (
-            <GainerCard
-              key={gainer.ticker}
-              gainer={gainer}
-              isSelected={selectedTicker === gainer.ticker}
-              isLoading={selectedTicker === gainer.ticker && detailLoading}
-              onClick={() =>
-                setSelectedTicker(
-                  selectedTicker === gainer.ticker ? null : gainer.ticker
-                )
-              }
-            />
-          ))}
+            {gainersData?.gainers.map((gainer) => (
+              <GainerCard
+                key={gainer.ticker}
+                gainer={gainer}
+                isSelected={selectedTicker === gainer.ticker}
+                isLoading={selectedTicker === gainer.ticker && detailLoading}
+                onClick={() =>
+                  setSelectedTicker(selectedTicker === gainer.ticker ? null : gainer.ticker)
+                }
+              />
+            ))}
 
-          {gainersData?.gainers.length === 0 && !gainersLoading && (
-            <div className="text-center py-12 text-sm text-gray-400">
-              No gainers found for today.
-            </div>
-          )}
+            {gainersData?.gainers.length === 0 && !gainersLoading && (
+              <div className="text-center py-12 text-sm text-gray-400">
+                No gainers found for today.
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -110,7 +119,7 @@ export function Dashboard() {
             ) : (
               <>
                 <p className="text-sm">Select a stock to see AI analysis</p>
-                <p className="text-xs text-gray-300">Why it gained · 30-day outlook · Fundamentals</p>
+                <p className="text-xs text-gray-300">Why it gained · 30-day outlook · Who else benefits</p>
               </>
             )}
           </div>

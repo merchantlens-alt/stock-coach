@@ -7,10 +7,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query
 
 from agents.gainer_analyst import GainerAnalystAgent
+from agents.market_analyst import MarketAnalystAgent
 from agents.predictor import PredictorAgent
 from api.deps import (
     get_cache,
     get_gainer_analyst,
+    get_market_analyst,
     get_market_data,
     get_news_fetcher,
     get_predictor,
@@ -22,7 +24,9 @@ from models.schemas import (
     GainerDetail,
     GainersListResponse,
     Market,
+    MarketSummary,
     StockGainer,
+    compute_quality_score,
 )
 from services.cache import CacheBackend
 from services.market_data import MarketDataService, today_str
@@ -40,30 +44,44 @@ def _analysis_cache_key(ticker: str, market: Market) -> str:
     return f"analysis:{market}:{ticker}:{today_str()}"
 
 
+def _summary_cache_key(market: Market) -> str:
+    return f"summary:{market}:{today_str()}"
+
+
+def _apply_quality_scores(gainers: list[StockGainer]) -> list[StockGainer]:
+    for g in gainers:
+        score, label = compute_quality_score(g.price, g.volume, g.change_pct, g.ticker)
+        g.quality_score = score
+        g.quality_label = label
+    return gainers
+
+
 @router.get("/{market}", response_model=GainersListResponse)
 async def list_gainers(
     market: Annotated[Market, Path(description="'us' or 'india'")],
     settings: Annotated[Settings, Depends(get_settings)],
     cache: Annotated[CacheBackend, Depends(get_cache)],
     market_data: Annotated[MarketDataService, Depends(get_market_data)],
+    analyst: Annotated[MarketAnalystAgent, Depends(get_market_analyst)],
     refresh: Annotated[bool, Query(description="Force bypass cache")] = False,
 ) -> GainersListResponse:
     """
-    Return today's top gainers for the requested market.
+    Return today's top gainers with quality scores and AI market narrative.
     Results are cached for 30 minutes (configurable via GAINERS_LIST_TTL).
     """
-    key = _list_cache_key(market)
+    list_key = _list_cache_key(market)
+    summary_key = _summary_cache_key(market)
 
     if not refresh:
-        cached = await cache.get(key)
+        cached = await cache.get(list_key)
         if cached:
             log.info("gainers.list_cache_hit", market=market)
             gainers = [StockGainer(**g) for g in cached["gainers"]]
+            cached_summary = await cache.get(summary_key)
+            summary = MarketSummary(**cached_summary) if cached_summary else None
             return GainersListResponse(
-                market=market,
-                date=today_str(),
-                gainers=gainers,
-                from_cache=True,
+                market=market, date=today_str(), gainers=gainers,
+                summary=summary, from_cache=True,
             )
 
     try:
@@ -72,17 +90,26 @@ async def list_gainers(
         log.error("gainers.list_fetch_error", market=market, error=str(exc))
         raise upstream_error("market data", str(exc))
 
-    await cache.set(
-        key,
-        {"gainers": [g.model_dump() for g in gainers]},
-        settings.gainers_list_ttl,
+    gainers = _apply_quality_scores(gainers)
+
+    # Fire market summary AI call in parallel with cache write
+    async def _get_summary() -> MarketSummary | None:
+        try:
+            s = await analyst.analyse(gainers, market)
+            await cache.set(summary_key, s.model_dump(), settings.gainers_list_ttl)
+            return s
+        except Exception as exc:
+            log.warning("gainers.summary_failed", error=str(exc))
+            return None
+
+    summary, _ = await asyncio.gather(
+        _get_summary(),
+        cache.set(list_key, {"gainers": [g.model_dump() for g in gainers]}, settings.gainers_list_ttl),
     )
 
     return GainersListResponse(
-        market=market,
-        date=today_str(),
-        gainers=gainers,
-        from_cache=False,
+        market=market, date=today_str(), gainers=gainers,
+        summary=summary, from_cache=False,
     )
 
 

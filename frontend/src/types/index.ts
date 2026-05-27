@@ -1,18 +1,13 @@
 export type Market = "us" | "india";
 export type Sentiment = "very_positive" | "positive" | "neutral" | "negative" | "very_negative";
+export type MarketSentiment = "very_bullish" | "bullish" | "mixed" | "bearish" | "very_bearish";
 export type CatalystType =
-  | "earnings"
-  | "fda_approval"
-  | "acquisition"
-  | "partnership"
-  | "analyst_upgrade"
-  | "macro"
-  | "technical"
-  | "regulatory"
-  | "unknown";
+  | "earnings" | "fda_approval" | "acquisition" | "partnership"
+  | "analyst_upgrade" | "macro" | "technical" | "regulatory" | "unknown";
 export type OutlookHorizon = "days" | "weeks" | "months";
 export type FundamentalSignal = "strong" | "moderate" | "weak" | "unknown";
 export type ValuationSignal = "undervalued" | "fairly_valued" | "overvalued" | "unknown";
+export type QualityLabel = "Strong" | "Moderate" | "Watch" | "Risky";
 
 export interface StockGainer {
   ticker: string;
@@ -26,6 +21,8 @@ export interface StockGainer {
   market_cap?: number;
   sector?: string;
   industry?: string;
+  quality_score?: number;
+  quality_label?: QualityLabel;
 }
 
 export interface FundamentalsData {
@@ -59,6 +56,8 @@ export interface GainerAnalysis {
   is_sustained: boolean;
   sustainability_reason: string;
   confidence: number;
+  related_beneficiaries: string[];
+  beneficiary_reasoning?: string;
 }
 
 export interface StockPrediction {
@@ -75,6 +74,18 @@ export interface StockPrediction {
   disclaimer: string;
 }
 
+export interface MarketSummary {
+  market: Market;
+  narrative: string;
+  themes: string[];
+  dominant_sector?: string;
+  sentiment: MarketSentiment;
+  watch_list: string[];
+  watch_reason: string;
+  from_cache: boolean;
+  generated_at: string;
+}
+
 export interface GainerDetail {
   gainer: StockGainer;
   fundamentals?: FundamentalsData;
@@ -89,6 +100,7 @@ export interface GainersListResponse {
   market: Market;
   date: string;
   gainers: StockGainer[];
+  summary?: MarketSummary;
   from_cache: boolean;
   fetched_at: string;
 }

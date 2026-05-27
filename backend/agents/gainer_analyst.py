@@ -16,6 +16,7 @@ _SYSTEM_PROMPT = """You are a financial analyst specialising in explaining why s
 Given a stock's recent price gain and news headlines, explain the likely catalyst clearly.
 Write for a beginner investor — no jargon without explanation.
 Never recommend buying or selling. Only describe what happened and why.
+Identify related stocks that may benefit from the same catalyst.
 Always respond in valid JSON matching the schema provided."""
 
 _RESPONSE_SCHEMA = {
@@ -37,10 +38,20 @@ _RESPONSE_SCHEMA = {
         "is_sustained": {"type": "boolean"},
         "sustainability_reason": {"type": "string"},
         "confidence": {"type": "number"},
+        "related_beneficiaries": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Ticker symbols of other stocks likely to benefit from the same catalyst",
+        },
+        "beneficiary_reasoning": {
+            "type": "string",
+            "description": "Why these related stocks may follow",
+        },
     },
     "required": [
         "why_it_gained", "key_catalysts", "catalyst_type",
         "sentiment", "is_sustained", "sustainability_reason", "confidence",
+        "related_beneficiaries", "beneficiary_reasoning",
     ],
 }
 
@@ -63,6 +74,11 @@ _MOCK_RESPONSE: dict[str, Any] = {
         "as institutional investors revalue the stock upward."
     ),
     "confidence": 0.78,
+    "related_beneficiaries": ["AMD", "SMCI", "AVGO"],
+    "beneficiary_reasoning": (
+        "AMD and AVGO operate in the same semiconductor supply chain and often follow "
+        "NVDA-driven sector rotations. SMCI benefits directly from AI server demand."
+    ),
 }
 
 
@@ -109,7 +125,8 @@ class GainerAnalystAgent:
             f"Sector: {sector or 'Unknown'}\n"
             f"Today's gain: +{change_pct:.1f}%\n\n"
             f"Recent news headlines:\n{headlines or 'No news available.'}\n\n"
-            "Analyse why this stock gained today and whether the momentum is likely to continue."
+            "Analyse why this stock gained today and whether the momentum is likely to continue. "
+            "Also identify 2-4 related ticker symbols that may benefit from the same catalyst."
         )
 
         payload = {
