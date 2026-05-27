@@ -44,62 +44,56 @@ class MarketDataService:
         self._top_n = settings.top_gainers_count
 
     async def get_us_gainers(self) -> list[StockGainer]:
-        """Fetch top US gainers directly from Yahoo Finance screener API."""
+        """Fetch top US gainers from Alpha Vantage TOP_GAINERS_LOSERS endpoint."""
         import httpx
 
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=20) as client:
                 resp = await client.get(
-                    "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved",
+                    "https://www.alphavantage.co/query",
                     params={
-                        "scrIds": "day_gainers",
-                        "count": self._top_n + 10,
-                        "formatted": "false",
-                        "lang": "en-US",
-                        "region": "US",
-                    },
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/120.0.0.0 Safari/537.36"
-                        )
+                        "function": "TOP_GAINERS_LOSERS",
+                        "apikey": self._settings.alpha_vantage_api_key,
                     },
                 )
                 resp.raise_for_status()
                 data = resp.json()
 
-            result = data.get("finance", {}).get("result", [])
-            quotes = result[0].get("quotes", []) if result else []
+            if "Information" in data:
+                raise MarketDataError(f"Alpha Vantage quota exceeded: {data['Information']}")
 
+            raw_gainers = data.get("top_gainers", [])
             gainers: list[StockGainer] = []
-            for q in quotes:
-                change_pct = q.get("regularMarketChangePercent", 0)
-                if not change_pct or float(change_pct) <= 0:
-                    continue
+
+            for q in raw_gainers[: self._top_n]:
                 try:
+                    change_pct_str = q.get("change_percentage", "0%").replace("%", "")
+                    change_pct = float(change_pct_str)
+                    if change_pct <= 0:
+                        continue
                     gainers.append(
                         StockGainer(
-                            ticker=str(q.get("symbol", "")),
-                            name=str(q.get("shortName", q.get("symbol", ""))),
+                            ticker=str(q.get("ticker", "")),
+                            name=str(q.get("ticker", "")),  # AV doesn't return name here
                             market="us",
-                            price=float(q.get("regularMarketPrice", 0)),
-                            change_pct=float(change_pct),
-                            change_abs=float(q.get("regularMarketChange", 0)),
-                            volume=int(q.get("regularMarketVolume", 0)),
-                            avg_volume=_safe_int(q.get("averageDailyVolume3Month")),
-                            market_cap=_safe_float(q.get("marketCap")),
-                            sector=q.get("sector"),
-                            industry=q.get("industry"),
+                            price=float(q.get("price", 0)),
+                            change_pct=change_pct,
+                            change_abs=float(q.get("change_amount", 0)),
+                            volume=int(q.get("volume", 0)),
+                            avg_volume=None,
+                            market_cap=None,
+                            sector=None,
+                            industry=None,
                         )
                     )
                 except Exception:
                     continue
 
-            gainers = sorted(gainers, key=lambda g: g.change_pct, reverse=True)
             log.info("market_data.us_gainers_fetched", count=len(gainers))
-            return gainers[: self._top_n]
+            return gainers
 
+        except MarketDataError:
+            raise
         except Exception as exc:
             log.error("market_data.us_gainers_error", error=str(exc))
             raise MarketDataError(f"Failed to fetch US gainers: {exc}") from exc
