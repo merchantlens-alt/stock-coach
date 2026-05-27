@@ -1,4 +1,5 @@
-from functools import lru_cache
+from __future__ import annotations
+
 from typing import Annotated
 
 from fastapi import Depends
@@ -10,50 +11,47 @@ from services.cache import CacheBackend, build_cache
 from services.market_data import MarketDataService
 from services.news_fetcher import NewsFetcher
 
-
-@lru_cache
-def _get_cache(settings: Settings) -> CacheBackend:
-    return build_cache(settings.redis_url)
-
-
-@lru_cache
-def _get_market_data(settings: Settings) -> MarketDataService:
-    return MarketDataService(settings)
+# Module-level singletons — lru_cache cannot be used here because
+# Pydantic v2 BaseSettings instances are not hashable.
+_cache: CacheBackend | None = None
+_market_data: MarketDataService | None = None
+_news_fetcher: NewsFetcher | None = None
+_gainer_analyst: GainerAnalystAgent | None = None
+_predictor: PredictorAgent | None = None
 
 
-@lru_cache
-def _get_news_fetcher(settings: Settings) -> NewsFetcher:
-    return NewsFetcher(settings)
-
-
-@lru_cache
-def _get_gainer_analyst(settings: Settings) -> GainerAnalystAgent:
-    return GainerAnalystAgent(settings)
-
-
-@lru_cache
-def _get_predictor(settings: Settings) -> PredictorAgent:
-    return PredictorAgent(settings)
-
-
-# FastAPI dependency callables
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
-    return _get_cache(settings)
+    global _cache
+    if _cache is None:
+        _cache = build_cache(settings.redis_url)
+    return _cache
 
 
 def get_market_data(settings: Annotated[Settings, Depends(get_settings)]) -> MarketDataService:
-    return _get_market_data(settings)
+    global _market_data
+    if _market_data is None:
+        _market_data = MarketDataService(settings)
+    return _market_data
 
 
 def get_news_fetcher(settings: Annotated[Settings, Depends(get_settings)]) -> NewsFetcher:
-    return _get_news_fetcher(settings)
+    global _news_fetcher
+    if _news_fetcher is None:
+        _news_fetcher = NewsFetcher(settings)
+    return _news_fetcher
 
 
 def get_gainer_analyst(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> GainerAnalystAgent:
-    return _get_gainer_analyst(settings)
+    global _gainer_analyst
+    if _gainer_analyst is None:
+        _gainer_analyst = GainerAnalystAgent(settings)
+    return _gainer_analyst
 
 
 def get_predictor(settings: Annotated[Settings, Depends(get_settings)]) -> PredictorAgent:
-    return _get_predictor(settings)
+    global _predictor
+    if _predictor is None:
+        _predictor = PredictorAgent(settings)
+    return _predictor
