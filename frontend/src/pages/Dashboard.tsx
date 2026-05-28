@@ -112,8 +112,8 @@ export function Dashboard() {
 
   return (
     <div className="flex-1 flex overflow-hidden">
-      {/* Left pane — gainer list */}
-      <div className="w-full md:w-96 lg:w-[440px] shrink-0 flex flex-col border-r border-gray-200">
+      {/* Left pane — gainer list. On mobile: hidden when a stock is selected */}
+      <div className={`${activeTicker ? "hidden md:flex" : "flex"} w-full md:w-96 lg:w-[440px] shrink-0 flex-col border-r border-gray-200`}>
         {/* Controls */}
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3 bg-gray-50">
           <MarketToggle market={market} onChange={handleMarketChange} />
@@ -249,8 +249,8 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Right pane — analysis */}
-      <div className="flex-1 overflow-hidden">
+      {/* Right pane — analysis. On mobile: full-screen when a stock is selected */}
+      <div className={`${activeTicker ? "flex" : "hidden md:flex"} flex-1 flex-col overflow-hidden`}>
         {detail ? (
           /* Data arrived (~3-5 s) — show panel immediately; AI fills in via analysisLoading */
           <AnalysisPanel
@@ -260,7 +260,19 @@ export function Dashboard() {
             onClose={() => { setSelectedTicker(null); setSearchedTicker(null); }}
           />
         ) : (
-          <div className="h-full flex flex-col items-center justify-center text-gray-400 gap-3 p-8">
+          <div className="h-full flex flex-col text-gray-400">
+            {/* Mobile back button — visible while loading or on error */}
+            {activeTicker && (
+              <div className="md:hidden flex items-center px-4 py-3 border-b border-gray-100">
+                <button
+                  onClick={() => { setSelectedTicker(null); setSearchedTicker(null); }}
+                  className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800"
+                >
+                  ← Back
+                </button>
+              </div>
+            )}
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
             {detailLoading ? (
               <div className="text-center">
                 <div className="w-10 h-10 rounded-full border-2 border-green-500 border-t-transparent animate-spin mx-auto mb-3" />
@@ -292,6 +304,7 @@ export function Dashboard() {
                 <p className="text-xs text-gray-300">Why it gained · 30-day outlook · Who else benefits</p>
               </>
             )}
+            </div>
           </div>
         )}
       </div>

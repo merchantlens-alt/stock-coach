@@ -97,16 +97,27 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, onClose }: Pr
     <div className="flex flex-col h-full overflow-y-auto bg-white">
       {/* Header */}
       <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-5 py-4 flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-bold text-gray-900">{gainer.ticker}</h2>
-            <span className="bg-green-100 text-green-700 text-sm font-semibold px-2 py-0.5 rounded-md">
-              +{gainer.change_pct.toFixed(1)}%
-            </span>
+        <div className="flex items-center gap-3">
+          {/* Back button — mobile only */}
+          <button
+            onClick={onClose}
+            className="md:hidden p-1 -ml-1 text-gray-400 hover:text-gray-700"
+            aria-label="Back to list"
+          >
+            ←
+          </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-bold text-gray-900">{gainer.ticker}</h2>
+              <span className="bg-green-100 text-green-700 text-sm font-semibold px-2 py-0.5 rounded-md">
+                +{gainer.change_pct.toFixed(1)}%
+              </span>
+            </div>
+            <p className="text-sm text-gray-500">{gainer.name}</p>
           </div>
-          <p className="text-sm text-gray-500">{gainer.name}</p>
         </div>
-        <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
+        {/* X close — desktop only */}
+        <button onClick={onClose} className="hidden md:block p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
           <X size={18} />
         </button>
       </div>
