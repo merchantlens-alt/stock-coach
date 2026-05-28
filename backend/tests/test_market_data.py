@@ -366,16 +366,14 @@ class TestFetchGainersGemini:
 # ── get_us_gainers / get_india_gainers ────────────────────────────────────────
 
 class TestGetGainers:
-    # Force yf.download to return empty so every test in this class exercises the Gemini
-    # fallback path rather than the fast yf.download path (which has its own test class).
+    # Force all fast paths to return empty so every test in this class exercises
+    # the Gemini fallback path (which has its own test class).
     @pytest.fixture(autouse=True)
     def _no_screener(self, service: MarketDataService, monkeypatch) -> None:
-        monkeypatch.setattr(
-            service, "_get_us_gainers_yf_download", AsyncMock(return_value=[])
-        )
-        monkeypatch.setattr(
-            service, "_get_india_gainers_yf_download", AsyncMock(return_value=[])
-        )
+        monkeypatch.setattr(service, "_get_us_gainers_screener",   AsyncMock(return_value=[]))
+        monkeypatch.setattr(service, "_get_india_gainers_screener", AsyncMock(return_value=[]))
+        monkeypatch.setattr(service, "_get_us_gainers_yf_download",   AsyncMock(return_value=[]))
+        monkeypatch.setattr(service, "_get_india_gainers_yf_download", AsyncMock(return_value=[]))
 
     def _raw_row(self, **kwargs) -> dict:
         defaults = {
@@ -523,84 +521,51 @@ class TestGetGainers:
 # ── resolve_ticker_by_name ─────────────────────────────────────────────────────
 
 class TestResolveTickerByName:
-    """Tests for the company name → ticker resolution helper."""
+    """Tests for the company name → ticker resolution helper.
 
-    def _search_response(self, quotes: list[dict]) -> dict:
-        return {"quotes": quotes}
+    yf.Search is now used as the fallback (handles YF auth internally).
+    We mock it at the module level: patch("services.market_data.yf.Search", ...).
+    """
+
+    def _mock_search(self, quotes: list[dict]) -> "MagicMock":
+        from unittest.mock import MagicMock
+        m = MagicMock()
+        m.quotes = quotes
+        return m
 
     def _equity(self, symbol: str, exchange: str = "NMS", quote_type: str = "EQUITY") -> dict:
         return {"symbol": symbol, "exchange": exchange, "quoteType": quote_type}
 
     async def test_resolves_company_name_to_us_ticker(self) -> None:
-        import httpx
-        import respx
-
-        with respx.mock:
-            respx.get(url__regex=r".*finance\.yahoo\.com.*search.*").mock(
-                return_value=httpx.Response(
-                    200,
-                    json=self._search_response([self._equity("NVDA", "NMS")])
-                )
-            )
+        mock = self._mock_search([self._equity("NVDA", "NMS")])
+        with patch("services.market_data.yf.Search", return_value=mock):
             result = await resolve_ticker_by_name("NVIDIA", "us")
-
         assert result == "NVDA"
 
     async def test_resolves_company_name_to_india_ticker(self) -> None:
-        import httpx
-        import respx
-
-        with respx.mock:
-            respx.get(url__regex=r".*finance\.yahoo\.com.*search.*").mock(
-                return_value=httpx.Response(
-                    200,
-                    json=self._search_response([self._equity("RELIANCE.NS", "NSE")])
-                )
-            )
+        mock = self._mock_search([self._equity("RELIANCE.NS", "NSI")])
+        with patch("services.market_data.yf.Search", return_value=mock):
             result = await resolve_ticker_by_name("Reliance", "india")
-
         assert result == "RELIANCE"
 
     async def test_skips_non_equity_results(self) -> None:
-        import httpx
-        import respx
-
-        with respx.mock:
-            respx.get(url__regex=r".*finance\.yahoo\.com.*search.*").mock(
-                return_value=httpx.Response(
-                    200,
-                    json=self._search_response([
-                        self._equity("NVDA-WT", "NMS", quote_type="WARRANT"),
-                        self._equity("NVDA", "NMS", quote_type="EQUITY"),
-                    ])
-                )
-            )
+        mock = self._mock_search([
+            self._equity("NVDA-WT", "NMS", quote_type="WARRANT"),
+            self._equity("NVDA",    "NMS", quote_type="EQUITY"),
+        ])
+        with patch("services.market_data.yf.Search", return_value=mock):
             result = await resolve_ticker_by_name("NVIDIA", "us")
-
         assert result == "NVDA"
 
     async def test_returns_none_when_no_match(self) -> None:
-        import httpx
-        import respx
-
-        with respx.mock:
-            respx.get(url__regex=r".*finance\.yahoo\.com.*search.*").mock(
-                return_value=httpx.Response(200, json=self._search_response([]))
-            )
+        mock = self._mock_search([])
+        with patch("services.market_data.yf.Search", return_value=mock):
             result = await resolve_ticker_by_name("XYZNOTREAL", "us")
-
         assert result is None
 
-    async def test_returns_none_on_http_error(self) -> None:
-        import httpx
-        import respx
-
-        with respx.mock:
-            respx.get(url__regex=r".*finance\.yahoo\.com.*search.*").mock(
-                return_value=httpx.Response(500, text="Server error")
-            )
+    async def test_returns_none_on_search_exception(self) -> None:
+        with patch("services.market_data.yf.Search", side_effect=RuntimeError("timeout")):
             result = await resolve_ticker_by_name("NVIDIA", "us")
-
         assert result is None
 
 
@@ -876,6 +841,115 @@ class TestYfDownloadFetch:
         assert result == []
 
 
+# ── _get_us_gainers_screener / _get_india_gainers_screener ───────────────────
+
+class TestYfScreenerMethods:
+    """yfinance screen()-based 1d gainers — direct real-time screener results."""
+
+    def _screen_result(self, quotes: list[dict]) -> dict:
+        return {"quotes": quotes, "total": len(quotes)}
+
+    def _quote(self, symbol="NVDA", price=950.0, pct=8.5,
+               change=74.5, vol=45_000_000) -> dict:
+        return {
+            "symbol": symbol,
+            "shortName": f"{symbol} Corp",
+            "regularMarketPrice": price,
+            "regularMarketChangePercent": pct,
+            "regularMarketChange": change,
+            "regularMarketVolume": vol,
+            "sector": "Technology",
+        }
+
+    # ── US screener ──────────────────────────────────────────────────────────
+
+    async def test_us_parses_valid_screen_response(
+        self, service: MarketDataService
+    ) -> None:
+        with patch("services.market_data._yf_screen",
+                   return_value=self._screen_result([self._quote()])):
+            result = await service._get_us_gainers_screener()
+
+        assert len(result) == 1
+        assert result[0]["ticker"] == "NVDA"
+        assert result[0]["price"] == 950.0
+        assert result[0]["change_pct"] == 8.5
+
+    async def test_us_filters_price_below_5(
+        self, service: MarketDataService
+    ) -> None:
+        with patch("services.market_data._yf_screen",
+                   return_value=self._screen_result([self._quote(price=3.0)])):
+            result = await service._get_us_gainers_screener()
+        assert result == []
+
+    async def test_us_filters_low_volume(
+        self, service: MarketDataService
+    ) -> None:
+        with patch("services.market_data._yf_screen",
+                   return_value=self._screen_result([self._quote(vol=100_000)])):
+            result = await service._get_us_gainers_screener()
+        assert result == []
+
+    async def test_us_skips_tickers_with_dot(
+        self, service: MarketDataService
+    ) -> None:
+        """Cross-listed foreign ADRs (e.g. BRK.B) are excluded."""
+        with patch("services.market_data._yf_screen",
+                   return_value=self._screen_result([self._quote(symbol="BRK.B")])):
+            result = await service._get_us_gainers_screener()
+        assert result == []
+
+    async def test_us_returns_empty_on_exception(
+        self, service: MarketDataService
+    ) -> None:
+        with patch("services.market_data._yf_screen",
+                   side_effect=RuntimeError("429 rate limited")):
+            result = await service._get_us_gainers_screener()
+        assert result == []
+
+    async def test_us_sorts_by_change_pct_descending(
+        self, service: MarketDataService
+    ) -> None:
+        quotes = [self._quote("AMD", pct=5.0), self._quote("NVDA", pct=10.0)]
+        with patch("services.market_data._yf_screen",
+                   return_value=self._screen_result(quotes)):
+            result = await service._get_us_gainers_screener()
+
+        assert result[0]["ticker"] == "NVDA"
+        assert result[1]["ticker"] == "AMD"
+
+    # ── India screener ───────────────────────────────────────────────────────
+
+    async def test_india_strips_ns_suffix(
+        self, service: MarketDataService
+    ) -> None:
+        q = self._quote(symbol="RELIANCE.NS", price=2850.0, vol=8_000_000)
+        with patch("services.market_data._yf_screen",
+                   return_value=self._screen_result([q])):
+            result = await service._get_india_gainers_screener()
+
+        assert len(result) == 1
+        assert result[0]["ticker"] == "RELIANCE"
+
+    async def test_india_filters_price_below_50_inr(
+        self, service: MarketDataService
+    ) -> None:
+        q = self._quote(symbol="CHEAP.NS", price=30.0, vol=500_000)
+        with patch("services.market_data._yf_screen",
+                   return_value=self._screen_result([q])):
+            result = await service._get_india_gainers_screener()
+        assert result == []
+
+    async def test_india_returns_empty_on_exception(
+        self, service: MarketDataService
+    ) -> None:
+        with patch("services.market_data._yf_screen",
+                   side_effect=RuntimeError("timeout")):
+            result = await service._get_india_gainers_screener()
+        assert result == []
+
+
 # ── _classify_catalysts_batch ─────────────────────────────────────────────────
 
 class TestCatalystBatch:
@@ -991,12 +1065,13 @@ class TestUsGainersFastPath:
             base[0] = {**base[0], **overrides}
         return base
 
-    async def test_uses_yf_download_when_returns_enough_stocks(
+    async def test_uses_screener_when_returns_enough_stocks(
         self, service: MarketDataService
     ) -> None:
-        yf_data = [self._yf_row(ticker=f"S{i}", change_pct=float(10 - i)) for i in range(10)]
+        """1d path uses the yfinance screener (not yf.download) for today's gainers."""
+        screener_data = [self._yf_row(ticker=f"S{i}", change_pct=float(10 - i)) for i in range(10)]
         with (
-            patch.object(service, "_get_us_gainers_yf_download", new=AsyncMock(return_value=yf_data)),
+            patch.object(service, "_get_us_gainers_screener", new=AsyncMock(return_value=screener_data)),
             patch.object(service, "_classify_catalysts_batch", new=AsyncMock(return_value=set())),
         ):
             result = await service._get_us_gainers_1d()
@@ -1005,10 +1080,10 @@ class TestUsGainersFastPath:
         assert result[0].ticker.startswith("S")
 
     async def test_catalyst_tickers_marked_confirmed(self, service: MarketDataService) -> None:
-        # Need >= 5 stocks so the fast path is taken (threshold is 5)
-        yf_data = self._five_yf_rows()
+        # Need >= 5 stocks so the screener path is taken (threshold is 5)
+        screener_data = self._five_yf_rows()
         with (
-            patch.object(service, "_get_us_gainers_yf_download", new=AsyncMock(return_value=yf_data)),
+            patch.object(service, "_get_us_gainers_screener", new=AsyncMock(return_value=screener_data)),
             patch.object(service, "_classify_catalysts_batch", new=AsyncMock(return_value={"NVDA"})),
         ):
             result = await service._get_us_gainers_1d()
@@ -1018,14 +1093,14 @@ class TestUsGainersFastPath:
         assert nvda.signal_tier == "confirmed"
         assert amd.signal_tier == "mover"
 
-    async def test_falls_back_to_gemini_when_yf_returns_few_stocks(
+    async def test_falls_back_to_gemini_when_screener_returns_few_stocks(
         self, service: MarketDataService
     ) -> None:
         few_stocks = [self._yf_row(ticker=f"S{i}") for i in range(3)]  # < 5 minimum
         gemini_result = [service._build_gainers([self._yf_row("NVDA")], "us")[0]]
 
         with (
-            patch.object(service, "_get_us_gainers_yf_download", new=AsyncMock(return_value=few_stocks)),
+            patch.object(service, "_get_us_gainers_screener", new=AsyncMock(return_value=few_stocks)),
             patch.object(
                 service, "_get_us_gainers_gemini", new=AsyncMock(return_value=gemini_result)
             ) as gemini_mock,

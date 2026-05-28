@@ -7,6 +7,8 @@ from typing import Any, Optional
 
 import httpx
 import yfinance as yf
+from yfinance.screener.screener import screen as _yf_screen
+from yfinance.screener.query import EquityQuery as _YFEquityQuery
 
 from core.auth import get_cached_token
 from core.config import Settings
@@ -15,17 +17,6 @@ from core.logging import get_logger
 from models.schemas import FundamentalsData, Market, SignalTier, StockGainer, compute_quality_score
 
 log = get_logger(__name__)
-
-# ── Yahoo Finance API endpoints ────────────────────────────────────────────────
-_YF_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
-
-_YF_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json",
-}
 
 _US_EXCHANGES = {"NMS", "NYQ", "NGM", "PCX", "BATS", "ASE", "OPR"}
 
@@ -226,6 +217,16 @@ _INDIA_TICKER_UNIVERSE: dict[str, dict[str, str]] = {
     "MARICO":     {"name": "Marico Limited",                 "sector": "Consumer Staples"},
 }
 
+# Predefined EquityQuery for NSE India gainers — built once at module load.
+# exchange='NSI' is Yahoo Finance's code for the National Stock Exchange of India.
+_INDIA_NSE_SCREENER_QUERY = _YFEquityQuery('and', [
+    _YFEquityQuery('eq',    ['region',       'in']),
+    _YFEquityQuery('is-in', ['exchange',     'NSI']),
+    _YFEquityQuery('gt',    ['intradayprice', 50]),
+    _YFEquityQuery('gt',    ['dayvolume',     100_000]),
+    _YFEquityQuery('gt',    ['percentchange', 0]),
+])
+
 # Maps app period → (yf download period, use_last_day_change).
 # use_last_day_change=True:  change = close[-1]/close[-2]-1  (single trading day)
 # use_last_day_change=False: change = close[-1]/close[0]-1   (full period start→end)
@@ -383,10 +384,102 @@ class MarketDataService:
             log.error("market_data.fundamentals_error", ticker=ticker, error=str(exc))
             raise MarketDataError(f"Failed to fetch fundamentals for {ticker}: {exc}") from exc
 
-    # ── Fast path: yf.download + batch Gemini catalyst ────────────────────────
-    # Architecture: yf.download (~8-12s for 100+ tickers, handles auth internally)
-    # + one Gemini call with no Google Search grounding (~1-2s, parallel) = ~10-13s total.
-    # This replaces the Yahoo Finance screener/spark APIs which return 429 without crumb auth.
+    # ── Fast path: yfinance Screener (1d) + yf.download (1w/1m) ─────────────
+    # 1d path:  yfinance screen() ~1s → direct day gainers from full universe
+    # 1w/1m path: yf.download ~8-12s → compute period returns from OHLCV history
+    # Both handle Yahoo Finance auth internally — no 429 unlike direct httpx calls.
+    # + one Gemini catalyst classify call (~1-2s, parallel) for catalyst tagging.
+
+    async def _get_us_gainers_screener(self) -> list[dict[str, Any]]:
+        """
+        Fetch US day gainers via yfinance's built-in 'day_gainers' predefined screen.
+        Single call, ~1s, handles Yahoo Finance auth internally.
+        Returns [] on any failure so the caller can fall back gracefully.
+        """
+        try:
+            result = await asyncio.to_thread(_yf_screen, 'day_gainers', count=50)
+        except Exception as exc:
+            log.warning("market_data.us_screener_failed", error=str(exc))
+            return []
+
+        results: list[dict[str, Any]] = []
+        for q in result.get('quotes', []):
+            ticker = q.get("symbol", "")
+            # Skip foreign cross-listings (dot in symbol) and long tickers
+            if not ticker or "." in ticker or len(ticker) > 5:
+                continue
+            price = float(q.get("regularMarketPrice") or 0)
+            change_pct = float(q.get("regularMarketChangePercent") or 0)
+            volume = int(q.get("regularMarketVolume") or 0)
+            if price < 5 or change_pct <= 0 or volume < 500_000:
+                continue
+            results.append({
+                "ticker": ticker,
+                "name": q.get("shortName") or q.get("longName") or ticker,
+                "price": round(price, 2),
+                "change_pct": round(change_pct, 2),
+                "change_abs": round(float(q.get("regularMarketChange") or 0), 2),
+                "volume": volume,
+                "sector": q.get("sector"),
+                "has_catalyst": False,
+            })
+
+        results.sort(key=lambda r: r["change_pct"], reverse=True)
+        log.info("market_data.us_screener_done", count=len(results))
+        return results
+
+    async def _get_india_gainers_screener(self) -> list[dict[str, Any]]:
+        """
+        Fetch NSE India day gainers via yfinance EquityQuery screener.
+        Filters: exchange=NSI, price>₹50, volume>100K, positive change.
+        Single call, ~1s, handles Yahoo Finance auth internally.
+        Returns [] on any failure so the caller can fall back gracefully.
+        """
+        try:
+            result = await asyncio.to_thread(
+                _yf_screen,
+                _INDIA_NSE_SCREENER_QUERY,
+                count=50,
+                sortField='percentchange',
+                sortAsc=False,
+            )
+        except Exception as exc:
+            log.warning("market_data.india_screener_failed", error=str(exc))
+            return []
+
+        results: list[dict[str, Any]] = []
+        for q in result.get('quotes', []):
+            ticker = q.get("symbol", "")
+            # Strip exchange suffix — screener returns RELIANCE.NS format
+            if ticker.endswith(".NS"):
+                ticker = ticker[:-3]
+            elif ticker.endswith(".BO"):
+                ticker = ticker[:-3]
+            elif "." in ticker:
+                continue  # skip other exchange cross-listings
+
+            if not ticker or len(ticker) > 15:
+                continue
+
+            price = float(q.get("regularMarketPrice") or 0)
+            change_pct = float(q.get("regularMarketChangePercent") or 0)
+            volume = int(q.get("regularMarketVolume") or 0)
+            if price < 50 or change_pct <= 0 or volume < 100_000:
+                continue
+            results.append({
+                "ticker": ticker,
+                "name": q.get("shortName") or q.get("longName") or ticker,
+                "price": round(price, 2),
+                "change_pct": round(change_pct, 2),
+                "change_abs": round(float(q.get("regularMarketChange") or 0), 2),
+                "volume": volume,
+                "sector": q.get("sector"),
+                "has_catalyst": False,
+            })
+
+        results.sort(key=lambda r: r["change_pct"], reverse=True)
+        log.info("market_data.india_screener_done", count=len(results))
+        return results
 
     async def _get_us_gainers_yf_download(self, period: str) -> list[dict[str, Any]]:
         """
@@ -621,24 +714,24 @@ class MarketDataService:
     async def _get_us_gainers_1d(self) -> list[StockGainer]:
         """
         Fast path for today's US gainers.
-        yf.download (~8-12s) + batch catalyst classify (~1-2s, in parallel) = ~10-13s total.
-        Falls back to Gemini+Google Search if yf.download returns < 5 stocks.
+        Screener (~1s) + batch catalyst classify (~1-2s, sequential) = ~2-3s total.
+        Falls back to Gemini+Google Search if screener returns < 5 stocks.
         """
-        yf_raw = await self._get_us_gainers_yf_download("1d")
+        screener_raw = await self._get_us_gainers_screener()
 
-        if len(yf_raw) >= 5:
-            tickers = [r["ticker"] for r in yf_raw]
+        if len(screener_raw) >= 5:
+            tickers = [r["ticker"] for r in screener_raw]
             catalyst_tickers = await self._classify_catalysts_batch(tickers, "us")
-            for r in yf_raw:
+            for r in screener_raw:
                 if r["ticker"] in catalyst_tickers:
                     r["has_catalyst"] = True
-            gainers = self._build_gainers(yf_raw, "us")
-            log.info("market_data.us_1d_yf_path", count=len(gainers))
+            gainers = self._build_gainers(screener_raw, "us")
+            log.info("market_data.us_1d_screener_path", count=len(gainers))
             return gainers[: self._top_n]
 
         log.warning(
-            "market_data.us_yf_insufficient_fallback",
-            count=len(yf_raw),
+            "market_data.us_screener_insufficient_fallback",
+            count=len(screener_raw),
         )
         return await self._get_us_gainers_gemini("1d")
 
@@ -671,25 +764,25 @@ class MarketDataService:
 
     async def _get_india_gainers_1d(self) -> list[StockGainer]:
         """
-        Fast path for today's India gainers.
-        yf.download + batch catalyst classify → ~10-13s total.
-        Falls back to Gemini+Google Search if yf.download returns < 5 stocks.
+        Fast path for today's India NSE gainers.
+        Screener (~1s) + batch catalyst classify (~1-2s, sequential) = ~2-3s total.
+        Falls back to Gemini+Google Search if screener returns < 5 stocks.
         """
-        yf_raw = await self._get_india_gainers_yf_download("1d")
+        screener_raw = await self._get_india_gainers_screener()
 
-        if len(yf_raw) >= 5:
-            tickers = [r["ticker"] for r in yf_raw]
+        if len(screener_raw) >= 5:
+            tickers = [r["ticker"] for r in screener_raw]
             catalyst_tickers = await self._classify_catalysts_batch(tickers, "india")
-            for r in yf_raw:
+            for r in screener_raw:
                 if r["ticker"] in catalyst_tickers:
                     r["has_catalyst"] = True
-            gainers = self._build_gainers(yf_raw, "india")
-            log.info("market_data.india_1d_yf_path", count=len(gainers))
+            gainers = self._build_gainers(screener_raw, "india")
+            log.info("market_data.india_1d_screener_path", count=len(gainers))
             return gainers[: self._top_n]
 
         log.warning(
-            "market_data.india_yf_insufficient_fallback",
-            count=len(yf_raw),
+            "market_data.india_screener_insufficient_fallback",
+            count=len(screener_raw),
         )
         return await self._get_india_gainers_gemini("1d")
 
@@ -1029,29 +1122,18 @@ async def resolve_ticker_by_name(query: str, market: Market) -> str | None:
     Strategy (in order):
       1. Gemini — primary resolver. Uses training knowledge, no googleSearch,
          no rate limits, ~1 s. Reliable for any well-known company.
-      2. Yahoo Finance search — fallback only. Yahoo Finance has previously
-         returned 429/403 errors so we don't rely on it as the primary path.
+      2. yf.Search — fallback. yfinance handles Yahoo Finance auth internally
+         so this avoids the 429/403 errors seen with raw httpx calls.
     """
     # ── 1. Gemini (primary — reliable, no external API dependency) ────────────
     result = await _resolve_ticker_via_gemini(query, market)
     if result:
         return result
 
-    # ── 2. Yahoo Finance search (fallback) ────────────────────────────────────
-    params = {
-        "q": query,
-        "quotesCount": 8,
-        "newsCount": 0,
-        "listsCount": 0,
-        "enableFuzzyQuery": "true",
-    }
+    # ── 2. yf.Search fallback (handles Yahoo Finance auth internally) ─────────
     try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            resp = await client.get(_YF_SEARCH_URL, params=params, headers=_YF_HEADERS)
-            resp.raise_for_status()
-        quotes = resp.json().get("quotes", [])
-
-        for q in quotes:
+        search_result = await asyncio.to_thread(yf.Search, query, max_results=8)
+        for q in search_result.quotes:
             if q.get("quoteType") != "EQUITY":
                 continue
             symbol: str = q.get("symbol", "")
@@ -1062,7 +1144,7 @@ async def resolve_ticker_by_name(query: str, market: Market) -> str | None:
                     return symbol[:-3]
                 if symbol.endswith(".BO"):
                     return symbol[:-3]
-                if exchange in ("NSE", "BSE"):
+                if exchange in ("NSI", "NSE", "BSE"):
                     return symbol
             else:
                 if "." not in symbol and len(symbol) <= 5 and exchange in _US_EXCHANGES:
@@ -1070,7 +1152,7 @@ async def resolve_ticker_by_name(query: str, market: Market) -> str | None:
                 if "." not in symbol and len(symbol) <= 5 and not exchange:
                     return symbol
     except Exception as exc:
-        log.warning("market_data.yf_name_resolve_failed", query=query, error=str(exc))
+        log.warning("market_data.yf_search_resolve_failed", query=query, error=str(exc))
 
     return None
 
