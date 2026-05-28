@@ -117,3 +117,47 @@ export interface GainersListResponse {
   from_cache: boolean;
   fetched_at: string;
 }
+
+// ── Conviction / Thesis types ─────────────────────────────────────────────────
+
+export type ThesisRiskLevel = "lower" | "focused" | "higher";
+export type ThesisConfirmerStatus = "confirmed" | "watch" | "risk";
+export type EntrySignalLevel = "strong" | "fair" | "wait";
+
+export interface ThesisInstrument {
+  ticker: string;
+  name: string;
+  risk_level: ThesisRiskLevel;
+  description: string;
+  rationale: string;
+}
+
+export interface ThesisConfirmer {
+  text: string;
+  status: ThesisConfirmerStatus;
+}
+
+export interface ThesisConviction {
+  belief: string;
+  theme_label: string;
+  conviction_score: number;
+  thesis_summary: string;
+  instruments: ThesisInstrument[];
+  confirmers: ThesisConfirmer[];
+  entry_signal: EntrySignalLevel;
+  entry_explanation: string;
+  exit_triggers: string[];
+  time_horizon: string;
+  disclaimer: string;
+}
+
+export interface ConvictionRequest {
+  belief: string;
+  market: Market;
+}
+
+export interface ConvictionResponse {
+  conviction: ThesisConviction;
+  from_cache: boolean;
+  analysed_at?: string;
+}

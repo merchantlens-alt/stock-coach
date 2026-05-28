@@ -1,4 +1,4 @@
-import type { GainerDetail, GainersListResponse, Market, StockAnalysisResponse } from "../types";
+import type { ConvictionRequest, ConvictionResponse, GainerDetail, GainersListResponse, Market, StockAnalysisResponse } from "../types";
 
 const BASE_URL = "/api";
 
@@ -6,14 +6,16 @@ interface FetchOptions {
   signal?: AbortSignal;
   refresh?: boolean;
   method?: string;
+  body?: string;
+  headers?: Record<string, string>;
 }
 
 async function fetchJSON<T>(path: string, options: FetchOptions = {}): Promise<T> {
-  const { signal, method } = options;
-  const resp = await fetch(`${BASE_URL}${path}`, { signal, method });
+  const { signal, method, body, headers } = options;
+  const resp = await fetch(`${BASE_URL}${path}`, { signal, method, body, headers });
   if (!resp.ok) {
-    const body = await resp.json().catch(() => ({}));
-    throw new Error(body.detail ?? `Request failed: ${resp.status}`);
+    const errBody = await resp.json().catch(() => ({}));
+    throw new Error(errBody.detail ?? `Request failed: ${resp.status}`);
   }
   return resp.json() as Promise<T>;
 }
@@ -36,4 +38,12 @@ export const api = {
 
   invalidateCache: (market: Market, ticker: string): Promise<{ status: string }> =>
     fetchJSON(`/gainers/${market}/${ticker}/cache`, { method: "DELETE" }),
+
+  /** Conviction thesis analysis (~10-15 s cold). Cached 24 h per belief. */
+  analyseConviction: (body: ConvictionRequest): Promise<ConvictionResponse> =>
+    fetchJSON("/conviction/analyse", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+    }),
 };

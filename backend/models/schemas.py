@@ -207,3 +207,53 @@ class HealthResponse(BaseModel):
     version: str
     cache: Literal["redis", "memory"]
     ai: Literal["vertex_ai", "mock"]
+
+
+# ── Conviction / Thesis schemas ───────────────────────────────────────────────
+
+ThesisRiskLevel = Literal["lower", "focused", "higher"]
+ThesisConfirmerStatus = Literal["confirmed", "watch", "risk"]
+EntrySignalLevel = Literal["strong", "fair", "wait"]
+
+
+class ThesisInstrument(BaseModel):
+    ticker: str
+    name: str
+    risk_level: ThesisRiskLevel
+    description: str = Field(description="E.g. 'Diversified basket', 'Pure-play US DRAM'")
+    rationale: str = Field(description="Why this instrument expresses the thesis")
+
+
+class ThesisConfirmer(BaseModel):
+    text: str = Field(description="Evidence statement, e.g. 'NVIDIA HBM orders up 40%'")
+    status: ThesisConfirmerStatus
+
+
+class ThesisConviction(BaseModel):
+    belief: str = Field(description="Cleaned-up version of the user's stated belief")
+    theme_label: str = Field(description="Short title, e.g. 'AI MEMORY DEMAND' (all caps, 2-4 words)")
+    conviction_score: float = Field(ge=0.0, le=100.0, description="0-100 score for thesis strength")
+    thesis_summary: str = Field(description="1-2 sentence thesis statement explaining the structural shift")
+    instruments: list[ThesisInstrument] = Field(description="3 instruments: lower/focused/higher risk")
+    confirmers: list[ThesisConfirmer] = Field(description="3-5 real-world data points confirming or challenging the thesis")
+    entry_signal: EntrySignalLevel
+    entry_explanation: str = Field(description="Short explanation of entry timing")
+    exit_triggers: list[str] = Field(description="2-3 specific conditions that would invalidate the thesis")
+    time_horizon: str = Field(description="Expected thesis duration, e.g. 'multi-year', '1-2 years'")
+    disclaimer: str = Field(
+        default=(
+            "This is AI-generated analysis for educational purposes only. "
+            "It is not investment advice. Always consult a registered financial advisor."
+        )
+    )
+
+
+class ConvictionRequest(BaseModel):
+    belief: str = Field(description="The user's stated investment belief/thesis", min_length=5, max_length=500)
+    market: Market = "us"
+
+
+class ConvictionResponse(BaseModel):
+    conviction: ThesisConviction
+    from_cache: bool = False
+    analysed_at: Optional[datetime] = None

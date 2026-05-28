@@ -231,6 +231,16 @@ _INDIA_TICKER_UNIVERSE: dict[str, dict[str, str]] = {
     "MARICO":     {"name": "Marico Limited",                 "sector": "Consumer Staples"},
 }
 
+# Custom EquityQuery for US high-movers — catches small/micro-caps (e.g. ASTC)
+# that Yahoo's predefined 'day_gainers' screener silently excludes due to its
+# own market-cap / liquidity criteria. Runs alongside day_gainers; results merged.
+_US_HIGH_MOVERS_QUERY = _YFEquityQuery('and', [
+    _YFEquityQuery('eq',  ['region',        'us']),
+    _YFEquityQuery('gt',  ['intradayprice',  1]),       # exclude penny stocks
+    _YFEquityQuery('gt',  ['dayvolume',      50_000]),  # low bar — big % moves matter more
+    _YFEquityQuery('gt',  ['percentchange',  10]),      # only significant movers (≥10%)
+])
+
 # Predefined EquityQuery for NSE India gainers — built once at module load.
 # exchange='NSI' is Yahoo Finance's code for the National Stock Exchange of India.
 _INDIA_NSE_SCREENER_QUERY = _YFEquityQuery('and', [
@@ -240,6 +250,37 @@ _INDIA_NSE_SCREENER_QUERY = _YFEquityQuery('and', [
     _YFEquityQuery('gt',    ['dayvolume',     100_000]),
     _YFEquityQuery('gt',    ['percentchange', 0]),
 ])
+
+# ── Real-time catalyst keyword detection ──────────────────────────────────────
+# These terms in a stock's latest news headlines indicate a specific, identifiable
+# catalyst — the reason a stock moved, not just momentum or sector rotation.
+# Used by _classify_catalysts_news() to assign "confirmed" tier in the gainers list.
+_CATALYST_KEYWORDS: frozenset[str] = frozenset([
+    # Earnings / guidance
+    "earnings", "revenue beat", "eps beat", "quarterly result", "guidance raised",
+    "above expectation", "profit surge", "record revenue", "record quarter",
+    # FDA / medical
+    "fda", "approval", "approved", "clearance", "cleared", "clinical trial",
+    "nda", "bla", "accelerated approval", "breakthrough therapy",
+    # Government / defense contracts
+    "contract", "nasa", "dod", "pentagon", "darpa", "air force", "navy", "army",
+    "government award", "grant award", "federal contract",
+    # Corporate events
+    "acquisition", "acquires", "merger", "buyout", "takeover", "partnership",
+    "collaboration", "joint venture", "licensing deal", "strategic deal",
+    # Capital markets
+    "index inclusion", "s&p 500", "nasdaq 100", "russell", "buyback", "special dividend",
+    # Major announcements
+    "launch", "ipo", "spinoff", "spin-off", "major order", "strategic initiative",
+    "moonshot", "lunar", "quantum",   # catches ASTC-type space/tech announcements
+])
+
+
+def _has_catalyst_in_headlines(headlines: list[str]) -> bool:
+    """Return True if any headline contains a catalyst keyword (case-insensitive)."""
+    combined = " ".join(h.lower() for h in headlines)
+    return any(kw in combined for kw in _CATALYST_KEYWORDS)
+
 
 # Maps app period → (yf download period, use_last_day_change).
 # use_last_day_change=True:  change = close[-1]/close[-2]-1  (single trading day)
@@ -406,29 +447,47 @@ class MarketDataService:
 
     async def _get_us_gainers_screener(self) -> list[dict[str, Any]]:
         """
-        Fetch US day gainers via yfinance's built-in 'day_gainers' predefined screen.
-        Single call, ~1s, handles Yahoo Finance auth internally.
-        Returns [] on any failure so the caller can fall back gracefully.
+        Fetch US day gainers from two screeners in parallel and merge:
+          1. Yahoo's predefined 'day_gainers' — covers liquid large/mid-caps.
+          2. Custom EquityQuery (≥10% gain, vol≥50K) — catches small/micro-caps
+             like ASTC that Yahoo's screener silently excludes by market-cap.
+        Results are deduped by ticker and sorted by change_pct descending.
         """
-        try:
-            result = await asyncio.to_thread(_yf_screen, 'day_gainers', count=50)
-        except Exception as exc:
-            log.warning("market_data.us_screener_failed", error=str(exc))
-            return []
+        async def _run_predefined() -> list[dict]:
+            try:
+                return (await asyncio.to_thread(_yf_screen, 'day_gainers', count=50)).get('quotes', [])
+            except Exception as exc:
+                log.warning("market_data.us_predefined_screener_failed", error=str(exc))
+                return []
 
+        async def _run_custom() -> list[dict]:
+            try:
+                return (await asyncio.to_thread(
+                    _yf_screen, _US_HIGH_MOVERS_QUERY,
+                    count=50, sortField='percentchange', sortAsc=False,
+                )).get('quotes', [])
+            except Exception as exc:
+                log.warning("market_data.us_custom_screener_failed", error=str(exc))
+                return []
+
+        predefined_quotes, custom_quotes = await asyncio.gather(
+            _run_predefined(), _run_custom()
+        )
+
+        seen: set[str] = set()
         results: list[dict[str, Any]] = []
-        for q in result.get('quotes', []):
+
+        for q in predefined_quotes + custom_quotes:
             ticker = q.get("symbol", "")
-            # Skip foreign cross-listings (dot in symbol) and long tickers
-            if not ticker or "." in ticker or len(ticker) > 5:
+            # Skip foreign cross-listings (dot in symbol), long tickers, duplicates
+            if not ticker or "." in ticker or len(ticker) > 5 or ticker in seen:
                 continue
             price = float(q.get("regularMarketPrice") or 0)
             change_pct = float(q.get("regularMarketChangePercent") or 0)
             volume = int(q.get("regularMarketVolume") or 0)
-            # Use lower volume floor (100K) than 1w/1m paths so volatile small-caps
-            # with massive % gains (e.g. ASTC +400%) aren't silently filtered out.
-            if price < 1 or change_pct <= 0 or volume < 100_000:
+            if price < 1 or change_pct <= 0 or volume < 50_000:
                 continue
+            seen.add(ticker)
             results.append({
                 "ticker": ticker,
                 "name": q.get("shortName") or q.get("longName") or ticker,
@@ -658,72 +717,55 @@ class MarketDataService:
         )
         return results
 
-    async def _classify_catalysts_batch(
+    async def _classify_catalysts_news(
         self, tickers: list[str], market: str
     ) -> set[str]:
         """
-        Ask Gemini (without Google Search grounding) which tickers have known catalysts.
-        Single fast call (~1-2s) — no grounding penalty.
-        Returns a set of tickers Gemini identifies as having significant catalysts.
-        Falls back to empty set on any failure (all stocks get 'mover' tier).
+        Classify which tickers have a real news catalyst by scanning their latest
+        headlines from yfinance (Yahoo Finance news — free, real-time, no tokens).
+
+        Replaces the old Gemini training-knowledge approach which always returned
+        empty for recent events (training cutoff means 2026 news is unknown to it).
+
+        Fetches news for all tickers in parallel (~1s for 20 tickers), then runs a
+        keyword match against _CATALYST_KEYWORDS. Returns the set of tickers whose
+        headlines contain at least one catalyst keyword.
         """
-        if not tickers or not self._settings.google_cloud_project:
+        if not tickers:
             return set()
 
-        ticker_list = ", ".join(tickers[:30])  # cap to stay within token budget
-        market_desc = "US (NYSE/NASDAQ)" if market == "us" else "NSE India"
-        prompt = (
-            f"Given these {market_desc} stocks: {ticker_list}\n\n"
-            "Based on your training knowledge, which ones have had significant news catalysts "
-            "recently (e.g. FDA approval, government contract, earnings beat, major partnership, "
-            "acquisition, clinical trial result, index inclusion)?\n\n"
-            "Reply with ONLY the ticker symbols with clear catalysts, comma-separated "
-            "(example: NVDA, AAPL, TSLA). If none are known, reply 'NONE'. No explanation."
-        )
+        async def _fetch_headlines(ticker: str) -> tuple[str, list[str]]:
+            yf_ticker = f"{ticker}.NS" if market == "india" else ticker
+            try:
+                news = await asyncio.to_thread(lambda: yf.Ticker(yf_ticker).news)
+                titles: list[str] = []
+                for item in (news or [])[:6]:
+                    # yfinance 1.4 returns nested content dict
+                    title = (
+                        item.get("content", {}).get("title")
+                        or item.get("title", "")
+                    )
+                    if title:
+                        titles.append(title)
+                return ticker, titles
+            except Exception:
+                return ticker, []
 
-        try:
-            token = await asyncio.to_thread(get_cached_token)
-            project = self._settings.google_cloud_project
-            region = self._settings.google_cloud_region
-            model = self._settings.vertex_ai_model_flash
-            url = (
-                f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}"
-                f"/locations/{region}/publishers/google/models/{model}:generateContent"
-            )
-            payload: dict[str, Any] = {
-                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": 0.0,
-                    "maxOutputTokens": 200,
-                    # Intentionally no googleSearch tool — avoids grounding latency
-                },
-            }
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(
-                    url, json=payload, headers={"Authorization": f"Bearer {token}"}
+        results = await asyncio.gather(*[_fetch_headlines(t) for t in tickers])
+
+        catalyst_tickers: set[str] = set()
+        for ticker, headlines in results:
+            if _has_catalyst_in_headlines(headlines):
+                catalyst_tickers.add(ticker)
+                log.info(
+                    "market_data.catalyst_detected",
+                    ticker=ticker,
+                    headline=headlines[0] if headlines else "",
                 )
-            if not resp.is_success:
-                log.warning("market_data.catalyst_batch_http_error", status=resp.status_code)
-                return set()
 
-            parts = resp.json()["candidates"][0]["content"].get("parts", [])
-            raw = "".join(p.get("text", "") for p in parts).strip().upper()
-
-            if not raw or raw.startswith("NONE"):
-                return set()
-
-            ticker_set = set(tickers)
-            catalyst_tickers: set[str] = set()
-            for t in raw.split(","):
-                cleaned = re.sub(r"[^A-Z0-9]", "", t.strip())
-                if cleaned and cleaned in ticker_set:
-                    catalyst_tickers.add(cleaned)
-
-            log.info("market_data.catalyst_batch_done", count=len(catalyst_tickers))
-            return catalyst_tickers
-        except Exception as exc:
-            log.warning("market_data.catalyst_batch_failed", error=str(exc))
-            return set()
+        log.info("market_data.catalyst_news_done",
+                 total=len(tickers), confirmed=len(catalyst_tickers))
+        return catalyst_tickers
 
     # ── US fast paths ─────────────────────────────────────────────────────────
 
@@ -737,7 +779,7 @@ class MarketDataService:
 
         if len(screener_raw) >= 5:
             tickers = [r["ticker"] for r in screener_raw]
-            catalyst_tickers = await self._classify_catalysts_batch(tickers, "us")
+            catalyst_tickers = await self._classify_catalysts_news(tickers, "us")
             for r in screener_raw:
                 if r["ticker"] in catalyst_tickers:
                     r["has_catalyst"] = True
@@ -761,7 +803,7 @@ class MarketDataService:
 
         if len(yf_raw) >= 5:
             tickers = [r["ticker"] for r in yf_raw]
-            catalyst_tickers = await self._classify_catalysts_batch(tickers, "us")
+            catalyst_tickers = await self._classify_catalysts_news(tickers, "us")
             for r in yf_raw:
                 if r["ticker"] in catalyst_tickers:
                     r["has_catalyst"] = True
@@ -788,7 +830,7 @@ class MarketDataService:
 
         if len(screener_raw) >= 5:
             tickers = [r["ticker"] for r in screener_raw]
-            catalyst_tickers = await self._classify_catalysts_batch(tickers, "india")
+            catalyst_tickers = await self._classify_catalysts_news(tickers, "india")
             for r in screener_raw:
                 if r["ticker"] in catalyst_tickers:
                     r["has_catalyst"] = True
@@ -812,7 +854,7 @@ class MarketDataService:
 
         if len(yf_raw) >= 5:
             tickers = [r["ticker"] for r in yf_raw]
-            catalyst_tickers = await self._classify_catalysts_batch(tickers, "india")
+            catalyst_tickers = await self._classify_catalysts_news(tickers, "india")
             for r in yf_raw:
                 if r["ticker"] in catalyst_tickers:
                     r["has_catalyst"] = True

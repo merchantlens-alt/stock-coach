@@ -6,6 +6,7 @@ from fastapi import Depends
 
 from agents.gainer_analyst import GainerAnalystAgent
 from agents.market_analyst import MarketAnalystAgent
+from agents.thesis_analyst import ThesisAnalystAgent
 from core.config import Settings, get_settings
 from services.cache import CacheBackend, build_cache
 from services.market_data import MarketDataService
@@ -18,6 +19,7 @@ _market_data: MarketDataService | None = None
 _news_fetcher: NewsFetcher | None = None
 _gainer_analyst: GainerAnalystAgent | None = None
 _market_analyst: MarketAnalystAgent | None = None
+_thesis_analyst: ThesisAnalystAgent | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -57,5 +59,14 @@ def get_market_analyst(
     if _market_analyst is None:
         _market_analyst = MarketAnalystAgent(settings)
     return _market_analyst
+
+
+def get_thesis_analyst(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ThesisAnalystAgent:
+    global _thesis_analyst
+    if _thesis_analyst is None:
+        _thesis_analyst = ThesisAnalystAgent(settings)
+    return _thesis_analyst
 
 

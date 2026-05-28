@@ -1,17 +1,56 @@
-import { TrendingUp } from "lucide-react";
+import { Lightbulb, TrendingUp } from "lucide-react";
 
-export function Header() {
+type AppTab = "pulse" | "conviction";
+
+interface HeaderProps {
+  activeTab: AppTab;
+  onTabChange: (tab: AppTab) => void;
+}
+
+export function Header({ activeTab, onTabChange }: HeaderProps) {
   return (
-    <header className="border-b border-gray-200 bg-white px-6 py-4">
-      <div className="max-w-7xl mx-auto flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-green-600 flex items-center justify-center">
+    <header className="border-b border-gray-200 bg-white px-4 md:px-6 py-3 flex items-center justify-between gap-4 shrink-0">
+      {/* Brand */}
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-green-600 flex items-center justify-center shrink-0">
           <TrendingUp size={16} className="text-white" />
         </div>
-        <div>
-          <h1 className="text-base font-bold text-gray-900 leading-tight">StockCoach AI</h1>
-          <p className="text-xs text-gray-400">Hybrid signals · movers &amp; catalysts</p>
+        <div className="hidden sm:block">
+          <h1 className="text-sm font-bold text-gray-900 leading-tight">StockCoach AI</h1>
+          <p className="text-[11px] text-gray-400">Hybrid signals · movers &amp; catalysts</p>
         </div>
       </div>
+
+      {/* Navigation tabs */}
+      <nav className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
+        <button
+          onClick={() => onTabChange("pulse")}
+          className={[
+            "flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg transition-all",
+            activeTab === "pulse"
+              ? "bg-white text-gray-900 shadow-sm"
+              : "text-gray-500 hover:text-gray-700",
+          ].join(" ")}
+        >
+          <TrendingUp size={12} />
+          PULSE
+        </button>
+        <button
+          onClick={() => onTabChange("conviction")}
+          className={[
+            "flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg transition-all",
+            activeTab === "conviction"
+              ? "bg-white text-gray-900 shadow-sm"
+              : "text-gray-500 hover:text-gray-700",
+          ].join(" ")}
+        >
+          <Lightbulb size={12} />
+          CONVICTION
+        </button>
+      </nav>
+
+      {/* Spacer to center the nav */}
+      <div className="w-8 sm:w-32" />
     </header>
   );
 }

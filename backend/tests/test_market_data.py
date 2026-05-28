@@ -871,7 +871,10 @@ class TestYfScreenerMethods:
             "sector": "Technology",
         }
 
-    # ── US screener ──────────────────────────────────────────────────────────
+    # ── US screener (predefined + custom merged) ─────────────────────────────
+    # _yf_screen is now called TWICE per invocation (predefined + custom EquityQuery).
+    # A single return_value patch returns the same data for both calls;
+    # use side_effect=[r1, r2] to simulate different results per call.
 
     async def test_us_parses_valid_screen_response(
         self, service: MarketDataService
@@ -880,6 +883,7 @@ class TestYfScreenerMethods:
                    return_value=self._screen_result([self._quote()])):
             result = await service._get_us_gainers_screener()
 
+        # deduplicated: same NVDA from both screeners → appears once
         assert len(result) == 1
         assert result[0]["ticker"] == "NVDA"
         assert result[0]["price"] == 950.0
@@ -888,7 +892,6 @@ class TestYfScreenerMethods:
     async def test_us_filters_price_below_1(
         self, service: MarketDataService
     ) -> None:
-        # Threshold is $1 (lowered from $5 to allow volatile small-caps like ASTC)
         with patch("services.market_data._yf_screen",
                    return_value=self._screen_result([self._quote(price=0.5)])):
             result = await service._get_us_gainers_screener()
@@ -897,9 +900,9 @@ class TestYfScreenerMethods:
     async def test_us_filters_low_volume(
         self, service: MarketDataService
     ) -> None:
-        # Threshold is 100K (lowered from 500K to allow small-caps with big % moves)
+        # Threshold is 50K — allows micro-caps with big % moves
         with patch("services.market_data._yf_screen",
-                   return_value=self._screen_result([self._quote(vol=50_000)])):
+                   return_value=self._screen_result([self._quote(vol=49_000)])):
             result = await service._get_us_gainers_screener()
         assert result == []
 
@@ -930,6 +933,45 @@ class TestYfScreenerMethods:
 
         assert result[0]["ticker"] == "NVDA"
         assert result[1]["ticker"] == "AMD"
+
+    async def test_us_merges_small_cap_from_custom_screener(
+        self, service: MarketDataService
+    ) -> None:
+        """Custom EquityQuery catches micro-caps (e.g. ASTC) that day_gainers misses."""
+        predefined = self._screen_result([self._quote("NVDA", pct=8.5)])
+        custom = self._screen_result([self._quote("ASTC", price=24.0, pct=459.0, vol=200_000)])
+        with patch("services.market_data._yf_screen",
+                   side_effect=[predefined, custom]):
+            result = await service._get_us_gainers_screener()
+
+        tickers = [r["ticker"] for r in result]
+        assert "NVDA" in tickers
+        assert "ASTC" in tickers
+        # ASTC is higher % so should be first
+        assert result[0]["ticker"] == "ASTC"
+
+    async def test_us_deduplicates_same_ticker_across_screeners(
+        self, service: MarketDataService
+    ) -> None:
+        """Same ticker appearing in both screeners is only included once."""
+        quote = self._screen_result([self._quote("NVDA", pct=10.0)])
+        with patch("services.market_data._yf_screen", side_effect=[quote, quote]):
+            result = await service._get_us_gainers_screener()
+
+        assert len(result) == 1
+        assert result[0]["ticker"] == "NVDA"
+
+    async def test_us_still_returns_results_if_custom_screener_fails(
+        self, service: MarketDataService
+    ) -> None:
+        """If custom EquityQuery fails, predefined results are still returned."""
+        predefined = self._screen_result([self._quote("NVDA")])
+        with patch("services.market_data._yf_screen",
+                   side_effect=[predefined, RuntimeError("timeout")]):
+            result = await service._get_us_gainers_screener()
+
+        assert len(result) == 1
+        assert result[0]["ticker"] == "NVDA"
 
     # ── India screener ───────────────────────────────────────────────────────
 
@@ -962,88 +1004,74 @@ class TestYfScreenerMethods:
         assert result == []
 
 
-# ── _classify_catalysts_batch ─────────────────────────────────────────────────
+# ── _classify_catalysts_news ──────────────────────────────────────────────────
 
-class TestCatalystBatch:
-    """Batch catalyst classification — single fast Gemini call, no Google Search."""
+class TestCatalystNews:
+    """News-based catalyst classification — keyword scan on yf.Ticker().news headlines."""
 
-    def _gemini_response(self, text: str) -> dict:
-        return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+    def _yf_news(self, titles: list[str]) -> list[dict]:
+        return [{"content": {"title": t}} for t in titles]
 
-    async def test_returns_matched_tickers(self, service: MarketDataService) -> None:
-        import httpx, respx
-
-        with (
-            patch("services.market_data.get_cached_token", return_value="fake-token"),
-            respx.mock,
-        ):
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
-                return_value=httpx.Response(200, json=self._gemini_response("NVDA, AAPL"))
-            )
-            result = await service._classify_catalysts_batch(["NVDA", "AAPL", "AMD"], "us")
-
+    async def test_detects_earnings_catalyst(self, service: MarketDataService) -> None:
+        news = self._yf_news(["NVDA earnings beat analyst estimates by 15%"])
+        with patch("services.market_data.yf.Ticker") as m:
+            m.return_value.news = news
+            result = await service._classify_catalysts_news(["NVDA"], "us")
         assert "NVDA" in result
-        assert "AAPL" in result
+
+    async def test_detects_government_contract(self, service: MarketDataService) -> None:
+        news = self._yf_news(["DY awarded $500M government contract by DoD"])
+        with patch("services.market_data.yf.Ticker") as m:
+            m.return_value.news = news
+            result = await service._classify_catalysts_news(["DY"], "us")
+        assert "DY" in result
+
+    async def test_detects_space_announcement(self, service: MarketDataService) -> None:
+        """ASTC-type lunar mining news should be flagged as catalyst."""
+        news = self._yf_news(["Astrotech Approves Lunar Resource Initiative for Quantum Computing"])
+        with patch("services.market_data.yf.Ticker") as m:
+            m.return_value.news = news
+            result = await service._classify_catalysts_news(["ASTC"], "us")
+        assert "ASTC" in result
+
+    async def test_no_catalyst_for_generic_news(self, service: MarketDataService) -> None:
+        news = self._yf_news(["Markets mixed as investors weigh macro data"])
+        with patch("services.market_data.yf.Ticker") as m:
+            m.return_value.news = news
+            result = await service._classify_catalysts_news(["AMD"], "us")
         assert "AMD" not in result
-
-    async def test_returns_empty_set_when_gemini_replies_none(
-        self, service: MarketDataService
-    ) -> None:
-        import httpx, respx
-
-        with (
-            patch("services.market_data.get_cached_token", return_value="fake-token"),
-            respx.mock,
-        ):
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
-                return_value=httpx.Response(200, json=self._gemini_response("NONE"))
-            )
-            result = await service._classify_catalysts_batch(["NVDA", "AAPL"], "us")
-
-        assert result == set()
-
-    async def test_ignores_tickers_not_in_input_list(self, service: MarketDataService) -> None:
-        import httpx, respx
-
-        with (
-            patch("services.market_data.get_cached_token", return_value="fake-token"),
-            respx.mock,
-        ):
-            # Gemini returns TSLA which was not in the input — should be filtered out
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
-                return_value=httpx.Response(200, json=self._gemini_response("NVDA, TSLA"))
-            )
-            result = await service._classify_catalysts_batch(["NVDA", "AMD"], "us")
-
-        assert "NVDA" in result
-        assert "TSLA" not in result
-
-    async def test_returns_empty_set_on_http_error(self, service: MarketDataService) -> None:
-        import httpx, respx
-
-        with (
-            patch("services.market_data.get_cached_token", return_value="fake-token"),
-            respx.mock,
-        ):
-            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
-                return_value=httpx.Response(500, text="Server error")
-            )
-            result = await service._classify_catalysts_batch(["NVDA"], "us")
-
-        assert result == set()
-
-    async def test_returns_empty_set_when_project_not_configured(
-        self, service: MarketDataService
-    ) -> None:
-        service._settings = service._settings.model_copy(update={"google_cloud_project": ""})
-        result = await service._classify_catalysts_batch(["NVDA"], "us")
-        assert result == set()
 
     async def test_returns_empty_set_for_empty_ticker_list(
         self, service: MarketDataService
     ) -> None:
-        result = await service._classify_catalysts_batch([], "us")
+        result = await service._classify_catalysts_news([], "us")
         assert result == set()
+
+    async def test_returns_empty_set_on_yf_exception(self, service: MarketDataService) -> None:
+        with patch("services.market_data.yf.Ticker", side_effect=Exception("network error")):
+            result = await service._classify_catalysts_news(["NVDA"], "us")
+        assert result == set()
+
+    async def test_handles_multiple_tickers_in_parallel(self, service: MarketDataService) -> None:
+        # Both tickers return catalyst headlines — verify both are detected
+        catalyst_news = self._yf_news(["Earnings beat analyst estimates"])
+        with patch("services.market_data.yf.Ticker") as mock_cls:
+            mock_cls.return_value.news = catalyst_news
+            result = await service._classify_catalysts_news(["NVDA", "AMD"], "us")
+
+        assert "NVDA" in result
+        assert "AMD" in result
+        assert mock_cls.call_count == 2  # called once per ticker
+
+    async def test_india_uses_ns_suffix(self, service: MarketDataService) -> None:
+        """India tickers should be looked up with .NS suffix."""
+        news = self._yf_news(["Reliance Industries awarded government contract"])
+        with patch("services.market_data.yf.Ticker") as m:
+            m.return_value.news = news
+            result = await service._classify_catalysts_news(["RELIANCE"], "india")
+        # Should call yf.Ticker("RELIANCE.NS")
+        m.assert_called_with("RELIANCE.NS")
+        assert "RELIANCE" in result
 
 
 # ── _get_us_gainers_1d / _get_us_gainers_period fast path ────────────────────
@@ -1084,7 +1112,7 @@ class TestUsGainersFastPath:
         screener_data = [self._yf_row(ticker=f"S{i}", change_pct=float(10 - i)) for i in range(10)]
         with (
             patch.object(service, "_get_us_gainers_screener", new=AsyncMock(return_value=screener_data)),
-            patch.object(service, "_classify_catalysts_batch", new=AsyncMock(return_value=set())),
+            patch.object(service, "_classify_catalysts_news", new=AsyncMock(return_value=set())),
         ):
             result = await service._get_us_gainers_1d()
 
@@ -1096,7 +1124,7 @@ class TestUsGainersFastPath:
         screener_data = self._five_yf_rows()
         with (
             patch.object(service, "_get_us_gainers_screener", new=AsyncMock(return_value=screener_data)),
-            patch.object(service, "_classify_catalysts_batch", new=AsyncMock(return_value={"NVDA"})),
+            patch.object(service, "_classify_catalysts_news", new=AsyncMock(return_value={"NVDA"})),
         ):
             result = await service._get_us_gainers_1d()
 
@@ -1129,7 +1157,7 @@ class TestUsGainersFastPath:
         yf_mock = AsyncMock(return_value=yf_data)
         with (
             patch.object(service, "_get_us_gainers_yf_download", new=yf_mock),
-            patch.object(service, "_classify_catalysts_batch", new=AsyncMock(return_value=set())),
+            patch.object(service, "_classify_catalysts_news", new=AsyncMock(return_value=set())),
         ):
             await service._get_us_gainers_period("1w")
 
@@ -1142,7 +1170,7 @@ class TestUsGainersFastPath:
         yf_data = self._five_yf_rows(change_pct=15.0)  # NVDA +15% over the week
         with (
             patch.object(service, "_get_us_gainers_yf_download", new=AsyncMock(return_value=yf_data)),
-            patch.object(service, "_classify_catalysts_batch", new=AsyncMock(return_value=set())),
+            patch.object(service, "_classify_catalysts_news", new=AsyncMock(return_value=set())),
         ):
             result = await service._get_us_gainers_period("1w")
 
