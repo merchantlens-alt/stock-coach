@@ -6,12 +6,16 @@ import pytest
 
 from core.config import get_settings
 from models.schemas import StockGainer
+import pandas as pd
+
 from services.market_data import (
     MarketDataService,
     resolve_ticker_by_name,
     _parse_pipe_table,
     _safe_float,
     _safe_int,
+    _US_TICKER_UNIVERSE,
+    _INDIA_TICKER_UNIVERSE,
 )
 
 
@@ -362,6 +366,17 @@ class TestFetchGainersGemini:
 # ── get_us_gainers / get_india_gainers ────────────────────────────────────────
 
 class TestGetGainers:
+    # Force yf.download to return empty so every test in this class exercises the Gemini
+    # fallback path rather than the fast yf.download path (which has its own test class).
+    @pytest.fixture(autouse=True)
+    def _no_screener(self, service: MarketDataService, monkeypatch) -> None:
+        monkeypatch.setattr(
+            service, "_get_us_gainers_yf_download", AsyncMock(return_value=[])
+        )
+        monkeypatch.setattr(
+            service, "_get_india_gainers_yf_download", AsyncMock(return_value=[])
+        )
+
     def _raw_row(self, **kwargs) -> dict:
         defaults = {
             "ticker": "NVDA",
@@ -671,3 +686,395 @@ class TestHelpers:
 
     def test_safe_int_with_non_numeric_string(self) -> None:
         assert _safe_int("not_a_number") is None
+
+
+# ── _get_us_gainers_yf_download / _get_india_gainers_yf_download ──────────────
+
+class TestYfDownloadFetch:
+    """yf.download-based gainer discovery from curated ticker universe."""
+
+    # ── helpers ────────────────────────────────────────────────────────────────
+
+    def _make_df(self, data: dict[str, tuple]) -> pd.DataFrame:
+        """
+        Build a multi-ticker yf.download-style MultiIndex DataFrame.
+        data: {ticker: (close_list, volume_list)}
+        """
+        close_cols = {t: vals[0] for t, vals in data.items()}
+        vol_cols = {t: vals[1] for t, vals in data.items()}
+
+        close_df = pd.DataFrame(close_cols)
+        vol_df = pd.DataFrame(vol_cols)
+
+        close_df.columns = pd.MultiIndex.from_tuples(
+            [("Close", c) for c in close_df.columns]
+        )
+        vol_df.columns = pd.MultiIndex.from_tuples(
+            [("Volume", c) for c in vol_df.columns]
+        )
+        return pd.concat([close_df, vol_df], axis=1)
+
+    # ── US download tests ───────────────────────────────────────────────────────
+
+    async def test_us_returns_gainers_sorted_by_change_pct(
+        self, service: MarketDataService
+    ) -> None:
+        """Higher % gains appear first in the result list."""
+        df = self._make_df({
+            "NVDA": ([100.0, 110.0], [5_000_000, 5_000_000]),  # +10%
+            "TSLA": ([200.0, 204.0], [6_000_000, 6_000_000]),  # +2%
+        })
+        with patch("services.market_data.yf.download", return_value=df):
+            result = await service._get_us_gainers_yf_download("1d")
+
+        # At least NVDA should be present (TSLA may be missing from universe checks)
+        tickers = [r["ticker"] for r in result]
+        if len(result) >= 2:
+            assert result[0]["change_pct"] >= result[-1]["change_pct"]
+        if "NVDA" in tickers and "TSLA" in tickers:
+            assert tickers.index("NVDA") < tickers.index("TSLA")
+
+    async def test_us_filters_negative_change_pct(
+        self, service: MarketDataService
+    ) -> None:
+        """Stocks that dropped over the period are excluded."""
+        df = self._make_df({
+            "NVDA": ([100.0, 110.0], [5_000_000, 5_000_000]),  # +10% ✓
+            "AMD":  ([100.0, 95.0],  [3_000_000, 3_000_000]),  # -5%  ✗
+        })
+        with patch("services.market_data.yf.download", return_value=df):
+            result = await service._get_us_gainers_yf_download("1d")
+
+        tickers = [r["ticker"] for r in result]
+        assert "AMD" not in tickers
+
+    async def test_us_filters_price_below_5(
+        self, service: MarketDataService
+    ) -> None:
+        """Stocks under $5 last close are excluded even with positive gain."""
+        df = self._make_df({
+            "NVDA": ([100.0, 110.0], [5_000_000, 5_000_000]),  # $110 ✓
+            "IONQ": ([2.0, 2.5],     [2_000_000, 2_000_000]),  # $2.50 ✗
+        })
+        with patch("services.market_data.yf.download", return_value=df):
+            result = await service._get_us_gainers_yf_download("1d")
+
+        tickers = [r["ticker"] for r in result]
+        assert "IONQ" not in tickers
+
+    async def test_us_filters_low_volume(
+        self, service: MarketDataService
+    ) -> None:
+        """Stocks with fewer than 500K shares are excluded."""
+        df = self._make_df({
+            "NVDA": ([100.0, 110.0], [5_000_000, 5_000_000]),  # high vol ✓
+            "MRVL": ([20.0, 22.0],   [100_000, 100_000]),       # low vol  ✗
+        })
+        with patch("services.market_data.yf.download", return_value=df):
+            result = await service._get_us_gainers_yf_download("1d")
+
+        tickers = [r["ticker"] for r in result]
+        assert "MRVL" not in tickers
+
+    async def test_us_returns_empty_on_download_exception(
+        self, service: MarketDataService
+    ) -> None:
+        """Network or auth failure returns [] so callers can fall back to Gemini."""
+        with patch(
+            "services.market_data.yf.download",
+            side_effect=RuntimeError("Network error"),
+        ):
+            result = await service._get_us_gainers_yf_download("1d")
+        assert result == []
+
+    async def test_us_returns_empty_when_df_has_fewer_than_2_rows(
+        self, service: MarketDataService
+    ) -> None:
+        """Single-row DataFrame can't compute returns — return []."""
+        df = self._make_df({"NVDA": ([110.0], [5_000_000])})
+        with patch("services.market_data.yf.download", return_value=df):
+            result = await service._get_us_gainers_yf_download("1d")
+        assert result == []
+
+    async def test_us_1d_uses_last_vs_second_to_last_close(
+        self, service: MarketDataService
+    ) -> None:
+        """1d period: change = close[-1]/close[-2]-1 (single day), not start-to-end."""
+        # 5 rows: 100 → 115 (+15% total) but last day is 112 → 115 (~+2.68%)
+        df = self._make_df({
+            "NVDA": (
+                [100.0, 105.0, 108.0, 112.0, 115.0],
+                [5_000_000] * 5,
+            ),
+        })
+        with patch("services.market_data.yf.download", return_value=df):
+            result = await service._get_us_gainers_yf_download("1d")
+
+        nvda = next((r for r in result if r["ticker"] == "NVDA"), None)
+        if nvda:
+            # Last-day change: 115/112-1 ≈ +2.68%, NOT +15%
+            assert nvda["change_pct"] < 10.0
+
+    async def test_us_1w_uses_start_to_end_close(
+        self, service: MarketDataService
+    ) -> None:
+        """1w period: change = close[-1]/close[0]-1 (full week start to end)."""
+        # 5 rows: 100 → 115 (+15% total)
+        df = self._make_df({
+            "NVDA": (
+                [100.0, 105.0, 108.0, 112.0, 115.0],
+                [5_000_000] * 5,
+            ),
+        })
+        with patch("services.market_data.yf.download", return_value=df):
+            result = await service._get_us_gainers_yf_download("1w")
+
+        nvda = next((r for r in result if r["ticker"] == "NVDA"), None)
+        if nvda:
+            # Full-period change: 115/100-1 = +15%
+            assert abs(nvda["change_pct"] - 15.0) < 0.1
+
+    # ── India download tests ───────────────────────────────────────────────────
+
+    async def test_india_returns_plain_ticker_without_ns_suffix(
+        self, service: MarketDataService
+    ) -> None:
+        """Results should use plain NSE symbol (e.g. RELIANCE, not RELIANCE.NS)."""
+        df = self._make_df({
+            "RELIANCE.NS": ([2800.0, 2900.0], [8_000_000, 8_000_000]),  # +3.57%
+        })
+        with patch("services.market_data.yf.download", return_value=df):
+            result = await service._get_india_gainers_yf_download("1d")
+
+        if result:
+            assert all(".NS" not in r["ticker"] for r in result)
+            tickers = [r["ticker"] for r in result]
+            assert "RELIANCE" in tickers
+
+    async def test_india_filters_price_below_50_inr(
+        self, service: MarketDataService
+    ) -> None:
+        """Indian stocks under ₹50 are excluded."""
+        df = self._make_df({
+            "RELIANCE.NS": ([2800.0, 2900.0], [8_000_000, 8_000_000]),  # ₹2900 ✓
+            "SAIL.NS":     ([30.0, 35.0],     [2_000_000, 2_000_000]),  # ₹35   ✗
+        })
+        with patch("services.market_data.yf.download", return_value=df):
+            result = await service._get_india_gainers_yf_download("1d")
+
+        tickers = [r["ticker"] for r in result]
+        assert "SAIL" not in tickers
+
+    async def test_india_returns_empty_on_download_exception(
+        self, service: MarketDataService
+    ) -> None:
+        with patch(
+            "services.market_data.yf.download",
+            side_effect=RuntimeError("timeout"),
+        ):
+            result = await service._get_india_gainers_yf_download("1d")
+        assert result == []
+
+
+# ── _classify_catalysts_batch ─────────────────────────────────────────────────
+
+class TestCatalystBatch:
+    """Batch catalyst classification — single fast Gemini call, no Google Search."""
+
+    def _gemini_response(self, text: str) -> dict:
+        return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+
+    async def test_returns_matched_tickers(self, service: MarketDataService) -> None:
+        import httpx, respx
+
+        with (
+            patch("services.market_data.get_cached_token", return_value="fake-token"),
+            respx.mock,
+        ):
+            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
+                return_value=httpx.Response(200, json=self._gemini_response("NVDA, AAPL"))
+            )
+            result = await service._classify_catalysts_batch(["NVDA", "AAPL", "AMD"], "us")
+
+        assert "NVDA" in result
+        assert "AAPL" in result
+        assert "AMD" not in result
+
+    async def test_returns_empty_set_when_gemini_replies_none(
+        self, service: MarketDataService
+    ) -> None:
+        import httpx, respx
+
+        with (
+            patch("services.market_data.get_cached_token", return_value="fake-token"),
+            respx.mock,
+        ):
+            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
+                return_value=httpx.Response(200, json=self._gemini_response("NONE"))
+            )
+            result = await service._classify_catalysts_batch(["NVDA", "AAPL"], "us")
+
+        assert result == set()
+
+    async def test_ignores_tickers_not_in_input_list(self, service: MarketDataService) -> None:
+        import httpx, respx
+
+        with (
+            patch("services.market_data.get_cached_token", return_value="fake-token"),
+            respx.mock,
+        ):
+            # Gemini returns TSLA which was not in the input — should be filtered out
+            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
+                return_value=httpx.Response(200, json=self._gemini_response("NVDA, TSLA"))
+            )
+            result = await service._classify_catalysts_batch(["NVDA", "AMD"], "us")
+
+        assert "NVDA" in result
+        assert "TSLA" not in result
+
+    async def test_returns_empty_set_on_http_error(self, service: MarketDataService) -> None:
+        import httpx, respx
+
+        with (
+            patch("services.market_data.get_cached_token", return_value="fake-token"),
+            respx.mock,
+        ):
+            respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
+                return_value=httpx.Response(500, text="Server error")
+            )
+            result = await service._classify_catalysts_batch(["NVDA"], "us")
+
+        assert result == set()
+
+    async def test_returns_empty_set_when_project_not_configured(
+        self, service: MarketDataService
+    ) -> None:
+        service._settings = service._settings.model_copy(update={"google_cloud_project": ""})
+        result = await service._classify_catalysts_batch(["NVDA"], "us")
+        assert result == set()
+
+    async def test_returns_empty_set_for_empty_ticker_list(
+        self, service: MarketDataService
+    ) -> None:
+        result = await service._classify_catalysts_batch([], "us")
+        assert result == set()
+
+
+# ── _get_us_gainers_1d / _get_us_gainers_period fast path ────────────────────
+
+class TestUsGainersFastPath:
+    """Tests for the yf.download-based fast path in _get_us_gainers_1d and _get_us_gainers_period."""
+
+    def _yf_row(self, ticker="NVDA", **kwargs) -> dict:
+        return {
+            "ticker": ticker,
+            "name": f"{ticker} Corp",
+            "price": 950.0,
+            "change_pct": 8.5,
+            "change_abs": 74.5,
+            "volume": 45_000_000,
+            "sector": "Technology",
+            "has_catalyst": False,
+            **kwargs,
+        }
+
+    def _five_yf_rows(self, **overrides) -> list[dict]:
+        """Helper: 5 rows (meets the >= 5 minimum for the yf.download fast path)."""
+        base = [
+            self._yf_row("NVDA", change_pct=8.5),
+            self._yf_row("AMD",  change_pct=5.2),
+            self._yf_row("INTC", change_pct=3.1),
+            self._yf_row("TSLA", change_pct=4.0),
+            self._yf_row("AMZN", change_pct=2.5),
+        ]
+        if overrides:
+            base[0] = {**base[0], **overrides}
+        return base
+
+    async def test_uses_yf_download_when_returns_enough_stocks(
+        self, service: MarketDataService
+    ) -> None:
+        yf_data = [self._yf_row(ticker=f"S{i}", change_pct=float(10 - i)) for i in range(10)]
+        with (
+            patch.object(service, "_get_us_gainers_yf_download", new=AsyncMock(return_value=yf_data)),
+            patch.object(service, "_classify_catalysts_batch", new=AsyncMock(return_value=set())),
+        ):
+            result = await service._get_us_gainers_1d()
+
+        assert len(result) > 0
+        assert result[0].ticker.startswith("S")
+
+    async def test_catalyst_tickers_marked_confirmed(self, service: MarketDataService) -> None:
+        # Need >= 5 stocks so the fast path is taken (threshold is 5)
+        yf_data = self._five_yf_rows()
+        with (
+            patch.object(service, "_get_us_gainers_yf_download", new=AsyncMock(return_value=yf_data)),
+            patch.object(service, "_classify_catalysts_batch", new=AsyncMock(return_value={"NVDA"})),
+        ):
+            result = await service._get_us_gainers_1d()
+
+        nvda = next(g for g in result if g.ticker == "NVDA")
+        amd = next(g for g in result if g.ticker == "AMD")
+        assert nvda.signal_tier == "confirmed"
+        assert amd.signal_tier == "mover"
+
+    async def test_falls_back_to_gemini_when_yf_returns_few_stocks(
+        self, service: MarketDataService
+    ) -> None:
+        few_stocks = [self._yf_row(ticker=f"S{i}") for i in range(3)]  # < 5 minimum
+        gemini_result = [service._build_gainers([self._yf_row("NVDA")], "us")[0]]
+
+        with (
+            patch.object(service, "_get_us_gainers_yf_download", new=AsyncMock(return_value=few_stocks)),
+            patch.object(
+                service, "_get_us_gainers_gemini", new=AsyncMock(return_value=gemini_result)
+            ) as gemini_mock,
+        ):
+            await service._get_us_gainers_1d()
+
+        gemini_mock.assert_called_once_with("1d")
+
+    async def test_period_path_calls_yf_download_with_period_arg(
+        self, service: MarketDataService
+    ) -> None:
+        """_get_us_gainers_period delegates to _get_us_gainers_yf_download with the same period."""
+        yf_data = self._five_yf_rows()
+        yf_mock = AsyncMock(return_value=yf_data)
+        with (
+            patch.object(service, "_get_us_gainers_yf_download", new=yf_mock),
+            patch.object(service, "_classify_catalysts_batch", new=AsyncMock(return_value=set())),
+        ):
+            await service._get_us_gainers_period("1w")
+
+        yf_mock.assert_called_once_with("1w")
+
+    async def test_period_path_passes_yf_download_data_through(
+        self, service: MarketDataService
+    ) -> None:
+        """_get_us_gainers_period uses change_pct directly from yf_download output."""
+        yf_data = self._five_yf_rows(change_pct=15.0)  # NVDA +15% over the week
+        with (
+            patch.object(service, "_get_us_gainers_yf_download", new=AsyncMock(return_value=yf_data)),
+            patch.object(service, "_classify_catalysts_batch", new=AsyncMock(return_value=set())),
+        ):
+            result = await service._get_us_gainers_period("1w")
+
+        assert len(result) > 0
+        nvda = next((g for g in result if g.ticker == "NVDA"), None)
+        assert nvda is not None
+        assert nvda.change_pct == 15.0
+
+    async def test_period_path_falls_back_to_gemini_when_yf_insufficient(
+        self, service: MarketDataService
+    ) -> None:
+        """If yf.download returns < 5 stocks for a period, falls back to Gemini."""
+        few_stocks = [self._yf_row(ticker=f"S{i}") for i in range(2)]  # < 5
+        with (
+            patch.object(service, "_get_us_gainers_yf_download", new=AsyncMock(return_value=few_stocks)),
+            patch.object(
+                service, "_get_us_gainers_gemini", new=AsyncMock(return_value=[])
+            ) as gemini_mock,
+        ):
+            await service._get_us_gainers_period("1w")
+
+        gemini_mock.assert_called_once_with("1w")

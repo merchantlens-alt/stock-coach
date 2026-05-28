@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -486,3 +486,83 @@ class TestGainerAnalyse:
 
             resp2 = client.get("/api/gainers/us/NVDA/analyse")
             assert resp2.json()["from_cache"]
+
+    def test_analyse_falls_back_to_mock_when_gemini_fails(
+        self,
+        sample_us_gainer: StockGainer,
+        sample_fundamentals,
+        sample_news,
+    ) -> None:
+        """When Gemini raises, analysis endpoint falls back to mock agent — no error banner.
+
+        Uses dependency_overrides to inject a failing analyst because mock_ai=True in
+        tests short-circuits _call_gemini before it can be patched.
+        """
+        from core.exceptions import AIAgentError
+        from main import create_app
+        from api.deps import get_gainer_analyst
+
+        failing_analyst = MagicMock()
+        failing_analyst.analyse_full = AsyncMock(side_effect=AIAgentError("Vertex AI timeout"))
+
+        app = create_app()
+        app.dependency_overrides[get_gainer_analyst] = lambda: failing_analyst
+        test_client = TestClient(app)
+
+        with (
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(sample_us_gainer, {}))),
+            patch("api.routes.gainers._safe_get_gainers",
+                  new=AsyncMock(return_value=[])),
+            patch("services.market_data.MarketDataService.get_fundamentals",
+                  new=AsyncMock(return_value=sample_fundamentals)),
+            patch("services.news_fetcher.NewsFetcher.get_news",
+                  new=AsyncMock(return_value=sample_news)),
+        ):
+            resp = test_client.get("/api/gainers/us/NVDA/analyse?refresh=true")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        # Fallback mock fills in analysis — user never sees the error banner
+        assert body["analysis"] is not None
+        assert body["prediction"] is not None
+        assert body["ticker"] == "NVDA"
+
+    def test_mock_fallback_response_not_cached(
+        self,
+        sample_us_gainer: StockGainer,
+        sample_fundamentals,
+        sample_news,
+    ) -> None:
+        """Mock fallback responses must NOT be cached so the next request retries live Gemini."""
+        from core.exceptions import AIAgentError
+        from main import create_app
+        from api.deps import get_gainer_analyst
+
+        failing_analyst = MagicMock()
+        failing_analyst.analyse_full = AsyncMock(side_effect=AIAgentError("Vertex AI timeout"))
+
+        app = create_app()
+        app.dependency_overrides[get_gainer_analyst] = lambda: failing_analyst
+        test_client = TestClient(app)
+
+        with (
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(sample_us_gainer, {}))),
+            patch("api.routes.gainers._safe_get_gainers",
+                  new=AsyncMock(return_value=[])),
+            patch("services.market_data.MarketDataService.get_fundamentals",
+                  new=AsyncMock(return_value=sample_fundamentals)),
+            patch("services.news_fetcher.NewsFetcher.get_news",
+                  new=AsyncMock(return_value=sample_news)),
+        ):
+            # First call — Gemini fails, mock fallback used, should NOT be cached
+            resp1 = test_client.get("/api/gainers/us/NVDA/analyse?refresh=true")
+            assert resp1.status_code == 200
+            assert not resp1.json()["from_cache"]
+
+            # Second call — mock fallback was not cached, so route runs again
+            # (also falls back to mock). from_cache stays False.
+            resp2 = test_client.get("/api/gainers/us/NVDA/analyse")
+            assert resp2.status_code == 200
+            assert not resp2.json()["from_cache"]

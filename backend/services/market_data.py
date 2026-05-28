@@ -16,8 +16,9 @@ from models.schemas import FundamentalsData, Market, SignalTier, StockGainer, co
 
 log = get_logger(__name__)
 
-# ── Yahoo Finance search (company name → ticker) ───────────────────────────────
+# ── Yahoo Finance API endpoints ────────────────────────────────────────────────
 _YF_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
+
 _YF_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -28,11 +29,217 @@ _YF_HEADERS = {
 
 _US_EXCHANGES = {"NMS", "NYQ", "NGM", "PCX", "BATS", "ASE", "OPR"}
 
+# ── Curated ticker universes ───────────────────────────────────────────────────
+# yf.download handles Yahoo Finance auth internally, avoiding 429s from direct
+# API calls. We maintain a curated list of ~110 US and ~60 India NSE tickers
+# and compute period returns from downloaded OHLCV data.
+
+_US_TICKER_UNIVERSE: dict[str, dict[str, str]] = {
+    # ── Technology / Semiconductors ────────────────────────────────────────────
+    "AAPL":  {"name": "Apple Inc",                  "sector": "Technology"},
+    "MSFT":  {"name": "Microsoft Corporation",      "sector": "Technology"},
+    "NVDA":  {"name": "NVIDIA Corporation",         "sector": "Technology"},
+    "AMD":   {"name": "Advanced Micro Devices",     "sector": "Technology"},
+    "INTC":  {"name": "Intel Corporation",          "sector": "Technology"},
+    "QCOM":  {"name": "Qualcomm",                   "sector": "Technology"},
+    "AVGO":  {"name": "Broadcom Inc",               "sector": "Technology"},
+    "TXN":   {"name": "Texas Instruments",          "sector": "Technology"},
+    "AMAT":  {"name": "Applied Materials",          "sector": "Technology"},
+    "KLAC":  {"name": "KLA Corporation",            "sector": "Technology"},
+    "LRCX":  {"name": "Lam Research",               "sector": "Technology"},
+    "MRVL":  {"name": "Marvell Technology",         "sector": "Technology"},
+    "SMCI":  {"name": "Super Micro Computer",       "sector": "Technology"},
+    "DELL":  {"name": "Dell Technologies",          "sector": "Technology"},
+    "HPQ":   {"name": "HP Inc",                     "sector": "Technology"},
+    "HPE":   {"name": "Hewlett Packard Enterprise", "sector": "Technology"},
+    "ACMR":  {"name": "ACM Research",               "sector": "Technology"},
+    # ── Software / Cloud ───────────────────────────────────────────────────────
+    "CRM":   {"name": "Salesforce Inc",             "sector": "Technology"},
+    "ADBE":  {"name": "Adobe Inc",                  "sector": "Technology"},
+    "NOW":   {"name": "ServiceNow",                 "sector": "Technology"},
+    "SNOW":  {"name": "Snowflake Inc",              "sector": "Technology"},
+    "PLTR":  {"name": "Palantir Technologies",      "sector": "Technology"},
+    "DDOG":  {"name": "Datadog Inc",                "sector": "Technology"},
+    "ZS":    {"name": "Zscaler Inc",                "sector": "Technology"},
+    "CRWD":  {"name": "CrowdStrike Holdings",       "sector": "Technology"},
+    "PANW":  {"name": "Palo Alto Networks",         "sector": "Technology"},
+    "OKTA":  {"name": "Okta Inc",                   "sector": "Technology"},
+    "S":     {"name": "SentinelOne Inc",            "sector": "Technology"},
+    "SHOP":  {"name": "Shopify Inc",                "sector": "Technology"},
+    # ── Consumer Tech / Internet ───────────────────────────────────────────────
+    "META":  {"name": "Meta Platforms",             "sector": "Communication Services"},
+    "GOOGL": {"name": "Alphabet Inc",               "sector": "Communication Services"},
+    "AMZN":  {"name": "Amazon.com",                 "sector": "Consumer Discretionary"},
+    "NFLX":  {"name": "Netflix Inc",                "sector": "Communication Services"},
+    "TSLA":  {"name": "Tesla Inc",                  "sector": "Consumer Discretionary"},
+    "UBER":  {"name": "Uber Technologies",          "sector": "Technology"},
+    "LYFT":  {"name": "Lyft Inc",                   "sector": "Technology"},
+    "ABNB":  {"name": "Airbnb Inc",                 "sector": "Consumer Discretionary"},
+    "SNAP":  {"name": "Snap Inc",                   "sector": "Communication Services"},
+    "PINS":  {"name": "Pinterest Inc",              "sector": "Communication Services"},
+    "SPOT":  {"name": "Spotify Technology",         "sector": "Communication Services"},
+    "RBLX":  {"name": "Roblox Corporation",         "sector": "Communication Services"},
+    "TTWO":  {"name": "Take-Two Interactive",       "sector": "Communication Services"},
+    "EA":    {"name": "Electronic Arts",            "sector": "Communication Services"},
+    # ── Fintech / Crypto ──────────────────────────────────────────────────────
+    "COIN":  {"name": "Coinbase Global",            "sector": "Financial Services"},
+    "HOOD":  {"name": "Robinhood Markets",          "sector": "Financial Services"},
+    "SQ":    {"name": "Block Inc",                  "sector": "Financial Services"},
+    "PYPL":  {"name": "PayPal Holdings",            "sector": "Financial Services"},
+    "AFRM":  {"name": "Affirm Holdings",            "sector": "Financial Services"},
+    "MARA":  {"name": "MARA Holdings",              "sector": "Technology"},
+    "RIOT":  {"name": "Riot Platforms",             "sector": "Technology"},
+    "CLSK":  {"name": "CleanSpark Inc",             "sector": "Technology"},
+    "IREN":  {"name": "Iris Energy",                "sector": "Technology"},
+    # ── Financial Services ────────────────────────────────────────────────────
+    "V":     {"name": "Visa Inc",                   "sector": "Financial Services"},
+    "MA":    {"name": "Mastercard",                 "sector": "Financial Services"},
+    "AXP":   {"name": "American Express",           "sector": "Financial Services"},
+    "JPM":   {"name": "JPMorgan Chase",             "sector": "Financial Services"},
+    "GS":    {"name": "Goldman Sachs",              "sector": "Financial Services"},
+    "BAC":   {"name": "Bank of America",            "sector": "Financial Services"},
+    "C":     {"name": "Citigroup Inc",              "sector": "Financial Services"},
+    "WFC":   {"name": "Wells Fargo",                "sector": "Financial Services"},
+    "MS":    {"name": "Morgan Stanley",             "sector": "Financial Services"},
+    "BLK":   {"name": "BlackRock Inc",              "sector": "Financial Services"},
+    "SCHW":  {"name": "Charles Schwab",             "sector": "Financial Services"},
+    # ── Healthcare / Biotech ─────────────────────────────────────────────────
+    "JNJ":   {"name": "Johnson & Johnson",          "sector": "Healthcare"},
+    "PFE":   {"name": "Pfizer Inc",                 "sector": "Healthcare"},
+    "MRNA":  {"name": "Moderna Inc",                "sector": "Healthcare"},
+    "BNTX":  {"name": "BioNTech SE",                "sector": "Healthcare"},
+    "REGN":  {"name": "Regeneron Pharmaceuticals",  "sector": "Healthcare"},
+    "GILD":  {"name": "Gilead Sciences",            "sector": "Healthcare"},
+    "BIIB":  {"name": "Biogen Inc",                 "sector": "Healthcare"},
+    "AMGN":  {"name": "Amgen Inc",                  "sector": "Healthcare"},
+    "ABBV":  {"name": "AbbVie Inc",                 "sector": "Healthcare"},
+    "BMY":   {"name": "Bristol-Myers Squibb",       "sector": "Healthcare"},
+    "ALNY":  {"name": "Alnylam Pharmaceuticals",    "sector": "Healthcare"},
+    "INCY":  {"name": "Incyte Corporation",         "sector": "Healthcare"},
+    "EXAS":  {"name": "Exact Sciences",             "sector": "Healthcare"},
+    "ILMN":  {"name": "Illumina Inc",               "sector": "Healthcare"},
+    "HALO":  {"name": "Halozyme Therapeutics",      "sector": "Healthcare"},
+    # ── Energy ───────────────────────────────────────────────────────────────
+    "XOM":   {"name": "Exxon Mobil",                "sector": "Energy"},
+    "CVX":   {"name": "Chevron Corporation",        "sector": "Energy"},
+    "SLB":   {"name": "SLB",                        "sector": "Energy"},
+    "OXY":   {"name": "Occidental Petroleum",       "sector": "Energy"},
+    "MPC":   {"name": "Marathon Petroleum",         "sector": "Energy"},
+    "VLO":   {"name": "Valero Energy",              "sector": "Energy"},
+    "PSX":   {"name": "Phillips 66",                "sector": "Energy"},
+    "EOG":   {"name": "EOG Resources",              "sector": "Energy"},
+    "COP":   {"name": "ConocoPhillips",             "sector": "Energy"},
+    # ── Consumer ─────────────────────────────────────────────────────────────
+    "WMT":   {"name": "Walmart Inc",                "sector": "Consumer Staples"},
+    "TGT":   {"name": "Target Corporation",         "sector": "Consumer Discretionary"},
+    "COST":  {"name": "Costco Wholesale",           "sector": "Consumer Staples"},
+    "HD":    {"name": "Home Depot",                 "sector": "Consumer Discretionary"},
+    "LOW":   {"name": "Lowe's Companies",           "sector": "Consumer Discretionary"},
+    "NKE":   {"name": "Nike Inc",                   "sector": "Consumer Discretionary"},
+    "LULU":  {"name": "Lululemon Athletica",        "sector": "Consumer Discretionary"},
+    "ROST":  {"name": "Ross Stores",                "sector": "Consumer Discretionary"},
+    "TJX":   {"name": "TJX Companies",              "sector": "Consumer Discretionary"},
+    # ── Industrials / Defense ────────────────────────────────────────────────
+    "BA":    {"name": "Boeing Company",             "sector": "Industrials"},
+    "CAT":   {"name": "Caterpillar Inc",            "sector": "Industrials"},
+    "GE":    {"name": "GE Aerospace",               "sector": "Industrials"},
+    "HON":   {"name": "Honeywell International",    "sector": "Industrials"},
+    "LMT":   {"name": "Lockheed Martin",            "sector": "Defense"},
+    "RTX":   {"name": "RTX Corporation",            "sector": "Defense"},
+    "NOC":   {"name": "Northrop Grumman",           "sector": "Defense"},
+    "GD":    {"name": "General Dynamics",           "sector": "Defense"},
+    # ── Space / EV / Emerging Tech ───────────────────────────────────────────
+    "RKLB":  {"name": "Rocket Lab USA",             "sector": "Industrials"},
+    "LUNR":  {"name": "Intuitive Machines",         "sector": "Industrials"},
+    "ASTS":  {"name": "AST SpaceMobile",            "sector": "Communication Services"},
+    "RDW":   {"name": "Redwire Corporation",        "sector": "Industrials"},
+    "IONQ":  {"name": "IonQ Inc",                   "sector": "Technology"},
+    "RGTI":  {"name": "Rigetti Computing",          "sector": "Technology"},
+    "RIVN":  {"name": "Rivian Automotive",          "sector": "Consumer Discretionary"},
+    "LCID":  {"name": "Lucid Group",                "sector": "Consumer Discretionary"},
+    "NIO":   {"name": "NIO Inc",                    "sector": "Consumer Discretionary"},
+}
+
+_INDIA_TICKER_UNIVERSE: dict[str, dict[str, str]] = {
+    # ── Large Cap (Nifty 50) ─────────────────────────────────────────────────
+    "RELIANCE":   {"name": "Reliance Industries",            "sector": "Energy"},
+    "TCS":        {"name": "Tata Consultancy Services",      "sector": "Technology"},
+    "HDFCBANK":   {"name": "HDFC Bank",                      "sector": "Financial Services"},
+    "ICICIBANK":  {"name": "ICICI Bank",                     "sector": "Financial Services"},
+    "INFY":       {"name": "Infosys",                        "sector": "Technology"},
+    "KOTAKBANK":  {"name": "Kotak Mahindra Bank",            "sector": "Financial Services"},
+    "SBIN":       {"name": "State Bank of India",            "sector": "Financial Services"},
+    "BHARTIARTL": {"name": "Bharti Airtel",                  "sector": "Communication Services"},
+    "LT":         {"name": "Larsen & Toubro",                "sector": "Industrials"},
+    "ITC":        {"name": "ITC Limited",                    "sector": "Consumer Staples"},
+    "WIPRO":      {"name": "Wipro Limited",                  "sector": "Technology"},
+    "AXISBANK":   {"name": "Axis Bank",                      "sector": "Financial Services"},
+    "MARUTI":     {"name": "Maruti Suzuki India",            "sector": "Consumer Discretionary"},
+    "SUNPHARMA":  {"name": "Sun Pharmaceutical",             "sector": "Healthcare"},
+    "ULTRACEMCO": {"name": "UltraTech Cement",               "sector": "Materials"},
+    "TITAN":      {"name": "Titan Company",                  "sector": "Consumer Discretionary"},
+    "NTPC":       {"name": "NTPC Limited",                   "sector": "Utilities"},
+    "POWERGRID":  {"name": "Power Grid Corporation",         "sector": "Utilities"},
+    "COALINDIA":  {"name": "Coal India",                     "sector": "Energy"},
+    "ONGC":       {"name": "Oil & Natural Gas Corporation",  "sector": "Energy"},
+    "BPCL":       {"name": "Bharat Petroleum",               "sector": "Energy"},
+    "BAJFINANCE": {"name": "Bajaj Finance",                  "sector": "Financial Services"},
+    "BAJAJFINSV": {"name": "Bajaj Finserv",                  "sector": "Financial Services"},
+    "HDFCLIFE":   {"name": "HDFC Life Insurance",            "sector": "Financial Services"},
+    "SBILIFE":    {"name": "SBI Life Insurance",             "sector": "Financial Services"},
+    "NESTLEIND":  {"name": "Nestle India",                   "sector": "Consumer Staples"},
+    "HINDUNILVR": {"name": "Hindustan Unilever",             "sector": "Consumer Staples"},
+    "DIVISLAB":   {"name": "Divi's Laboratories",            "sector": "Healthcare"},
+    "DRREDDY":    {"name": "Dr. Reddy's Laboratories",      "sector": "Healthcare"},
+    "CIPLA":      {"name": "Cipla Limited",                  "sector": "Healthcare"},
+    "TATASTEEL":  {"name": "Tata Steel",                     "sector": "Materials"},
+    "JSWSTEEL":   {"name": "JSW Steel",                      "sector": "Materials"},
+    "HINDALCO":   {"name": "Hindalco Industries",            "sector": "Materials"},
+    "TECHM":      {"name": "Tech Mahindra",                  "sector": "Technology"},
+    "HCLTECH":    {"name": "HCL Technologies",               "sector": "Technology"},
+    "MPHASIS":    {"name": "Mphasis Limited",                "sector": "Technology"},
+    "LTIM":       {"name": "LTIMindtree",                    "sector": "Technology"},
+    "TATAMOTORS": {"name": "Tata Motors",                    "sector": "Consumer Discretionary"},
+    "APOLLOHOSP": {"name": "Apollo Hospitals",               "sector": "Healthcare"},
+    "ASIANPAINT": {"name": "Asian Paints",                   "sector": "Materials"},
+    "EICHERMOT":  {"name": "Eicher Motors",                  "sector": "Consumer Discretionary"},
+    "GRASIM":     {"name": "Grasim Industries",              "sector": "Materials"},
+    "INDUSINDBK": {"name": "IndusInd Bank",                  "sector": "Financial Services"},
+    "VEDL":       {"name": "Vedanta Limited",                "sector": "Materials"},
+    "HINDPETRO":  {"name": "Hindustan Petroleum",            "sector": "Energy"},
+    "TATAPOWER":  {"name": "Tata Power Company",             "sector": "Utilities"},
+    "BIOCON":     {"name": "Biocon Limited",                 "sector": "Healthcare"},
+    "OFSS":       {"name": "Oracle Financial Services",      "sector": "Technology"},
+    "PERSISTENT": {"name": "Persistent Systems",             "sector": "Technology"},
+    "COFORGE":    {"name": "Coforge Limited",                "sector": "Technology"},
+    # ── Mid Cap / Growth ─────────────────────────────────────────────────────
+    "ZOMATO":     {"name": "Zomato Limited",                 "sector": "Consumer Discretionary"},
+    "IRCTC":      {"name": "IRCTC",                          "sector": "Consumer Discretionary"},
+    "CHOLAFIN":   {"name": "Cholamandalam Investment",       "sector": "Financial Services"},
+    "MUTHOOTFIN": {"name": "Muthoot Finance",                "sector": "Financial Services"},
+    "PIIND":      {"name": "PI Industries",                  "sector": "Materials"},
+    "SAIL":       {"name": "Steel Authority of India",       "sector": "Materials"},
+    "ADANIENT":   {"name": "Adani Enterprises",              "sector": "Industrials"},
+    "ADANIPORTS": {"name": "Adani Ports & SEZ",             "sector": "Industrials"},
+    "CONCOR":     {"name": "Container Corporation of India", "sector": "Industrials"},
+    "DABUR":      {"name": "Dabur India",                    "sector": "Consumer Staples"},
+    "MARICO":     {"name": "Marico Limited",                 "sector": "Consumer Staples"},
+}
+
+# Maps app period → (yf download period, use_last_day_change).
+# use_last_day_change=True:  change = close[-1]/close[-2]-1  (single trading day)
+# use_last_day_change=False: change = close[-1]/close[0]-1   (full period start→end)
+# Download 5d for both 1d and 1w so we always have ≥2 rows even across weekends.
+_YF_DOWNLOAD_PERIOD: dict[str, tuple[str, bool]] = {
+    "1d": ("5d",  True),   # Download 5 trading days → last-day change
+    "1w": ("5d",  False),  # Download 5 trading days → start-to-end change
+    "1m": ("1mo", False),  # Download 1 month       → start-to-end change
+}
+
 # ── Gemini + Google Search prompts ────────────────────────────────────────────
+# Used as fallback when yf.download is unavailable or returns too few results.
 # We ask Gemini to output a pipe-delimited table instead of JSON.
-# Reason: Vertex AI blocks responseSchema when googleSearch grounding is active
-# (returns HTTP 400). Prose is hard to parse. Pipe-delimited text is easy to
-# parse deterministically in Python with no second AI call needed.
+# Reason: Vertex AI blocks responseSchema when googleSearch grounding is active.
 
 _TABLE_FORMAT = """
 Output ONLY a pipe-delimited data table — no headers, no prose, no markdown.
@@ -151,60 +358,20 @@ class MarketDataService:
 
     async def get_us_gainers(self, period: str = "1d") -> list[StockGainer]:
         try:
-            # Three parallel Gemini calls: NYSE, NASDAQ, and a catalyst scanner.
-            # NYSE/NASDAQ find stocks by % gain; catalyst scanner finds stocks by news quality.
-            nyse_raw, nasdaq_raw, catalyst_raw = await asyncio.gather(
-                self._fetch_gainers_gemini(_us_nyse_prompt(period), "us-nyse"),
-                self._fetch_gainers_gemini(_us_nasdaq_prompt(period), "us-nasdaq"),
-                self._fetch_gainers_gemini(_us_catalyst_prompt(period), "us-catalyst"),
-            )
-            # Build and deduplicate NYSE+NASDAQ gainers
-            gainers = self._build_gainers(nyse_raw + nasdaq_raw, "us")
-            seen: set[str] = set()
-            deduped: list[StockGainer] = []
-            for g in gainers:
-                if g.ticker not in seen:
-                    seen.add(g.ticker)
-                    deduped.append(g)
-            gainers = deduped
-
-            # Build catalyst plays and merge — upgrades movers to confirmed, adds new catalyst stocks
-            catalyst_plays = self._build_gainers(catalyst_raw, "us")
-            merged = self._merge_gainers_and_catalysts(gainers, catalyst_plays)
-
-            log.info(
-                "market_data.us_gainers_fetched",
-                count=len(merged),
-                confirmed=sum(1 for g in merged if g.signal_tier == "confirmed"),
-                catalyst=sum(1 for g in merged if g.signal_tier == "catalyst"),
-                mover=sum(1 for g in merged if g.signal_tier == "mover"),
-            )
-            return merged[: self._top_n]
+            if period == "1d":
+                return await self._get_us_gainers_1d()
+            return await self._get_us_gainers_period(period)
         except Exception as exc:
-            log.error("market_data.us_gainers_error", error=str(exc))
+            log.error("market_data.us_gainers_error", period=period, error=str(exc))
             raise MarketDataError(f"Failed to fetch US gainers: {exc}") from exc
 
     async def get_india_gainers(self, period: str = "1d") -> list[StockGainer]:
         try:
-            # Two parallel Gemini calls: India gainers + India catalyst scanner
-            india_raw, catalyst_raw = await asyncio.gather(
-                self._fetch_gainers_gemini(_india_gainers_prompt(period), "india"),
-                self._fetch_gainers_gemini(_india_catalyst_prompt(period), "india-catalyst"),
-            )
-            gainers = self._build_gainers(india_raw, "india")
-            catalyst_plays = self._build_gainers(catalyst_raw, "india")
-            merged = self._merge_gainers_and_catalysts(gainers, catalyst_plays)
-
-            log.info(
-                "market_data.india_gainers_fetched",
-                count=len(merged),
-                confirmed=sum(1 for g in merged if g.signal_tier == "confirmed"),
-                catalyst=sum(1 for g in merged if g.signal_tier == "catalyst"),
-                mover=sum(1 for g in merged if g.signal_tier == "mover"),
-            )
-            return merged[: self._top_n]
+            if period == "1d":
+                return await self._get_india_gainers_1d()
+            return await self._get_india_gainers_period(period)
         except Exception as exc:
-            log.error("market_data.india_gainers_error", error=str(exc))
+            log.error("market_data.india_gainers_error", period=period, error=str(exc))
             raise MarketDataError(f"Failed to fetch India gainers: {exc}") from exc
 
     async def get_fundamentals(self, ticker: str, market: Market) -> FundamentalsData:
@@ -216,6 +383,390 @@ class MarketDataService:
             log.error("market_data.fundamentals_error", ticker=ticker, error=str(exc))
             raise MarketDataError(f"Failed to fetch fundamentals for {ticker}: {exc}") from exc
 
+    # ── Fast path: yf.download + batch Gemini catalyst ────────────────────────
+    # Architecture: yf.download (~8-12s for 100+ tickers, handles auth internally)
+    # + one Gemini call with no Google Search grounding (~1-2s, parallel) = ~10-13s total.
+    # This replaces the Yahoo Finance screener/spark APIs which return 429 without crumb auth.
+
+    async def _get_us_gainers_yf_download(self, period: str) -> list[dict[str, Any]]:
+        """
+        Download price history for all US universe tickers via yf.download and
+        return those with positive period returns, sorted by gain descending.
+
+        yf.download handles Yahoo Finance auth internally — no 429s.
+        Falls back to [] on any error so callers can degrade to Gemini gracefully.
+        """
+        yf_period, use_last_day = _YF_DOWNLOAD_PERIOD[period]
+        tickers_str = " ".join(_US_TICKER_UNIVERSE.keys())
+
+        try:
+            df = await asyncio.to_thread(
+                yf.download,
+                tickers_str,
+                period=yf_period,
+                auto_adjust=True,
+                progress=False,
+            )
+        except Exception as exc:
+            log.warning("market_data.yf_download_us_failed", period=period, error=str(exc))
+            return []
+
+        if df.empty or len(df) < 2:
+            log.warning(
+                "market_data.yf_download_us_insufficient_rows",
+                rows=len(df),
+                period=period,
+            )
+            return []
+
+        results: list[dict[str, Any]] = []
+        for ticker, meta in _US_TICKER_UNIVERSE.items():
+            try:
+                close_series = df["Close"][ticker].dropna()
+                vol_series = df["Volume"][ticker].dropna()
+
+                if len(close_series) < 2:
+                    continue
+
+                if use_last_day:
+                    first = float(close_series.iloc[-2])
+                    last = float(close_series.iloc[-1])
+                else:
+                    first = float(close_series.iloc[0])
+                    last = float(close_series.iloc[-1])
+
+                last_volume = int(vol_series.iloc[-1]) if not vol_series.empty else 0
+
+                if first <= 0:
+                    continue
+
+                change_pct = round((last / first - 1) * 100, 2)
+                change_abs = round(last - first, 2)
+
+                if last < 5 or last_volume < 500_000 or change_pct <= 0:
+                    continue
+
+                results.append({
+                    "ticker": ticker,
+                    "name": meta["name"],
+                    "price": round(last, 2),
+                    "change_pct": change_pct,
+                    "change_abs": change_abs,
+                    "volume": last_volume,
+                    "sector": meta.get("sector"),
+                    "has_catalyst": False,
+                })
+            except Exception:
+                continue
+
+        results.sort(key=lambda r: r["change_pct"], reverse=True)
+        log.info(
+            "market_data.yf_download_us_done",
+            period=period,
+            gainers=len(results),
+            top=results[0]["ticker"] if results else None,
+        )
+        return results
+
+    async def _get_india_gainers_yf_download(self, period: str) -> list[dict[str, Any]]:
+        """
+        Download price history for all India NSE universe tickers via yf.download.
+        Appends .NS suffix for Yahoo Finance; strips it in the results.
+        Falls back to [] on any error.
+        """
+        yf_period, use_last_day = _YF_DOWNLOAD_PERIOD[period]
+        # Yahoo Finance requires .NS suffix for NSE stocks
+        yf_tickers_str = " ".join(f"{t}.NS" for t in _INDIA_TICKER_UNIVERSE.keys())
+
+        try:
+            df = await asyncio.to_thread(
+                yf.download,
+                yf_tickers_str,
+                period=yf_period,
+                auto_adjust=True,
+                progress=False,
+            )
+        except Exception as exc:
+            log.warning("market_data.yf_download_india_failed", period=period, error=str(exc))
+            return []
+
+        if df.empty or len(df) < 2:
+            log.warning(
+                "market_data.yf_download_india_insufficient_rows",
+                rows=len(df),
+                period=period,
+            )
+            return []
+
+        results: list[dict[str, Any]] = []
+        for ticker, meta in _INDIA_TICKER_UNIVERSE.items():
+            yf_sym = f"{ticker}.NS"
+            try:
+                close_series = df["Close"][yf_sym].dropna()
+                vol_series = df["Volume"][yf_sym].dropna()
+
+                if len(close_series) < 2:
+                    continue
+
+                if use_last_day:
+                    first = float(close_series.iloc[-2])
+                    last = float(close_series.iloc[-1])
+                else:
+                    first = float(close_series.iloc[0])
+                    last = float(close_series.iloc[-1])
+
+                last_volume = int(vol_series.iloc[-1]) if not vol_series.empty else 0
+
+                if first <= 0:
+                    continue
+
+                change_pct = round((last / first - 1) * 100, 2)
+                change_abs = round(last - first, 2)
+
+                # India filters: ₹50 min price, 100K min volume
+                if last < 50 or last_volume < 100_000 or change_pct <= 0:
+                    continue
+
+                results.append({
+                    "ticker": ticker,   # plain NSE symbol, no .NS
+                    "name": meta["name"],
+                    "price": round(last, 2),
+                    "change_pct": change_pct,
+                    "change_abs": change_abs,
+                    "volume": last_volume,
+                    "sector": meta.get("sector"),
+                    "has_catalyst": False,
+                })
+            except Exception:
+                continue
+
+        results.sort(key=lambda r: r["change_pct"], reverse=True)
+        log.info(
+            "market_data.yf_download_india_done",
+            period=period,
+            gainers=len(results),
+            top=results[0]["ticker"] if results else None,
+        )
+        return results
+
+    async def _classify_catalysts_batch(
+        self, tickers: list[str], market: str
+    ) -> set[str]:
+        """
+        Ask Gemini (without Google Search grounding) which tickers have known catalysts.
+        Single fast call (~1-2s) — no grounding penalty.
+        Returns a set of tickers Gemini identifies as having significant catalysts.
+        Falls back to empty set on any failure (all stocks get 'mover' tier).
+        """
+        if not tickers or not self._settings.google_cloud_project:
+            return set()
+
+        ticker_list = ", ".join(tickers[:30])  # cap to stay within token budget
+        market_desc = "US (NYSE/NASDAQ)" if market == "us" else "NSE India"
+        prompt = (
+            f"Given these {market_desc} stocks: {ticker_list}\n\n"
+            "Based on your training knowledge, which ones have had significant news catalysts "
+            "recently (e.g. FDA approval, government contract, earnings beat, major partnership, "
+            "acquisition, clinical trial result, index inclusion)?\n\n"
+            "Reply with ONLY the ticker symbols with clear catalysts, comma-separated "
+            "(example: NVDA, AAPL, TSLA). If none are known, reply 'NONE'. No explanation."
+        )
+
+        try:
+            token = await asyncio.to_thread(get_cached_token)
+            project = self._settings.google_cloud_project
+            region = self._settings.google_cloud_region
+            model = self._settings.vertex_ai_model_flash
+            url = (
+                f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}"
+                f"/locations/{region}/publishers/google/models/{model}:generateContent"
+            )
+            payload: dict[str, Any] = {
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.0,
+                    "maxOutputTokens": 200,
+                    # Intentionally no googleSearch tool — avoids grounding latency
+                },
+            }
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    url, json=payload, headers={"Authorization": f"Bearer {token}"}
+                )
+            if not resp.is_success:
+                log.warning("market_data.catalyst_batch_http_error", status=resp.status_code)
+                return set()
+
+            parts = resp.json()["candidates"][0]["content"].get("parts", [])
+            raw = "".join(p.get("text", "") for p in parts).strip().upper()
+
+            if not raw or raw.startswith("NONE"):
+                return set()
+
+            ticker_set = set(tickers)
+            catalyst_tickers: set[str] = set()
+            for t in raw.split(","):
+                cleaned = re.sub(r"[^A-Z0-9]", "", t.strip())
+                if cleaned and cleaned in ticker_set:
+                    catalyst_tickers.add(cleaned)
+
+            log.info("market_data.catalyst_batch_done", count=len(catalyst_tickers))
+            return catalyst_tickers
+        except Exception as exc:
+            log.warning("market_data.catalyst_batch_failed", error=str(exc))
+            return set()
+
+    # ── US fast paths ─────────────────────────────────────────────────────────
+
+    async def _get_us_gainers_1d(self) -> list[StockGainer]:
+        """
+        Fast path for today's US gainers.
+        yf.download (~8-12s) + batch catalyst classify (~1-2s, in parallel) = ~10-13s total.
+        Falls back to Gemini+Google Search if yf.download returns < 5 stocks.
+        """
+        yf_raw = await self._get_us_gainers_yf_download("1d")
+
+        if len(yf_raw) >= 5:
+            tickers = [r["ticker"] for r in yf_raw]
+            catalyst_tickers = await self._classify_catalysts_batch(tickers, "us")
+            for r in yf_raw:
+                if r["ticker"] in catalyst_tickers:
+                    r["has_catalyst"] = True
+            gainers = self._build_gainers(yf_raw, "us")
+            log.info("market_data.us_1d_yf_path", count=len(gainers))
+            return gainers[: self._top_n]
+
+        log.warning(
+            "market_data.us_yf_insufficient_fallback",
+            count=len(yf_raw),
+        )
+        return await self._get_us_gainers_gemini("1d")
+
+    async def _get_us_gainers_period(self, period: str) -> list[StockGainer]:
+        """
+        Fast path for US 1w/1m gainers.
+        yf.download computes period returns directly + catalyst classify → ~10-13s total.
+        Falls back to Gemini+Google Search if yf.download returns < 5 stocks.
+        """
+        yf_raw = await self._get_us_gainers_yf_download(period)
+
+        if len(yf_raw) >= 5:
+            tickers = [r["ticker"] for r in yf_raw]
+            catalyst_tickers = await self._classify_catalysts_batch(tickers, "us")
+            for r in yf_raw:
+                if r["ticker"] in catalyst_tickers:
+                    r["has_catalyst"] = True
+            gainers = self._build_gainers(yf_raw, "us")
+            log.info("market_data.us_period_yf_path", period=period, count=len(gainers))
+            return gainers[: self._top_n]
+
+        log.warning(
+            "market_data.us_yf_period_insufficient_fallback",
+            period=period,
+            count=len(yf_raw),
+        )
+        return await self._get_us_gainers_gemini(period)
+
+    # ── India fast paths ──────────────────────────────────────────────────────
+
+    async def _get_india_gainers_1d(self) -> list[StockGainer]:
+        """
+        Fast path for today's India gainers.
+        yf.download + batch catalyst classify → ~10-13s total.
+        Falls back to Gemini+Google Search if yf.download returns < 5 stocks.
+        """
+        yf_raw = await self._get_india_gainers_yf_download("1d")
+
+        if len(yf_raw) >= 5:
+            tickers = [r["ticker"] for r in yf_raw]
+            catalyst_tickers = await self._classify_catalysts_batch(tickers, "india")
+            for r in yf_raw:
+                if r["ticker"] in catalyst_tickers:
+                    r["has_catalyst"] = True
+            gainers = self._build_gainers(yf_raw, "india")
+            log.info("market_data.india_1d_yf_path", count=len(gainers))
+            return gainers[: self._top_n]
+
+        log.warning(
+            "market_data.india_yf_insufficient_fallback",
+            count=len(yf_raw),
+        )
+        return await self._get_india_gainers_gemini("1d")
+
+    async def _get_india_gainers_period(self, period: str) -> list[StockGainer]:
+        """
+        Fast path for India 1w/1m gainers.
+        yf.download computes period returns directly + catalyst classify.
+        Falls back to Gemini+Google Search if yf.download returns < 5 stocks.
+        """
+        yf_raw = await self._get_india_gainers_yf_download(period)
+
+        if len(yf_raw) >= 5:
+            tickers = [r["ticker"] for r in yf_raw]
+            catalyst_tickers = await self._classify_catalysts_batch(tickers, "india")
+            for r in yf_raw:
+                if r["ticker"] in catalyst_tickers:
+                    r["has_catalyst"] = True
+            gainers = self._build_gainers(yf_raw, "india")
+            log.info("market_data.india_period_yf_path", period=period, count=len(gainers))
+            return gainers[: self._top_n]
+
+        log.warning(
+            "market_data.india_yf_period_insufficient_fallback",
+            period=period,
+            count=len(yf_raw),
+        )
+        return await self._get_india_gainers_gemini(period)
+
+    # ── Legacy paths: Gemini + Google Search (slow, ~30-60s) ─────────────────
+    # Used only as fallback when yf.download is unavailable or returns too few results.
+
+    async def _get_us_gainers_gemini(self, period: str) -> list[StockGainer]:
+        """Gemini + Google Search for US (slow fallback, also used for 1w/1m)."""
+        nyse_raw, nasdaq_raw, catalyst_raw = await asyncio.gather(
+            self._fetch_gainers_gemini(_us_nyse_prompt(period), "us-nyse"),
+            self._fetch_gainers_gemini(_us_nasdaq_prompt(period), "us-nasdaq"),
+            self._fetch_gainers_gemini(_us_catalyst_prompt(period), "us-catalyst"),
+        )
+        gainers = self._build_gainers(nyse_raw + nasdaq_raw, "us")
+        seen: set[str] = set()
+        deduped: list[StockGainer] = []
+        for g in gainers:
+            if g.ticker not in seen:
+                seen.add(g.ticker)
+                deduped.append(g)
+        gainers = deduped
+        catalyst_plays = self._build_gainers(catalyst_raw, "us")
+        merged = self._merge_gainers_and_catalysts(gainers, catalyst_plays)
+        log.info(
+            "market_data.us_gainers_gemini_fetched",
+            period=period,
+            count=len(merged),
+            confirmed=sum(1 for g in merged if g.signal_tier == "confirmed"),
+            catalyst=sum(1 for g in merged if g.signal_tier == "catalyst"),
+            mover=sum(1 for g in merged if g.signal_tier == "mover"),
+        )
+        return merged[: self._top_n]
+
+    async def _get_india_gainers_gemini(self, period: str) -> list[StockGainer]:
+        """Gemini + Google Search for India (slow fallback)."""
+        india_raw, catalyst_raw = await asyncio.gather(
+            self._fetch_gainers_gemini(_india_gainers_prompt(period), "india"),
+            self._fetch_gainers_gemini(_india_catalyst_prompt(period), "india-catalyst"),
+        )
+        gainers = self._build_gainers(india_raw, "india")
+        catalyst_plays = self._build_gainers(catalyst_raw, "india")
+        merged = self._merge_gainers_and_catalysts(gainers, catalyst_plays)
+        log.info(
+            "market_data.india_gainers_gemini_fetched",
+            period=period,
+            count=len(merged),
+            confirmed=sum(1 for g in merged if g.signal_tier == "confirmed"),
+            catalyst=sum(1 for g in merged if g.signal_tier == "catalyst"),
+            mover=sum(1 for g in merged if g.signal_tier == "mover"),
+        )
+        return merged[: self._top_n]
+
     # ── Gemini + Google Search (pipe-delimited table) ─────────────────────────
 
     async def _fetch_gainers_gemini(
@@ -223,7 +774,7 @@ class MarketDataService:
     ) -> list[dict[str, Any]]:
         """
         Ask Gemini (with Google Search grounding) to return a pipe-delimited
-        table of today's top gainers.
+        table of top gainers.
 
         Why pipe-delimited instead of JSON?
         Vertex AI rejects requests combining googleSearch grounding with
@@ -394,9 +945,6 @@ def _parse_pipe_table(text: str) -> list[dict[str, Any]]:
         parts = [p.strip() for p in line.split("|")]
 
         # ── Handle markdown table rows: | A | B | C | → strip empty edge fields ──
-        # When Gemini wraps each row in pipes the split produces an empty string
-        # at index 0 and the last position.  Without this fix parts[0] == "" and
-        # the ticker check below skips every row → 0 gainers.
         if parts and not parts[0]:
             parts = parts[1:]
         if parts and not parts[-1]:

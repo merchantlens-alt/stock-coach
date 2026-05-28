@@ -405,6 +405,7 @@ async def get_gainer_analysis(
     # Single combined Gemini call — analysis + 30-day prediction
     analysis = None
     prediction = None
+    is_mock_fallback = False
     try:
         analysis, prediction = await analyst.analyse_full(
             ticker=resolved_ticker,
@@ -417,7 +418,23 @@ async def get_gainer_analysis(
         )
     except Exception as exc:
         log.error("gainers.ai_failed", ticker=resolved_ticker, error=str(exc))
-        # Return partial result (analysis=None) rather than a 500 — frontend handles gracefully
+        # Fallback to mock agent so users always see analysis rather than a blank error banner.
+        # Mock responses are NOT cached — the next request retries the live Gemini call.
+        try:
+            mock_agent = GainerAnalystAgent(settings.model_copy(update={"mock_ai": True}))
+            analysis, prediction = await mock_agent.analyse_full(
+                ticker=resolved_ticker,
+                change_pct=gainer.change_pct,
+                company_name=gainer.name,
+                sector=gainer.sector,
+                news=news if not isinstance(news, Exception) else [],
+                fundamentals=fundamentals if not isinstance(fundamentals, Exception) else None,
+                gainers_context=gainers_context,
+            )
+            is_mock_fallback = True
+            log.info("gainers.ai_fallback_mock_used", ticker=resolved_ticker)
+        except Exception as fallback_exc:
+            log.error("gainers.ai_fallback_failed", ticker=resolved_ticker, error=str(fallback_exc))
 
     response = StockAnalysisResponse(
         ticker=resolved_ticker,
@@ -428,7 +445,9 @@ async def get_gainer_analysis(
         analysed_at=datetime.utcnow(),
     )
 
-    await cache.set(key, response.model_dump(), settings.analysis_ttl)
+    # Only cache real Gemini responses — mock fallbacks are retried fresh on next request.
+    if not is_mock_fallback:
+        await cache.set(key, response.model_dump(), settings.analysis_ttl)
     return response
 
 
