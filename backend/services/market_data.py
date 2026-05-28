@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 from datetime import date
 from typing import Any, Optional
@@ -149,6 +150,19 @@ _US_TICKER_UNIVERSE: dict[str, dict[str, str]] = {
     "RIVN":  {"name": "Rivian Automotive",          "sector": "Consumer Discretionary"},
     "LCID":  {"name": "Lucid Group",                "sector": "Consumer Discretionary"},
     "NIO":   {"name": "NIO Inc",                    "sector": "Consumer Discretionary"},
+    # ── High-volatility small-caps (space, AI, biotech) ──────────────────────
+    "ASTC":  {"name": "Astrotech Corporation",      "sector": "Industrials"},
+    "ACHR":  {"name": "Archer Aviation",            "sector": "Industrials"},
+    "JOBY":  {"name": "Joby Aviation",              "sector": "Industrials"},
+    "SOUN":  {"name": "SoundHound AI",              "sector": "Technology"},
+    "BBAI":  {"name": "BigBear.ai Holdings",        "sector": "Technology"},
+    "QUBT":  {"name": "Quantum Computing Inc",      "sector": "Technology"},
+    "ARQQ":  {"name": "Arqit Quantum",              "sector": "Technology"},
+    "MANU":  {"name": "Manchester United",          "sector": "Communication Services"},
+    "OKLO":  {"name": "Oklo Inc",                   "sector": "Utilities"},
+    "SMR":   {"name": "NuScale Power",              "sector": "Utilities"},
+    "DY":    {"name": "Dycom Industries",           "sector": "Industrials"},
+    "PENN":  {"name": "PENN Entertainment",         "sector": "Consumer Discretionary"},
 }
 
 _INDIA_TICKER_UNIVERSE: dict[str, dict[str, str]] = {
@@ -411,7 +425,9 @@ class MarketDataService:
             price = float(q.get("regularMarketPrice") or 0)
             change_pct = float(q.get("regularMarketChangePercent") or 0)
             volume = int(q.get("regularMarketVolume") or 0)
-            if price < 5 or change_pct <= 0 or volume < 500_000:
+            # Use lower volume floor (100K) than 1w/1m paths so volatile small-caps
+            # with massive % gains (e.g. ASTC +400%) aren't silently filtered out.
+            if price < 1 or change_pct <= 0 or volume < 100_000:
                 continue
             results.append({
                 "ticker": ticker,
@@ -1238,8 +1254,14 @@ def fundamentals_from_info(info: dict[str, Any]) -> FundamentalsData:
 
 
 def _safe_float(v: object) -> Optional[float]:
+    """Convert to float, returning None for None, non-numeric, inf, and nan.
+    yfinance returns inf/nan for unavailable metrics (e.g. forwardPE on loss-making
+    stocks), which Python accepts but json.dumps rejects with ValueError."""
     try:
-        return float(v) if v is not None else None  # type: ignore[arg-type]
+        result = float(v) if v is not None else None  # type: ignore[arg-type]
+        if result is None or not math.isfinite(result):
+            return None
+        return result
     except (TypeError, ValueError):
         return None
 

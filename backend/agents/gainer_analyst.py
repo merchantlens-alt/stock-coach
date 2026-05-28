@@ -339,7 +339,7 @@ class GainerAnalystAgent:
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.1,
-                "maxOutputTokens": 1500,
+                "maxOutputTokens": 2500,   # raised from 1500 — combined schema needs ~1800-2200 tokens
                 "responseMimeType": "application/json",
                 "responseSchema": _COMBINED_SCHEMA,
             },
@@ -358,10 +358,40 @@ class GainerAnalystAgent:
             resp = await client.post(url, json=payload, headers={"Authorization": f"Bearer {token}"})
             resp.raise_for_status()
 
-        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        raw_resp = resp.json()
+
+        # Log finish reason so truncation is visible in Cloud Run logs
+        finish_reason = (
+            raw_resp.get("candidates", [{}])[0].get("finishReason", "UNKNOWN")
+        )
+        if finish_reason not in ("STOP", "UNKNOWN"):
+            log.warning(
+                "gainer_analyst.gemini_non_stop_finish",
+                ticker=ticker,
+                finish_reason=finish_reason,
+            )
+
         try:
-            return json.loads(text)
+            text = raw_resp["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError) as exc:
+            log.error(
+                "gainer_analyst.gemini_unexpected_shape",
+                ticker=ticker,
+                response_keys=list(raw_resp.keys()),
+            )
+            raise AIAgentError(f"Unexpected Gemini response shape for {ticker}") from exc
+
+        try:
+            parsed = json.loads(text)
+            log.info("gainer_analyst.gemini_ok", ticker=ticker, finish_reason=finish_reason)
+            return parsed
         except json.JSONDecodeError as exc:
+            log.error(
+                "gainer_analyst.gemini_invalid_json",
+                ticker=ticker,
+                finish_reason=finish_reason,
+                preview=text[:300],
+            )
             raise AIAgentError(f"Gemini returned invalid JSON for {ticker}: {text[:200]}") from exc
 
 

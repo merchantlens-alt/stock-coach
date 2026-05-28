@@ -38,7 +38,9 @@ export function Dashboard() {
     }
   }, [activeTicker, market, queryClient]);
 
-  const { data: gainersData, isLoading: gainersLoading, error: gainersError, refetch } = useGainers(market, period);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const { data: gainersData, isLoading: gainersLoading, error: gainersError } = useGainers(market, period);
 
   const allGainers = gainersData?.gainers ?? [];
   const filteredGainers = tierFilter === "all"
@@ -80,9 +82,19 @@ export function Dashboard() {
     setSearchedTicker(null);
   }
 
-  function handleRefresh() {
-    queryClient.invalidateQueries({ queryKey: ["gainers", market, period] });
-    refetch();
+  async function handleRefresh() {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      // Pass refresh=true so backend skips Redis cache and fetches fresh data
+      const result = await api.getGainers(market, period, { refresh: true });
+      queryClient.setQueryData(["gainers", market, period], result);
+    } catch {
+      // If the forced refresh fails, invalidate so next render re-fetches normally
+      queryClient.invalidateQueries({ queryKey: ["gainers", market, period] });
+    } finally {
+      setIsRefreshing(false);
+    }
   }
 
   function handlePrefetch(ticker: string) {
@@ -124,11 +136,11 @@ export function Dashboard() {
             </div>
             <button
               onClick={handleRefresh}
-              disabled={gainersLoading}
+              disabled={isRefreshing || gainersLoading}
               className="p-2 rounded-lg text-gray-400 hover:bg-gray-200 hover:text-gray-600 transition-colors disabled:opacity-40"
-              title="Refresh"
+              title="Force refresh (bypass cache)"
             >
-              <RefreshCw size={15} className={gainersLoading ? "animate-spin" : ""} />
+              <RefreshCw size={15} className={(isRefreshing || gainersLoading) ? "animate-spin" : ""} />
             </button>
           </div>
         </div>

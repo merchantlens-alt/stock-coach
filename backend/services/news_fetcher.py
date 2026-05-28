@@ -6,6 +6,7 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 import httpx
+import yfinance as yf
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from core.config import Settings
@@ -26,16 +27,73 @@ class NewsFetcher:
 
     async def get_news(self, ticker: str, company_name: str, limit: int = 8) -> list[NewsItem]:
         """
-        Fetch recent news for a ticker. Falls back to Google News RSS
-        if NewsAPI key is not configured or the request fails.
+        Fetch recent news for a ticker.
+        Runs NewsAPI/Google News RSS + yfinance Yahoo Finance news in parallel,
+        deduplicates by title, and returns the most recent `limit` articles.
+        yfinance news has broader coverage of stock-moving events (press releases,
+        earnings, FDA, government contracts) that NewsAPI often misses.
         """
+        tasks = [self._fetch_yf_news(ticker, limit)]
         if self._api_key:
-            try:
-                return await self._fetch_newsapi(ticker, company_name, limit)
-            except Exception as exc:
-                log.warning("news.newsapi_failed", ticker=ticker, error=str(exc))
+            tasks.append(self._fetch_newsapi(ticker, company_name, limit))
+        else:
+            tasks.append(self._fetch_google_news_rss(ticker, company_name, limit))
 
-        return await self._fetch_google_news_rss(ticker, company_name, limit)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        seen_titles: set[str] = set()
+        merged: list[NewsItem] = []
+        for batch in results:
+            if isinstance(batch, Exception):
+                continue
+            for item in batch:
+                key = item.title.lower()[:60]
+                if key not in seen_titles:
+                    seen_titles.add(key)
+                    merged.append(item)
+
+        # Sort by recency (None published_at goes last), return top limit
+        merged.sort(key=lambda x: x.published_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        return merged[:limit]
+
+    async def _fetch_yf_news(self, ticker: str, limit: int) -> list[NewsItem]:
+        """
+        Fetch news from yfinance (Yahoo Finance) — no API key needed.
+        Handles both US tickers and NSE tickers (with/without .NS suffix).
+        """
+        try:
+            raw = await asyncio.to_thread(lambda: yf.Ticker(ticker).news)
+            items: list[NewsItem] = []
+            for item in (raw or [])[:limit]:
+                content = item.get("content", {})
+                title = content.get("title") or item.get("title", "")
+                publisher = (
+                    content.get("provider", {}).get("displayName")
+                    or item.get("publisher", "Yahoo Finance")
+                )
+                pub_time = content.get("pubDate") or item.get("providerPublishTime")
+                url = (
+                    content.get("canonicalUrl", {}).get("url")
+                    or item.get("link")
+                )
+                if isinstance(pub_time, (int, float)):
+                    published_at = datetime.fromtimestamp(pub_time, tz=timezone.utc)
+                elif isinstance(pub_time, str):
+                    published_at = _parse_dt(pub_time)
+                else:
+                    published_at = None
+                if title:
+                    items.append(NewsItem(
+                        title=title,
+                        source=publisher,
+                        published_at=published_at,
+                        url=url or None,
+                    ))
+            log.info("news.yf_news_done", ticker=ticker, count=len(items))
+            return items
+        except Exception as exc:
+            log.warning("news.yf_news_failed", ticker=ticker, error=str(exc))
+            return []
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     async def _fetch_newsapi(

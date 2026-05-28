@@ -640,6 +640,16 @@ class TestHelpers:
     def test_safe_float_with_numeric_string(self) -> None:
         assert _safe_float("3.14") == 3.14
 
+    def test_safe_float_rejects_inf(self) -> None:
+        """yfinance returns inf for forwardPE on loss-making stocks — must be None."""
+        assert _safe_float(float("inf")) is None
+
+    def test_safe_float_rejects_negative_inf(self) -> None:
+        assert _safe_float(float("-inf")) is None
+
+    def test_safe_float_rejects_nan(self) -> None:
+        assert _safe_float(float("nan")) is None
+
     def test_safe_int_with_valid_int(self) -> None:
         assert _safe_int(42) == 42
 
@@ -875,19 +885,21 @@ class TestYfScreenerMethods:
         assert result[0]["price"] == 950.0
         assert result[0]["change_pct"] == 8.5
 
-    async def test_us_filters_price_below_5(
+    async def test_us_filters_price_below_1(
         self, service: MarketDataService
     ) -> None:
+        # Threshold is $1 (lowered from $5 to allow volatile small-caps like ASTC)
         with patch("services.market_data._yf_screen",
-                   return_value=self._screen_result([self._quote(price=3.0)])):
+                   return_value=self._screen_result([self._quote(price=0.5)])):
             result = await service._get_us_gainers_screener()
         assert result == []
 
     async def test_us_filters_low_volume(
         self, service: MarketDataService
     ) -> None:
+        # Threshold is 100K (lowered from 500K to allow small-caps with big % moves)
         with patch("services.market_data._yf_screen",
-                   return_value=self._screen_result([self._quote(vol=100_000)])):
+                   return_value=self._screen_result([self._quote(vol=50_000)])):
             result = await service._get_us_gainers_screener()
         assert result == []
 
