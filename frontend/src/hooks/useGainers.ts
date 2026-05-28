@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { Market } from "../types";
+import type { Market, Period } from "../types";
 
 // Note: DETAIL_STALE / DETAIL_GC are reused for the analysis hook too.
 
@@ -13,10 +13,10 @@ const GAINERS_GC = 2 * 60 * 60 * 1000;
 const DETAIL_STALE = 30 * 60 * 1000;
 const DETAIL_GC = 6 * 60 * 60 * 1000;
 
-export function useGainers(market: Market) {
+export function useGainers(market: Market, period: Period = "1d") {
   return useQuery({
-    queryKey: ["gainers", market],
-    queryFn: () => api.getGainers(market),
+    queryKey: ["gainers", market, period],
+    queryFn: () => api.getGainers(market, period),
     staleTime: GAINERS_STALE,
     gcTime: GAINERS_GC,
     retry: 2,

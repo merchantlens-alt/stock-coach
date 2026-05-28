@@ -19,8 +19,13 @@ async function fetchJSON<T>(path: string, options: FetchOptions = {}): Promise<T
 }
 
 export const api = {
-  getGainers: (market: Market, options: FetchOptions = {}): Promise<GainersListResponse> =>
-    fetchJSON(`/gainers/${market}${options.refresh ? "?refresh=true" : ""}`, options),
+  getGainers: (market: Market, period = "1d", options: FetchOptions = {}): Promise<GainersListResponse> => {
+    const params = new URLSearchParams();
+    if (period !== "1d") params.set("period", period);
+    if (options.refresh) params.set("refresh", "true");
+    const qs = params.toString();
+    return fetchJSON(`/gainers/${market}${qs ? `?${qs}` : ""}`, options);
+  },
 
   getGainerDetail: (market: Market, ticker: string, options: FetchOptions = {}): Promise<GainerDetail> =>
     fetchJSON(`/gainers/${market}/${ticker}${options.refresh ? "?refresh=true" : ""}`, options),

@@ -165,6 +165,81 @@ class TestListGainers:
             client.get("/api/gainers/us?refresh=true")
         assert mock_fn.call_count >= 2
 
+    def test_empty_result_serves_last_known_good(
+        self, client: TestClient, sample_us_gainer: StockGainer
+    ) -> None:
+        """If Gemini returns [] but LKG exists, show LKG rather than a blank page."""
+        # First request succeeds — populates LKG
+        with patch(
+            "services.market_data.MarketDataService.get_gainers",
+            new=AsyncMock(return_value=[sample_us_gainer]),
+        ):
+            client.get("/api/gainers/us?refresh=true")
+
+        # Second request returns empty (market closed / Gemini glitch)
+        with patch(
+            "services.market_data.MarketDataService.get_gainers",
+            new=AsyncMock(return_value=[]),
+        ):
+            resp = client.get("/api/gainers/us?refresh=true")
+
+        body = resp.json()
+        assert resp.status_code == 200
+        assert len(body["gainers"]) > 0          # LKG served, not blank
+        assert body["from_cache"] is True
+
+    def test_empty_result_no_lkg_returns_empty_list(
+        self, client: TestClient
+    ) -> None:
+        """If no LKG exists and Gemini returns empty, return graceful empty response."""
+        with patch(
+            "services.market_data.MarketDataService.get_gainers",
+            new=AsyncMock(return_value=[]),
+        ):
+            resp = client.get("/api/gainers/us?refresh=true")
+        assert resp.status_code == 200
+        assert resp.json()["gainers"] == []
+
+    def test_market_aware_ttl_used_outside_hours(
+        self, client: TestClient, sample_us_gainer: StockGainer
+    ) -> None:
+        """Outside market hours, _gainers_ttl returns 24 h for the 1d period."""
+        from api.routes.gainers import _gainers_ttl
+        from unittest.mock import patch as _patch
+        from core.config import get_settings
+
+        settings = get_settings()
+        with _patch("api.routes.gainers._is_market_hours", return_value=False):
+            ttl = _gainers_ttl("us", "1d", settings)
+        assert ttl == 24 * 3600
+
+    def test_market_aware_ttl_used_during_hours(self, client: TestClient) -> None:
+        """During market hours, _gainers_ttl returns gainers_list_ttl for 1d."""
+        from api.routes.gainers import _gainers_ttl
+        from unittest.mock import patch as _patch
+        from core.config import get_settings
+
+        settings = get_settings()
+        with _patch("api.routes.gainers._is_market_hours", return_value=True):
+            ttl = _gainers_ttl("us", "1d", settings)
+        assert ttl == settings.gainers_list_ttl
+
+    def test_weekly_ttl_is_always_24h(self, client: TestClient) -> None:
+        """1w period always uses 24 h regardless of market hours."""
+        from api.routes.gainers import _gainers_ttl
+        from core.config import get_settings
+
+        settings = get_settings()
+        assert _gainers_ttl("us", "1w", settings) == 24 * 3600
+
+    def test_monthly_ttl_is_always_48h(self, client: TestClient) -> None:
+        """1m period always uses 48 h regardless of market hours."""
+        from api.routes.gainers import _gainers_ttl
+        from core.config import get_settings
+
+        settings = get_settings()
+        assert _gainers_ttl("us", "1m", settings) == 48 * 3600
+
 
 class TestGainerDetail:
     """Tests for GET /gainers/{market}/{ticker} — fast data endpoint (no AI)."""

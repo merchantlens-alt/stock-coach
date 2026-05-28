@@ -18,6 +18,7 @@ FundamentalSignal = Literal["strong", "moderate", "weak", "unknown"]
 ValuationSignal = Literal["undervalued", "fairly_valued", "overvalued", "unknown"]
 QualityLabel = Literal["Strong", "Moderate", "Watch", "Risky"]
 SignalTier = Literal["confirmed", "catalyst", "mover"]
+Period = Literal["1d", "1w", "1m"]
 
 
 def compute_quality_score(
@@ -193,6 +194,7 @@ class StockAnalysisResponse(BaseModel):
 
 class GainersListResponse(BaseModel):
     market: Market
+    period: Period = "1d"
     date: str
     gainers: list[StockGainer]
     summary: Optional[MarketSummary] = None

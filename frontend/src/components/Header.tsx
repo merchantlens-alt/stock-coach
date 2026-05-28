@@ -9,7 +9,7 @@ export function Header() {
         </div>
         <div>
           <h1 className="text-base font-bold text-gray-900 leading-tight">StockCoach AI</h1>
-          <p className="text-xs text-gray-400">Top gainers · AI-powered analysis</p>
+          <p className="text-xs text-gray-400">Hybrid signals · movers &amp; catalysts</p>
         </div>
       </div>
     </header>

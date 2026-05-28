@@ -39,6 +39,7 @@ Output ONLY a pipe-delimited data table — no headers, no prose, no markdown.
 One stock per line in this exact format:
 TICKER|NAME|PRICE|CHANGE_PCT|CHANGE_ABS|VOLUME|SECTOR|HAS_CATALYST
 
+CHANGE_PCT: total percentage gain for the requested time window (not just today's session).
 HAS_CATALYST: Y if a specific news catalyst exists (FDA/regulatory approval, government contract, \
 earnings beat, major partnership, acquisition, licensing deal), N if no clear catalyst.
 
@@ -48,70 +49,92 @@ NVDA|NVIDIA Corporation|950.00|8.5|74.50|45000000|Technology|N
 
 Output at least 20 stocks. Sort by CHANGE_PCT descending."""
 
-_US_NYSE_PROMPT = (
-    "Use Google Search to find the top 25 US stock gainers on NYSE from the most recent trading session (last 24 hours).\n\n"
-    "Only include stocks where ALL of these are true:\n"
-    "- Listed on NYSE (not OTC or pink sheets)\n"
-    "- Price above $5\n"
-    "- Session volume above 500,000 shares\n"
-    "- Ticker symbol is 5 characters or fewer\n"
-    "- Not a warrant/right/unit (ticker does not end in W, R, or U)\n\n"
-    + _TABLE_FORMAT
-)
+# Maps Period → human-readable window used inside prompts
+_PERIOD_WINDOW: dict[str, dict[str, str]] = {
+    "1d": {"gainers": "most recent trading session (last 24 hours)", "catalyst": "last 24 hours"},
+    "1w": {"gainers": "past 5 trading days (1 week)", "catalyst": "past 7 days"},
+    "1m": {"gainers": "past 20 trading days (1 month)", "catalyst": "past 30 days"},
+}
 
-_US_NASDAQ_PROMPT = (
-    "Use Google Search to find the top 25 US stock gainers on NASDAQ from the most recent trading session (last 24 hours).\n\n"
-    "Only include stocks where ALL of these are true:\n"
-    "- Listed on NASDAQ (not OTC or pink sheets)\n"
-    "- Price above $5\n"
-    "- Session volume above 500,000 shares\n"
-    "- Ticker symbol is 5 characters or fewer\n"
-    "- Not a warrant/right/unit (ticker does not end in W, R, or U)\n\n"
-    + _TABLE_FORMAT
-)
 
-_INDIA_PROMPT = (
-    "Use Google Search to find the top 50 NSE (National Stock Exchange of India) "
-    "stock gainers from the most recent trading session (last 24 hours).\n\n"
-    "Only include stocks where ALL of these are true:\n"
-    "- Listed on NSE India\n"
-    "- Price above ₹50\n"
-    "- Session volume above 100,000 shares\n\n"
-    "Use the NSE ticker symbol WITHOUT the .NS suffix.\n"
-    "Use INR values for PRICE and CHANGE_ABS.\n\n"
-    + _TABLE_FORMAT
-)
+def _us_nyse_prompt(period: str = "1d") -> str:
+    w = _PERIOD_WINDOW[period]["gainers"]
+    return (
+        f"Use Google Search to find the top 25 US stock gainers on NYSE over the {w}.\n\n"
+        "Only include stocks where ALL of these are true:\n"
+        "- Listed on NYSE (not OTC or pink sheets)\n"
+        "- Price above $5\n"
+        "- Session volume above 500,000 shares\n"
+        "- Ticker symbol is 5 characters or fewer\n"
+        "- Not a warrant/right/unit (ticker does not end in W, R, or U)\n\n"
+        + _TABLE_FORMAT
+    )
 
-_US_CATALYST_PROMPT = (
-    "Use Google Search to find US stocks (NYSE or NASDAQ) that have significant news catalysts "
-    "published in the last 24 hours. Focus on catalysts that open new markets or represent "
-    "structural changes — not just short-term pops.\n\n"
-    "Target catalyst types: FDA or government regulatory approvals, government contracts or grants, "
-    "major partnerships or licensing deals, clinical trial results, index inclusions, "
-    "earnings surprises, acquisition announcements.\n\n"
-    "Include stocks with ANY positive price change (even 1–5%) — the catalyst matters more than "
-    "the current % gain.\n\n"
-    "Only include stocks where ALL of these are true:\n"
-    "- Listed on NYSE or NASDAQ (not OTC or pink sheets)\n"
-    "- Price above $3\n"
-    "- Ticker symbol is 5 characters or fewer\n"
-    "- Has a specific, identifiable news catalyst\n\n"
-    + _TABLE_FORMAT
-)
 
-_INDIA_CATALYST_PROMPT = (
-    "Use Google Search to find NSE India stocks that have significant news catalysts "
-    "published in the last 24 hours. Focus on catalysts that represent structural changes "
-    "or material business events.\n\n"
-    "Target catalyst types: SEBI or government approvals, major government contracts, "
-    "FII investments or block deals, earnings surprises, major partnerships, "
-    "sector policy changes.\n\n"
-    "Include stocks with ANY positive price change (even 1–5%) — the catalyst matters more than "
-    "the current % gain.\n\n"
-    "Only include NSE-listed stocks. Use ticker WITHOUT the .NS suffix. "
-    "Use INR values for PRICE and CHANGE_ABS.\n\n"
-    + _TABLE_FORMAT
-)
+def _us_nasdaq_prompt(period: str = "1d") -> str:
+    w = _PERIOD_WINDOW[period]["gainers"]
+    return (
+        f"Use Google Search to find the top 25 US stock gainers on NASDAQ over the {w}.\n\n"
+        "Only include stocks where ALL of these are true:\n"
+        "- Listed on NASDAQ (not OTC or pink sheets)\n"
+        "- Price above $5\n"
+        "- Session volume above 500,000 shares\n"
+        "- Ticker symbol is 5 characters or fewer\n"
+        "- Not a warrant/right/unit (ticker does not end in W, R, or U)\n\n"
+        + _TABLE_FORMAT
+    )
+
+
+def _india_gainers_prompt(period: str = "1d") -> str:
+    w = _PERIOD_WINDOW[period]["gainers"]
+    return (
+        f"Use Google Search to find the top 50 NSE (National Stock Exchange of India) "
+        f"stock gainers over the {w}.\n\n"
+        "Only include stocks where ALL of these are true:\n"
+        "- Listed on NSE India\n"
+        "- Price above ₹50\n"
+        "- Session volume above 100,000 shares\n\n"
+        "Use the NSE ticker symbol WITHOUT the .NS suffix.\n"
+        "Use INR values for PRICE and CHANGE_ABS.\n\n"
+        + _TABLE_FORMAT
+    )
+
+
+def _us_catalyst_prompt(period: str = "1d") -> str:
+    w = _PERIOD_WINDOW[period]["catalyst"]
+    return (
+        f"Use Google Search to find US stocks (NYSE or NASDAQ) that have significant news catalysts "
+        f"published in the {w}. Focus on catalysts that open new markets or represent "
+        "structural changes — not just short-term pops.\n\n"
+        "Target catalyst types: FDA or government regulatory approvals, government contracts or grants, "
+        "major partnerships or licensing deals, clinical trial results, index inclusions, "
+        "earnings surprises, acquisition announcements.\n\n"
+        "Include stocks with ANY positive price change (even 1–5%) — the catalyst matters more than "
+        "the current % gain.\n\n"
+        "Only include stocks where ALL of these are true:\n"
+        "- Listed on NYSE or NASDAQ (not OTC or pink sheets)\n"
+        "- Price above $3\n"
+        "- Ticker symbol is 5 characters or fewer\n"
+        "- Has a specific, identifiable news catalyst\n\n"
+        + _TABLE_FORMAT
+    )
+
+
+def _india_catalyst_prompt(period: str = "1d") -> str:
+    w = _PERIOD_WINDOW[period]["catalyst"]
+    return (
+        f"Use Google Search to find NSE India stocks that have significant news catalysts "
+        f"published in the {w}. Focus on catalysts that represent structural changes "
+        "or material business events.\n\n"
+        "Target catalyst types: SEBI or government approvals, major government contracts, "
+        "FII investments or block deals, earnings surprises, major partnerships, "
+        "sector policy changes.\n\n"
+        "Include stocks with ANY positive price change (even 1–5%) — the catalyst matters more than "
+        "the current % gain.\n\n"
+        "Only include NSE-listed stocks. Use ticker WITHOUT the .NS suffix. "
+        "Use INR values for PRICE and CHANGE_ABS.\n\n"
+        + _TABLE_FORMAT
+    )
 
 
 class MarketDataService:
@@ -121,19 +144,19 @@ class MarketDataService:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    async def get_gainers(self, market: Market) -> list[StockGainer]:
+    async def get_gainers(self, market: Market, period: str = "1d") -> list[StockGainer]:
         if market == "us":
-            return await self.get_us_gainers()
-        return await self.get_india_gainers()
+            return await self.get_us_gainers(period)
+        return await self.get_india_gainers(period)
 
-    async def get_us_gainers(self) -> list[StockGainer]:
+    async def get_us_gainers(self, period: str = "1d") -> list[StockGainer]:
         try:
             # Three parallel Gemini calls: NYSE, NASDAQ, and a catalyst scanner.
             # NYSE/NASDAQ find stocks by % gain; catalyst scanner finds stocks by news quality.
             nyse_raw, nasdaq_raw, catalyst_raw = await asyncio.gather(
-                self._fetch_gainers_gemini(_US_NYSE_PROMPT, "us-nyse"),
-                self._fetch_gainers_gemini(_US_NASDAQ_PROMPT, "us-nasdaq"),
-                self._fetch_gainers_gemini(_US_CATALYST_PROMPT, "us-catalyst"),
+                self._fetch_gainers_gemini(_us_nyse_prompt(period), "us-nyse"),
+                self._fetch_gainers_gemini(_us_nasdaq_prompt(period), "us-nasdaq"),
+                self._fetch_gainers_gemini(_us_catalyst_prompt(period), "us-catalyst"),
             )
             # Build and deduplicate NYSE+NASDAQ gainers
             gainers = self._build_gainers(nyse_raw + nasdaq_raw, "us")
@@ -161,12 +184,12 @@ class MarketDataService:
             log.error("market_data.us_gainers_error", error=str(exc))
             raise MarketDataError(f"Failed to fetch US gainers: {exc}") from exc
 
-    async def get_india_gainers(self) -> list[StockGainer]:
+    async def get_india_gainers(self, period: str = "1d") -> list[StockGainer]:
         try:
             # Two parallel Gemini calls: India gainers + India catalyst scanner
             india_raw, catalyst_raw = await asyncio.gather(
-                self._fetch_gainers_gemini(_INDIA_PROMPT, "india"),
-                self._fetch_gainers_gemini(_INDIA_CATALYST_PROMPT, "india-catalyst"),
+                self._fetch_gainers_gemini(_india_gainers_prompt(period), "india"),
+                self._fetch_gainers_gemini(_india_catalyst_prompt(period), "india-catalyst"),
             )
             gainers = self._build_gainers(india_raw, "india")
             catalyst_plays = self._build_gainers(catalyst_raw, "india")

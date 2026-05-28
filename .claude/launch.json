@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend",
+      "runtimeExecutable": "/opt/homebrew/bin/node",
+      "runtimeArgs": [
+        "/Users/in22917266/Documents/Claude/stock-coach/frontend/node_modules/.bin/vite",
+        "/Users/in22917266/Documents/Claude/stock-coach/frontend",
+        "--host"
+      ],
+      "port": 5173
+    }
+  ]
+}

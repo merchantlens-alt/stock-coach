@@ -1,4 +1,5 @@
 export type Market = "us" | "india";
+export type Period = "1d" | "1w" | "1m";
 export type Sentiment = "very_positive" | "positive" | "neutral" | "negative" | "very_negative";
 export type MarketSentiment = "very_bullish" | "bullish" | "mixed" | "bearish" | "very_bearish";
 export type CatalystType =
@@ -109,6 +110,7 @@ export interface StockAnalysisResponse {
 
 export interface GainersListResponse {
   market: Market;
+  period: Period;
   date: string;
   gainers: StockGainer[];
   summary?: MarketSummary;

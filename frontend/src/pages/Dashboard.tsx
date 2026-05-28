@@ -8,10 +8,17 @@ import { MarketNarrative } from "../components/MarketNarrative";
 import { MarketToggle } from "../components/MarketToggle";
 import { SearchBar } from "../components/SearchBar";
 import { useGainerAnalysis, useGainerDetail, useGainers } from "../hooks/useGainers";
-import type { Market, SignalTier } from "../types";
+import type { Market, Period, SignalTier } from "../types";
+
+const PERIOD_OPTIONS: { value: Period; label: string }[] = [
+  { value: "1d", label: "Today" },
+  { value: "1w", label: "1 Week" },
+  { value: "1m", label: "1 Month" },
+];
 
 export function Dashboard() {
   const [market, setMarket] = useState<Market>("us");
+  const [period, setPeriod] = useState<Period>("1d");
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [searchedTicker, setSearchedTicker] = useState<string | null>(null);
   const [tierFilter, setTierFilter] = useState<SignalTier | "all">("all");
@@ -31,7 +38,7 @@ export function Dashboard() {
     }
   }, [activeTicker, market, queryClient]);
 
-  const { data: gainersData, isLoading: gainersLoading, error: gainersError, refetch } = useGainers(market);
+  const { data: gainersData, isLoading: gainersLoading, error: gainersError, refetch } = useGainers(market, period);
 
   const allGainers = gainersData?.gainers ?? [];
   const filteredGainers = tierFilter === "all"
@@ -55,6 +62,13 @@ export function Dashboard() {
     setTierFilter("all");
   }
 
+  function handlePeriodChange(p: Period) {
+    setPeriod(p);
+    setSelectedTicker(null);
+    setSearchedTicker(null);
+    setTierFilter("all");
+  }
+
   function handleSearch(query: string) {
     // Strip whitespace; the backend resolves company names → tickers automatically
     const cleaned = query.trim().toUpperCase().replace(/\s+/g, "");
@@ -67,7 +81,7 @@ export function Dashboard() {
   }
 
   function handleRefresh() {
-    queryClient.invalidateQueries({ queryKey: ["gainers", market] });
+    queryClient.invalidateQueries({ queryKey: ["gainers", market, period] });
     refetch();
   }
 
@@ -91,14 +105,32 @@ export function Dashboard() {
         {/* Controls */}
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3 bg-gray-50">
           <MarketToggle market={market} onChange={handleMarketChange} />
-          <button
-            onClick={handleRefresh}
-            disabled={gainersLoading}
-            className="p-2 rounded-lg text-gray-400 hover:bg-gray-200 hover:text-gray-600 transition-colors disabled:opacity-40"
-            title="Refresh"
-          >
-            <RefreshCw size={15} className={gainersLoading ? "animate-spin" : ""} />
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Period selector */}
+            <div className="flex rounded-lg overflow-hidden border border-gray-200 bg-white text-xs">
+              {PERIOD_OPTIONS.map(({ value, label }) => (
+                <button
+                  key={value}
+                  onClick={() => handlePeriodChange(value)}
+                  className={`px-2.5 py-1.5 font-medium transition-colors ${
+                    period === value
+                      ? "bg-gray-900 text-white"
+                      : "text-gray-500 hover:bg-gray-50"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleRefresh}
+              disabled={gainersLoading}
+              className="p-2 rounded-lg text-gray-400 hover:bg-gray-200 hover:text-gray-600 transition-colors disabled:opacity-40"
+              title="Refresh"
+            >
+              <RefreshCw size={15} className={gainersLoading ? "animate-spin" : ""} />
+            </button>
+          </div>
         </div>
 
         {/* Search */}

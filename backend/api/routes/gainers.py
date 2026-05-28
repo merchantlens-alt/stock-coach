@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Path, Query
 
@@ -24,6 +25,7 @@ from models.schemas import (
     GainersListResponse,
     Market,
     MarketSummary,
+    Period,
     StockAnalysisResponse,
     StockGainer,
     compute_quality_score,
@@ -46,8 +48,44 @@ log = get_logger(__name__)
 # This means the cache survives midnight and doesn't cold-start every morning.
 # The Refresh button or TTL expiry are the only ways to get fresh data.
 
-def _list_cache_key(market: Market) -> str:
-    return f"gainers:{market}"
+def _list_cache_key(market: Market, period: str = "1d") -> str:
+    return f"gainers:{market}:{period}"
+
+
+def _lkg_cache_key(market: Market, period: str = "1d") -> str:
+    """Last-known-good: long TTL so data survives weekends and overnight Gemini failures."""
+    return f"gainers:{market}:{period}:lkg"
+
+
+def _is_market_hours(market: str) -> bool:
+    """True while the relevant exchange is in regular trading hours (weekdays only)."""
+    try:
+        tz = ZoneInfo("America/New_York" if market == "us" else "Asia/Kolkata")
+        now = datetime.now(tz)
+        if now.weekday() >= 5:  # Saturday / Sunday
+            return False
+        minutes = now.hour * 60 + now.minute
+        if market == "us":
+            return 9 * 60 + 30 <= minutes < 16 * 60       # 9:30–16:00 ET
+        return 9 * 60 + 15 <= minutes < 15 * 60 + 30      # 9:15–15:30 IST
+    except Exception:
+        return True  # assume open on any timezone error
+
+
+_LKG_TTL: dict[str, int] = {"1d": 48 * 3600, "1w": 7 * 24 * 3600, "1m": 14 * 24 * 3600}
+
+
+def _gainers_ttl(market: str, period: str, settings: Settings) -> int:
+    """
+    1d: 2 h during market hours, 24 h outside.
+    1w: always 24 h (weekly snapshot changes slowly).
+    1m: always 48 h (monthly snapshot).
+    """
+    if period == "1w":
+        return 24 * 3600
+    if period == "1m":
+        return 48 * 3600
+    return settings.gainers_list_ttl if _is_market_hours(market) else 24 * 3600
 
 
 def _data_cache_key(ticker: str, market: Market) -> str:
@@ -63,11 +101,11 @@ def _summary_cache_key(market: Market) -> str:
 
 
 def _apply_quality_scores(gainers: list[StockGainer]) -> list[StockGainer]:
+    result = []
     for g in gainers:
         score, label = compute_quality_score(g.price, g.volume, g.change_pct, g.ticker)
-        g.quality_score = score
-        g.quality_label = label
-    return gainers
+        result.append(g.model_copy(update={"quality_score": score, "quality_label": label}))
+    return result
 
 
 # ── List gainers ──────────────────────────────────────────────────────────────
@@ -81,76 +119,93 @@ async def list_gainers(
     analyst: Annotated[MarketAnalystAgent, Depends(get_market_analyst)],
     news_fetcher: Annotated[NewsFetcher, Depends(get_news_fetcher)],
     gainer_analyst: Annotated[GainerAnalystAgent, Depends(get_gainer_analyst)],
+    period: Annotated[Period, Query(description="Time window: 1d (today), 1w (1 week), 1m (1 month)")] = "1d",
     refresh: Annotated[bool, Query(description="Force bypass cache")] = False,
 ) -> GainersListResponse:
     """
-    Return the top gainers from the most recent trading session with AI narrative.
-    Cache is TTL-based (no date in key) so it survives midnight and pre-market hours.
-    After a fresh fetch, pre-warms AI analysis for the top 3 gainers in the background.
+    Return the top hybrid signals (movers + catalysts) for the given time window.
+    Cache is TTL-based with a last-known-good fallback so users never see a blank page.
     """
-    list_key = _list_cache_key(market)
+    list_key = _list_cache_key(market, period)
+    lkg_key = _lkg_cache_key(market, period)
     summary_key = _summary_cache_key(market)
 
     if not refresh:
         cached = await cache.get(list_key)
         if cached:
-            log.info("gainers.list_cache_hit", market=market)
+            log.info("gainers.list_cache_hit", market=market, period=period)
             gainers = [StockGainer(**g) for g in cached["gainers"]]
             cached_summary = await cache.get(summary_key)
             summary = MarketSummary(**cached_summary) if cached_summary else None
             return GainersListResponse(
-                market=market, date=today_str(), gainers=gainers,
-                summary=summary, from_cache=True,
+                market=market, period=period, date=today_str(),
+                gainers=gainers, summary=summary, from_cache=True,
             )
 
     try:
-        gainers = await market_data.get_gainers(market)
+        gainers = await market_data.get_gainers(market, period)
     except Exception as exc:
-        log.error("gainers.list_fetch_error", market=market, error=str(exc))
-        # Serve stale cache on error so users never see a blank page
-        stale = await cache.get(list_key)
-        if stale:
-            log.warning("gainers.serving_stale_on_error", market=market)
-            gainers = [StockGainer(**g) for g in stale["gainers"]]
+        log.error("gainers.list_fetch_error", market=market, period=period, error=str(exc))
+        # Try main cache first, then last-known-good — never show a blank page on error
+        for key in (list_key, lkg_key):
+            stale = await cache.get(key)
+            if stale:
+                log.warning("gainers.serving_stale_on_error", market=market, period=period, key=key)
+                gainers = [StockGainer(**g) for g in stale["gainers"]]
+                cached_summary = await cache.get(summary_key)
+                summary = MarketSummary(**cached_summary) if cached_summary else None
+                return GainersListResponse(
+                    market=market, period=period, date=today_str(),
+                    gainers=gainers, summary=summary, from_cache=True,
+                )
+        raise upstream_error("market data", str(exc))
+
+    # Empty result (market closed, Gemini glitch, etc.): serve last-known-good
+    # so users always see the most recent valid session instead of a blank page.
+    if not gainers:
+        log.warning("gainers.empty_result", market=market, period=period)
+        lkg = await cache.get(lkg_key)
+        if lkg:
+            log.info("gainers.serving_lkg_on_empty", market=market, period=period)
+            gainers_lkg = [StockGainer(**g) for g in lkg["gainers"]]
             cached_summary = await cache.get(summary_key)
             summary = MarketSummary(**cached_summary) if cached_summary else None
             return GainersListResponse(
-                market=market, date=today_str(), gainers=gainers,
-                summary=summary, from_cache=True,
+                market=market, period=period, date=today_str(),
+                gainers=gainers_lkg, summary=summary, from_cache=True,
             )
-        raise upstream_error("market data", str(exc))
-
-    # Never cache an empty result — let the next request try Gemini again.
-    if not gainers:
-        log.warning("gainers.empty_result_not_cached", market=market)
         return GainersListResponse(
-            market=market, date=today_str(), gainers=[], summary=None, from_cache=False,
+            market=market, period=period, date=today_str(),
+            gainers=[], summary=None, from_cache=False,
         )
+
+    ttl = _gainers_ttl(market, period, settings)
 
     # Market summary + cache write in parallel
     async def _get_summary() -> MarketSummary | None:
         try:
             s = await analyst.analyse(gainers, market)
-            await cache.set(summary_key, s.model_dump(), settings.gainers_list_ttl)
+            await cache.set(summary_key, s.model_dump(), ttl)
             return s
         except Exception as exc:
             log.warning("gainers.summary_failed", error=str(exc))
             return None
 
-    summary, _ = await asyncio.gather(
+    summary, _, _ = await asyncio.gather(
         _get_summary(),
-        cache.set(list_key, {"gainers": [g.model_dump() for g in gainers]}, settings.gainers_list_ttl),
+        cache.set(list_key, {"gainers": [g.model_dump() for g in gainers]}, ttl),
+        cache.set(lkg_key, {"gainers": [g.model_dump() for g in gainers]}, _LKG_TTL[period]),
     )
 
-    # Pre-warm AI analysis for top 5 gainers in the background so the first
-    # user to click a card gets a cached result instead of waiting 15-20 s.
-    asyncio.create_task(
-        _prewarm_top_analysis(gainers[:5], market, cache, market_data, news_fetcher, gainer_analyst, settings)
-    )
+    # Pre-warm AI analysis for top 5 only for the default 1d view (most likely to be clicked)
+    if period == "1d":
+        asyncio.create_task(
+            _prewarm_top_analysis(gainers[:5], market, cache, market_data, news_fetcher, gainer_analyst, settings)
+        )
 
     return GainersListResponse(
-        market=market, date=today_str(), gainers=gainers,
-        summary=summary, from_cache=False,
+        market=market, period=period, date=today_str(),
+        gainers=gainers, summary=summary, from_cache=False,
     )
 
 
@@ -241,7 +296,7 @@ async def get_gainer_detail(
     # meaning we still need a separate fundamentals call.  When it came from a
     # live yfinance lookup the dict is already populated and we can extract
     # fundamentals directly — saving a full second round-trip to Yahoo Finance.
-    gainer, yf_info = await _resolve_gainer(ticker, market, market_data)
+    gainer, yf_info = await _resolve_gainer(ticker, market, market_data, cache)
     if gainer is None:
         raise ticker_not_found(ticker)
 
@@ -310,15 +365,19 @@ async def get_gainer_analysis(
 
     # Resolve gainer + gainers list in parallel (list used for comparison context)
     (gainer, _yf_info), gainers_list = await asyncio.gather(
-        _resolve_gainer(ticker, market, market_data),
-        _safe_get_gainers(market, market_data),
+        _resolve_gainer(ticker, market, market_data, cache),
+        _safe_get_gainers(market, cache),
     )
 
     if gainer is None:
         raise ticker_not_found(ticker)
 
+    # Use the resolved ticker (e.g. "NVDA") not the raw query (e.g. "NVIDIA")
+    # for all downstream calls so Gemini gets a real ticker symbol.
+    resolved_ticker = gainer.ticker
+
     # Determine whether this ticker is in today's gainer list
-    in_gainers = any(g.ticker == ticker for g in gainers_list)
+    in_gainers = any(g.ticker == resolved_ticker for g in gainers_list)
     gainers_context = gainers_list[:3] if not in_gainers and gainers_list else None
 
     # Fetch fundamentals + news (needed for AI prompt quality).
@@ -327,20 +386,20 @@ async def get_gainer_analysis(
         if _yf_info:
             return fundamentals_from_info(_yf_info)
         try:
-            return await market_data.get_fundamentals(ticker, market)
+            return await market_data.get_fundamentals(resolved_ticker, market)
         except Exception as exc:
-            log.warning("gainers.analysis_fundamentals_failed", ticker=ticker, error=str(exc))
+            log.warning("gainers.analysis_fundamentals_failed", ticker=resolved_ticker, error=str(exc))
             return None
 
     fundamentals_result, news = await asyncio.gather(
         _get_analysis_fundamentals(),
-        news_fetcher.get_news(ticker, gainer.name),
+        news_fetcher.get_news(resolved_ticker, gainer.name),
         return_exceptions=True,
     )
 
     fundamentals = fundamentals_result if not isinstance(fundamentals_result, Exception) else None
     if isinstance(news, Exception):
-        log.warning("gainers.analysis_news_failed", ticker=ticker, error=str(news))
+        log.warning("gainers.analysis_news_failed", ticker=resolved_ticker, error=str(news))
         news = []
 
     # Single combined Gemini call — analysis + 30-day prediction
@@ -348,7 +407,7 @@ async def get_gainer_analysis(
     prediction = None
     try:
         analysis, prediction = await analyst.analyse_full(
-            ticker=ticker,
+            ticker=resolved_ticker,
             change_pct=gainer.change_pct,
             company_name=gainer.name,
             sector=gainer.sector,
@@ -357,11 +416,11 @@ async def get_gainer_analysis(
             gainers_context=gainers_context,
         )
     except Exception as exc:
-        log.error("gainers.ai_failed", ticker=ticker, error=str(exc))
+        log.error("gainers.ai_failed", ticker=resolved_ticker, error=str(exc))
         # Return partial result (analysis=None) rather than a 500 — frontend handles gracefully
 
     response = StockAnalysisResponse(
-        ticker=ticker,
+        ticker=resolved_ticker,
         market=market,
         analysis=analysis,
         prediction=prediction,
@@ -395,7 +454,8 @@ async def invalidate_cache(
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 async def _resolve_gainer(
-    ticker: str, market: Market, market_data: MarketDataService
+    ticker: str, market: Market, market_data: MarketDataService,
+    cache: CacheBackend | None = None,
 ) -> tuple[StockGainer | None, dict]:
     """
     Resolve a ticker string to a StockGainer record.
@@ -407,22 +467,47 @@ async def _resolve_gainer(
         (callers should fetch fundamentals via market_data.get_fundamentals).
 
     Strategy:
-      1. Check today's cached gainer list (instant).
+      1. Check cached gainers lists (instant, reads from cache — no Gemini).
       2. Direct yfinance lookup.
       3. If yfinance returns no price, resolve company name → ticker via
-         Yahoo Finance search + Gemini fallback, then retry yfinance.
+         Gemini / Yahoo Finance search, then retry yfinance.
     """
     import yfinance as yf
     from services.market_data import _safe_float, _safe_int
 
-    # ── Step 1: cached gainers list (instant) ────────────────────────────────
-    try:
-        gainers = await market_data.get_gainers(market)
-        match = next((g for g in gainers if g.ticker == ticker), None)
-        if match:
-            return match, {}   # {} signals: fetch fundamentals separately
-    except Exception:
-        pass
+    def _best_price(d: dict) -> float:
+        """yfinance field priority: regularMarketPrice > currentPrice > previousClose.
+        regularMarketPrice is None outside market hours on some tickers."""
+        return (
+            d.get("regularMarketPrice")
+            or d.get("currentPrice")
+            or d.get("previousClose")
+            or 0.0
+        )
+
+    # ── Step 1a: ticker-resolution cache (instant) ────────────────────────────
+    # Both the detail and analyse endpoints fire in parallel for a new search.
+    # Without this cache each would independently call Gemini (~15 s) + yfinance
+    # (~8 s) to resolve "NVIDIA" → "NVDA".  After the first resolution the
+    # mapping is cached for 24 h, making every subsequent lookup instant.
+    _res_cache_key = f"ticker_res:{market}:{ticker.lower()}"
+    if cache is not None:
+        res_cached = await cache.get(_res_cache_key)
+        if res_cached:
+            ticker = res_cached["resolved"]
+            log.info("gainers.ticker_res_cache_hit", resolved=ticker, market=market)
+
+    # ── Step 1b: cached gainers lists (instant — reads from cache, no Gemini) ─
+    if cache is not None:
+        for period in ("1d", "1w", "1m"):
+            cached_list = await cache.get(_list_cache_key(market, period))
+            if cached_list:
+                match = next(
+                    (StockGainer(**g) for g in cached_list["gainers"] if g["ticker"] == ticker),
+                    None,
+                )
+                if match:
+                    return match, {}
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     async def _yf_lookup(sym: str) -> dict:
@@ -455,14 +540,23 @@ async def _resolve_gainer(
     # ── Step 3: name/ticker resolution ───────────────────────────────────────
     # Triggered when: (a) input looks like a company name, or (b) yfinance
     # returned no price for what looked like a ticker (e.g. outdated symbol).
-    if not info or not info.get("regularMarketPrice"):
+    original_query = ticker
+    if not info or not _best_price(info):
         resolved = await resolve_ticker_by_name(ticker, market)
         if resolved and resolved.upper() != ticker:
             log.info("gainers.ticker_resolved", query=ticker, resolved=resolved, market=market)
             ticker = resolved.upper()
             info = await _yf_lookup(ticker)
+            # Cache the resolution so parallel/future requests skip Gemini+yfinance
+            if cache is not None and _best_price(info):
+                await cache.set(
+                    f"ticker_res:{market}:{original_query.lower()}",
+                    {"resolved": ticker},
+                    24 * 3600,
+                )
 
-    if not info or not info.get("regularMarketPrice"):
+    price = _best_price(info) if info else 0.0
+    if not price:
         return None, {}
 
     change_pct = info.get("regularMarketChangePercent") or 0.0
@@ -473,7 +567,7 @@ async def _resolve_gainer(
         ticker=ticker,
         name=info.get("shortName") or info.get("longName") or ticker,
         market=market,
-        price=float(info.get("regularMarketPrice", 0)),
+        price=float(price),
         change_pct=float(change_pct),
         change_abs=float(info.get("regularMarketChange", 0)),
         volume=int(info.get("regularMarketVolume", 0)),
@@ -486,10 +580,14 @@ async def _resolve_gainer(
 
 
 async def _safe_get_gainers(
-    market: Market, market_data: MarketDataService
+    market: Market, cache: CacheBackend,
 ) -> list[StockGainer]:
-    """Return today's gainers list; empty list on any error (non-critical)."""
-    try:
-        return await market_data.get_gainers(market)
-    except Exception:
-        return []
+    """Return today's cached gainers list for AI comparison context.
+    Reads from cache only — never triggers a live Gemini call."""
+    cached = await cache.get(_list_cache_key(market, "1d"))
+    if cached:
+        try:
+            return [StockGainer(**g) for g in cached["gainers"]]
+        except Exception:
+            pass
+    return []
