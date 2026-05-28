@@ -21,10 +21,10 @@ class Settings(BaseSettings):
     # News
     news_api_key: str = ""
 
-    # Cache
+    # Cache — rolling TTL, no date in keys so cache survives midnight
     redis_url: str = ""
-    gainers_list_ttl: int = 1800   # 30 min
-    analysis_ttl: int = 21600       # 6 hours
+    gainers_list_ttl: int = 7200    # 2 h (refreshes during trading day)
+    analysis_ttl: int = 86400       # 24 h (analyses stay warm overnight)
 
     # API
     api_host: str = "0.0.0.0"
@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # Feature flags
     mock_ai: bool = False
     top_gainers_count: int = 20
+    prewarm_concurrency: int = 3  # max parallel AI pre-warm calls
 
     @field_validator("cors_origins", mode="before")
     @classmethod

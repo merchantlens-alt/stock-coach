@@ -26,7 +26,7 @@ export function useGainers(market: Market) {
 export function useGainerDetail(market: Market, ticker: string | null) {
   return useQuery({
     queryKey: ["gainer-detail", market, ticker],
-    queryFn: () => api.getGainerDetail(market, ticker!),
+    queryFn: ({ signal }) => api.getGainerDetail(market, ticker!, { signal }),
     enabled: ticker !== null,
     staleTime: DETAIL_STALE,
     gcTime: DETAIL_GC,
@@ -42,7 +42,7 @@ export function useGainerDetail(market: Market, ticker: string | null) {
 export function useGainerAnalysis(market: Market, ticker: string | null) {
   return useQuery({
     queryKey: ["gainer-analysis", market, ticker],
-    queryFn: () => api.getGainerAnalysis(market, ticker!),
+    queryFn: ({ signal }) => api.getGainerAnalysis(market, ticker!, { signal }),
     enabled: ticker !== null,
     staleTime: DETAIL_STALE,   // 30 min
     gcTime: DETAIL_GC,         // 6 hours in memory

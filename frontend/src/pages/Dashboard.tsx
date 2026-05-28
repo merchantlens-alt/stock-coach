@@ -1,24 +1,47 @@
 import { RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { api } from "../api/client";
 import { AnalysisPanel } from "../components/AnalysisPanel";
 import { GainerCard } from "../components/GainerCard";
 import { MarketNarrative } from "../components/MarketNarrative";
 import { MarketToggle } from "../components/MarketToggle";
 import { SearchBar } from "../components/SearchBar";
 import { useGainerAnalysis, useGainerDetail, useGainers } from "../hooks/useGainers";
-import type { Market } from "../types";
+import type { Market, SignalTier } from "../types";
 
 export function Dashboard() {
   const [market, setMarket] = useState<Market>("us");
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [searchedTicker, setSearchedTicker] = useState<string | null>(null);
+  const [tierFilter, setTierFilter] = useState<SignalTier | "all">("all");
   const queryClient = useQueryClient();
 
   // Active ticker is either a searched one or one clicked from the list
   const activeTicker = searchedTicker ?? selectedTicker;
 
+  // Cancel in-flight requests for the previous ticker whenever activeTicker changes.
+  const prevActiveTickerRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevActiveTickerRef.current;
+    prevActiveTickerRef.current = activeTicker;
+    if (prev && prev !== activeTicker) {
+      queryClient.cancelQueries({ queryKey: ["gainer-detail", market, prev] });
+      queryClient.cancelQueries({ queryKey: ["gainer-analysis", market, prev] });
+    }
+  }, [activeTicker, market, queryClient]);
+
   const { data: gainersData, isLoading: gainersLoading, error: gainersError, refetch } = useGainers(market);
+
+  const allGainers = gainersData?.gainers ?? [];
+  const filteredGainers = tierFilter === "all"
+    ? allGainers
+    : allGainers.filter(g => (g.signal_tier ?? "mover") === tierFilter);
+  const tierCounts = {
+    confirmed: allGainers.filter(g => (g.signal_tier ?? "mover") === "confirmed").length,
+    catalyst:  allGainers.filter(g => (g.signal_tier ?? "mover") === "catalyst").length,
+    mover:     allGainers.filter(g => (g.signal_tier ?? "mover") === "mover").length,
+  };
 
   // Two parallel hooks: fast data (~3-5 s) + slow AI (~10-15 s).
   // The panel renders as soon as the data hook returns; AI fills in when ready.
@@ -29,6 +52,7 @@ export function Dashboard() {
     setMarket(m);
     setSelectedTicker(null);
     setSearchedTicker(null);
+    setTierFilter("all");
   }
 
   function handleSearch(query: string) {
@@ -45,6 +69,19 @@ export function Dashboard() {
   function handleRefresh() {
     queryClient.invalidateQueries({ queryKey: ["gainers", market] });
     refetch();
+  }
+
+  function handlePrefetch(ticker: string) {
+    queryClient.prefetchQuery({
+      queryKey: ["gainer-detail", market, ticker],
+      queryFn: () => api.getGainerDetail(market, ticker),
+      staleTime: 30 * 60 * 1000,
+    });
+    queryClient.prefetchQuery({
+      queryKey: ["gainer-analysis", market, ticker],
+      queryFn: () => api.getGainerAnalysis(market, ticker),
+      staleTime: 30 * 60 * 1000,
+    });
   }
 
   return (
@@ -76,11 +113,42 @@ export function Dashboard() {
         {gainersData && (
           <div className="px-4 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
             <p className="text-xs text-gray-500">
-              {gainersData.gainers.length} gainers · {gainersData.date}
+              {gainersData.gainers.length} stocks · {gainersData.date}
             </p>
             {gainersData.from_cache && (
               <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">cached</span>
             )}
+          </div>
+        )}
+
+        {/* Tier filter tabs */}
+        {gainersData && allGainers.length > 0 && (
+          <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-1.5 overflow-x-auto">
+            {(
+              [
+                { key: "all",       label: "All",       count: allGainers.length, style: "bg-gray-900 text-white", inactive: "text-gray-600 hover:bg-gray-100" },
+                { key: "confirmed", label: "Confirmed", count: tierCounts.confirmed, style: "bg-green-600 text-white", inactive: "text-green-700 hover:bg-green-50" },
+                { key: "catalyst",  label: "Catalyst",  count: tierCounts.catalyst, style: "bg-indigo-600 text-white", inactive: "text-indigo-700 hover:bg-indigo-50" },
+                { key: "mover",     label: "Mover",     count: tierCounts.mover, style: "bg-gray-500 text-white", inactive: "text-gray-500 hover:bg-gray-100" },
+              ] as const
+            ).map(({ key, label, count, style, inactive }) => (
+              <button
+                key={key}
+                onClick={() => setTierFilter(key)}
+                className={[
+                  "flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full whitespace-nowrap transition-colors",
+                  tierFilter === key ? style : inactive,
+                ].join(" ")}
+              >
+                {label}
+                <span className={[
+                  "text-xs rounded-full px-1.5 py-0 font-semibold",
+                  tierFilter === key ? "bg-white/20" : "bg-gray-100 text-gray-500",
+                ].join(" ")}>
+                  {count}
+                </span>
+              </button>
+            ))}
           </div>
         )}
 
@@ -112,7 +180,7 @@ export function Dashboard() {
               </div>
             )}
 
-            {gainersData?.gainers.map((gainer) => (
+            {filteredGainers.map((gainer) => (
               <GainerCard
                 key={gainer.ticker}
                 gainer={gainer}
@@ -122,12 +190,15 @@ export function Dashboard() {
                   setSearchedTicker(null);
                   setSelectedTicker(selectedTicker === gainer.ticker ? null : gainer.ticker);
                 }}
+                onPrefetch={() => handlePrefetch(gainer.ticker)}
               />
             ))}
 
-            {gainersData?.gainers.length === 0 && !gainersLoading && (
+            {filteredGainers.length === 0 && !gainersLoading && (
               <div className="text-center py-12 text-sm text-gray-400">
-                No gainers found for today.
+                {tierFilter === "all"
+                  ? "No stocks found."
+                  : `No ${tierFilter} stocks in current data.`}
               </div>
             )}
           </div>

@@ -17,6 +17,7 @@ OutlookHorizon = Literal["days", "weeks", "months"]
 FundamentalSignal = Literal["strong", "moderate", "weak", "unknown"]
 ValuationSignal = Literal["undervalued", "fairly_valued", "overvalued", "unknown"]
 QualityLabel = Literal["Strong", "Moderate", "Watch", "Risky"]
+SignalTier = Literal["confirmed", "catalyst", "mover"]
 
 
 def compute_quality_score(
@@ -93,6 +94,7 @@ class StockGainer(BaseModel):
     industry: Optional[str] = None
     quality_score: Optional[float] = None
     quality_label: Optional[QualityLabel] = None
+    signal_tier: SignalTier = "mover"
 
     @field_validator("change_pct")
     @classmethod

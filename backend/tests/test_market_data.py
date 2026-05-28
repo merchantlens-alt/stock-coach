@@ -131,6 +131,19 @@ class TestBuildGainers:
         assert all(g.quality_score is not None for g in result)
         assert all(g.quality_label is not None for g in result)
 
+    def test_has_catalyst_true_sets_confirmed_tier(self, service: MarketDataService) -> None:
+        result = service._build_gainers([self._row(has_catalyst=True)], "us")
+        assert result[0].signal_tier == "confirmed"
+
+    def test_has_catalyst_false_sets_mover_tier(self, service: MarketDataService) -> None:
+        result = service._build_gainers([self._row(has_catalyst=False)], "us")
+        assert result[0].signal_tier == "mover"
+
+    def test_has_catalyst_missing_defaults_to_mover(self, service: MarketDataService) -> None:
+        row = {k: v for k, v in self._row().items() if k != "has_catalyst"}
+        result = service._build_gainers([row], "us")
+        assert result[0].signal_tier == "mover"
+
 
 # ── _parse_pipe_table ─────────────────────────────────────────────────────────
 # Gemini outputs a pipe-delimited table (not JSON) when googleSearch grounding
@@ -139,8 +152,10 @@ class TestBuildGainers:
 
 class TestParsePipeTable:
     def _line(self, ticker="NVDA", name="NVIDIA", price=950.0,
-               pct=8.5, abs_=74.5, vol=45_000_000, sector="Technology"):
-        return f"{ticker}|{name}|{price}|{pct}|{abs_}|{vol}|{sector}"
+               pct=8.5, abs_=74.5, vol=45_000_000, sector="Technology",
+               has_catalyst: str | None = None):
+        base = f"{ticker}|{name}|{price}|{pct}|{abs_}|{vol}|{sector}"
+        return base if has_catalyst is None else f"{base}|{has_catalyst}"
 
     def test_parses_single_valid_line(self) -> None:
         result = _parse_pipe_table(self._line())
@@ -212,6 +227,34 @@ class TestParsePipeTable:
         result = _parse_pipe_table(text)
         assert result[0]["ticker"] == "NVDA"
 
+    def test_has_catalyst_y_parsed_as_true(self) -> None:
+        result = _parse_pipe_table(self._line(has_catalyst="Y"))
+        assert result[0]["has_catalyst"] is True
+
+    def test_has_catalyst_n_parsed_as_false(self) -> None:
+        result = _parse_pipe_table(self._line(has_catalyst="N"))
+        assert result[0]["has_catalyst"] is False
+
+    def test_has_catalyst_defaults_false_when_column_missing(self) -> None:
+        text = "NVDA|NVIDIA|950.0|8.5|74.5|45000000|Technology"  # 7 columns, no 8th
+        result = _parse_pipe_table(text)
+        assert result[0]["has_catalyst"] is False
+
+    def test_has_catalyst_yes_accepted(self) -> None:
+        result = _parse_pipe_table(self._line(has_catalyst="YES"))
+        assert result[0]["has_catalyst"] is True
+
+    def test_has_catalyst_true_string_accepted(self) -> None:
+        result = _parse_pipe_table(self._line(has_catalyst="TRUE"))
+        assert result[0]["has_catalyst"] is True
+
+    def test_has_catalyst_markdown_table_row(self) -> None:
+        text = "| ASTC | Astrotech | 6.55 | 165.2 | 4.08 | 500000 | Industrials | Y |"
+        result = _parse_pipe_table(text)
+        assert len(result) == 1
+        assert result[0]["ticker"] == "ASTC"
+        assert result[0]["has_catalyst"] is True
+
 
 # ── _fetch_gainers_gemini (Gemini REST layer) ─────────────────────────────────
 
@@ -232,7 +275,7 @@ class TestFetchGainersGemini:
         table = self._table_text([("NVDA", "NVIDIA", 950.0, 8.5, 74.5, 45_000_000)])
 
         with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
+            patch("services.market_data.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
@@ -252,7 +295,7 @@ class TestFetchGainersGemini:
         ])
 
         with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
+            patch("services.market_data.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
@@ -273,7 +316,7 @@ class TestFetchGainersGemini:
             ))
 
         with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
+            patch("services.market_data.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(side_effect=handler)
@@ -290,7 +333,7 @@ class TestFetchGainersGemini:
         import httpx, respx
 
         with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
+            patch("services.market_data.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
@@ -305,7 +348,7 @@ class TestFetchGainersGemini:
         import httpx, respx
 
         with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
+            patch("services.market_data.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
@@ -328,10 +371,13 @@ class TestGetGainers:
             "change_abs": 74.5,
             "volume": 45_000_000,
             "sector": "Technology",
+            "has_catalyst": False,
         }
         return {**defaults, **kwargs}
 
     async def test_get_us_gainers_returns_sorted_list(self, service: MarketDataService) -> None:
+        # All 3 Gemini calls (NYSE, NASDAQ, catalyst) return the same list.
+        # Catalyst scan upgrades all tickers to confirmed; sort is (tier, -change_pct).
         raw = [
             self._raw_row(ticker="AMD", change_pct=12.0),
             self._raw_row(ticker="NVDA", change_pct=8.5),
@@ -361,9 +407,70 @@ class TestGetGainers:
             with pytest.raises(MarketDataError, match="Failed to fetch US gainers"):
                 await service.get_us_gainers()
 
+    async def test_get_us_gainers_deduplicates_nyse_nasdaq_overlap(
+        self, service: MarketDataService
+    ) -> None:
+        # NYSE and NASDAQ return the same ticker; only one copy should appear.
+        nyse_raw = [self._raw_row(ticker="NVDA", change_pct=8.5)]
+        nasdaq_raw = [self._raw_row(ticker="NVDA", change_pct=8.5)]
+        catalyst_raw: list[dict] = []
+        with patch.object(
+            service, "_fetch_gainers_gemini",
+            new=AsyncMock(side_effect=[nyse_raw, nasdaq_raw, catalyst_raw]),
+        ):
+            result = await service.get_us_gainers()
+        assert len([g for g in result if g.ticker == "NVDA"]) == 1
+
+    async def test_get_us_gainers_mover_upgraded_to_confirmed_by_catalyst_scan(
+        self, service: MarketDataService
+    ) -> None:
+        # NVDA appears in gainers as mover (has_catalyst=False) and also in catalyst scan.
+        gainers_raw = [self._raw_row(ticker="NVDA", change_pct=8.5, has_catalyst=False)]
+        catalyst_raw = [self._raw_row(ticker="NVDA", change_pct=8.5, has_catalyst=True)]
+        with patch.object(
+            service, "_fetch_gainers_gemini",
+            new=AsyncMock(side_effect=[gainers_raw, [], catalyst_raw]),
+        ):
+            result = await service.get_us_gainers()
+        nvda = next(g for g in result if g.ticker == "NVDA")
+        assert nvda.signal_tier == "confirmed"
+
+    async def test_get_us_gainers_catalyst_only_stock_added_as_catalyst_tier(
+        self, service: MarketDataService
+    ) -> None:
+        # ASTC appears only in catalyst scan (not in gainers list).
+        gainers_raw = [self._raw_row(ticker="NVDA", change_pct=8.5)]
+        catalyst_raw = [self._raw_row(ticker="ASTC", change_pct=2.0, has_catalyst=True)]
+        with patch.object(
+            service, "_fetch_gainers_gemini",
+            new=AsyncMock(side_effect=[gainers_raw, [], catalyst_raw]),
+        ):
+            result = await service.get_us_gainers()
+        astc = next((g for g in result if g.ticker == "ASTC"), None)
+        assert astc is not None
+        assert astc.signal_tier == "catalyst"
+
+    async def test_get_us_gainers_confirmed_sorted_before_mover(
+        self, service: MarketDataService
+    ) -> None:
+        # INTC is mover (+20%), ASTC is catalyst (only 2%) — confirmed/catalyst beat mover.
+        gainers_raw = [
+            self._raw_row(ticker="INTC", change_pct=20.0, has_catalyst=False),
+        ]
+        catalyst_raw = [self._raw_row(ticker="ASTC", change_pct=2.0, has_catalyst=True)]
+        with patch.object(
+            service, "_fetch_gainers_gemini",
+            new=AsyncMock(side_effect=[gainers_raw, [], catalyst_raw]),
+        ):
+            result = await service.get_us_gainers()
+        tiers = [g.signal_tier for g in result]
+        # catalyst tier (ASTC) should appear before mover tier (INTC)
+        assert tiers.index("catalyst") < tiers.index("mover")
+
     async def test_get_india_gainers_returns_india_market_tag(
         self, service: MarketDataService
     ) -> None:
+        # India uses 2 calls: gainers + catalyst scanner
         raw = [self._raw_row(ticker="RELIANCE", change_pct=5.2)]
         with patch.object(service, "_fetch_gainers_gemini", new=AsyncMock(return_value=raw)):
             result = await service.get_india_gainers()

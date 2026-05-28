@@ -177,7 +177,7 @@ class TestGainerAnalystAgent:
 
         analyst._mock = False
         with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
+            patch("agents.gainer_analyst.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
@@ -284,7 +284,7 @@ class TestPredictorAgent:
 
         predictor._mock = False
         with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
+            patch("agents.predictor.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
@@ -369,7 +369,7 @@ class TestMarketAnalystAgent:
 
         market_analyst._mock = False
         with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
+            patch("agents.market_analyst.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
@@ -385,10 +385,11 @@ class TestMarketAnalystAgent:
     async def test_live_gemini_invalid_json_raises(
         self, market_analyst: MarketAnalystAgent, sample_us_gainer: StockGainer
     ) -> None:
-        """Garbage response from Gemini should raise AIAgentError."""
+        """Garbage response from Gemini should raise AIAgentError (possibly wrapped by tenacity)."""
         import httpx
         import respx
         from core.exceptions import AIAgentError
+        from tenacity import RetryError
 
         fake_bad_response = {
             "candidates": [{
@@ -398,11 +399,15 @@ class TestMarketAnalystAgent:
 
         market_analyst._mock = False
         with (
-            patch("core.auth.get_cached_token", return_value="fake-token"),
+            patch("agents.market_analyst.get_cached_token", return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
                 return_value=httpx.Response(200, json=fake_bad_response)
             )
-            with pytest.raises(AIAgentError):
+            with pytest.raises((AIAgentError, RetryError)) as exc_info:
                 await market_analyst.analyse([sample_us_gainer], "us")
+        # tenacity may wrap AIAgentError in RetryError — verify the root cause
+        exc = exc_info.value
+        if isinstance(exc, RetryError):
+            assert isinstance(exc.__cause__, AIAgentError)

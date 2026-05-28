@@ -46,7 +46,7 @@ async def _warm_gainers_cache() -> None:
         market_data = get_market_data(_settings)
 
         async def _fetch_if_stale(market: str) -> None:
-            key = f"gainers:{market}:{today_str()}"
+            key = f"gainers:{market}"   # matches _list_cache_key — no date suffix
             if await cache.get(key):
                 log.info("startup.cache_already_warm", market=market)
                 return

@@ -8,6 +8,7 @@ export type OutlookHorizon = "days" | "weeks" | "months";
 export type FundamentalSignal = "strong" | "moderate" | "weak" | "unknown";
 export type ValuationSignal = "undervalued" | "fairly_valued" | "overvalued" | "unknown";
 export type QualityLabel = "Strong" | "Moderate" | "Watch" | "Risky";
+export type SignalTier = "confirmed" | "catalyst" | "mover";
 
 export interface StockGainer {
   ticker: string;
@@ -23,6 +24,7 @@ export interface StockGainer {
   industry?: string;
   quality_score?: number;
   quality_label?: QualityLabel;
+  signal_tier?: SignalTier;
 }
 
 export interface FundamentalsData {

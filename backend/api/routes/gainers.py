@@ -42,23 +42,24 @@ log = get_logger(__name__)
 
 
 # ── Cache key helpers ─────────────────────────────────────────────────────────
+# No date in keys — expiry is controlled purely by TTL.
+# This means the cache survives midnight and doesn't cold-start every morning.
+# The Refresh button or TTL expiry are the only ways to get fresh data.
 
 def _list_cache_key(market: Market) -> str:
-    return f"gainers:{market}:{today_str()}"
+    return f"gainers:{market}"
 
 
 def _data_cache_key(ticker: str, market: Market) -> str:
-    """Fast data endpoint (gainer + fundamentals + news, no AI). 30-min TTL."""
-    return f"data:{market}:{ticker}:{today_str()}"
+    return f"data:{market}:{ticker}"
 
 
 def _analysis_cache_key(ticker: str, market: Market) -> str:
-    """Slow AI endpoint. 6-hour TTL so switching stocks doesn't re-run AI."""
-    return f"analysis:{market}:{ticker}:{today_str()}"
+    return f"analysis:{market}:{ticker}"
 
 
 def _summary_cache_key(market: Market) -> str:
-    return f"summary:{market}:{today_str()}"
+    return f"summary:{market}"
 
 
 def _apply_quality_scores(gainers: list[StockGainer]) -> list[StockGainer]:
@@ -78,11 +79,14 @@ async def list_gainers(
     cache: Annotated[CacheBackend, Depends(get_cache)],
     market_data: Annotated[MarketDataService, Depends(get_market_data)],
     analyst: Annotated[MarketAnalystAgent, Depends(get_market_analyst)],
+    news_fetcher: Annotated[NewsFetcher, Depends(get_news_fetcher)],
+    gainer_analyst: Annotated[GainerAnalystAgent, Depends(get_gainer_analyst)],
     refresh: Annotated[bool, Query(description="Force bypass cache")] = False,
 ) -> GainersListResponse:
     """
-    Return today's top gainers with quality scores and AI market narrative.
-    Results are cached for 30 minutes (configurable via GAINERS_LIST_TTL).
+    Return the top gainers from the most recent trading session with AI narrative.
+    Cache is TTL-based (no date in key) so it survives midnight and pre-market hours.
+    After a fresh fetch, pre-warms AI analysis for the top 3 gainers in the background.
     """
     list_key = _list_cache_key(market)
     summary_key = _summary_cache_key(market)
@@ -103,6 +107,17 @@ async def list_gainers(
         gainers = await market_data.get_gainers(market)
     except Exception as exc:
         log.error("gainers.list_fetch_error", market=market, error=str(exc))
+        # Serve stale cache on error so users never see a blank page
+        stale = await cache.get(list_key)
+        if stale:
+            log.warning("gainers.serving_stale_on_error", market=market)
+            gainers = [StockGainer(**g) for g in stale["gainers"]]
+            cached_summary = await cache.get(summary_key)
+            summary = MarketSummary(**cached_summary) if cached_summary else None
+            return GainersListResponse(
+                market=market, date=today_str(), gainers=gainers,
+                summary=summary, from_cache=True,
+            )
         raise upstream_error("market data", str(exc))
 
     # Never cache an empty result — let the next request try Gemini again.
@@ -112,7 +127,7 @@ async def list_gainers(
             market=market, date=today_str(), gainers=[], summary=None, from_cache=False,
         )
 
-    # Fire market summary AI call in parallel with cache write
+    # Market summary + cache write in parallel
     async def _get_summary() -> MarketSummary | None:
         try:
             s = await analyst.analyse(gainers, market)
@@ -127,10 +142,70 @@ async def list_gainers(
         cache.set(list_key, {"gainers": [g.model_dump() for g in gainers]}, settings.gainers_list_ttl),
     )
 
+    # Pre-warm AI analysis for top 5 gainers in the background so the first
+    # user to click a card gets a cached result instead of waiting 15-20 s.
+    asyncio.create_task(
+        _prewarm_top_analysis(gainers[:5], market, cache, market_data, news_fetcher, gainer_analyst, settings)
+    )
+
     return GainersListResponse(
         market=market, date=today_str(), gainers=gainers,
         summary=summary, from_cache=False,
     )
+
+
+async def _prewarm_top_analysis(
+    gainers: list[StockGainer],
+    market: Market,
+    cache: CacheBackend,
+    market_data: MarketDataService,
+    news_fetcher: NewsFetcher,
+    analyst: GainerAnalystAgent,
+    settings: Settings,
+) -> None:
+    """
+    Background task: pre-generate AI analysis for the top gainers so the first
+    user click on any of them is served from cache (instant) instead of cold
+    (15-20 s Gemini call).  Runs up to 3 concurrently via semaphore to balance
+    speed against Vertex AI rate limits.
+    """
+    sem = asyncio.Semaphore(settings.prewarm_concurrency)
+
+    async def _warm_one(gainer: StockGainer) -> None:
+        key = _analysis_cache_key(gainer.ticker, market)
+        async with sem:
+            try:
+                if await cache.get(key):
+                    return  # already warm
+                log.info("gainers.prewarm_start", ticker=gainer.ticker, market=market)
+                fundamentals, news = await asyncio.gather(
+                    market_data.get_fundamentals(gainer.ticker, market),
+                    news_fetcher.get_news(gainer.ticker, gainer.name),
+                    return_exceptions=True,
+                )
+                analysis, prediction = await analyst.analyse_full(
+                    ticker=gainer.ticker,
+                    change_pct=gainer.change_pct,
+                    company_name=gainer.name,
+                    sector=gainer.sector,
+                    news=news if not isinstance(news, Exception) else [],
+                    fundamentals=fundamentals if not isinstance(fundamentals, Exception) else None,
+                    gainers_context=None,
+                )
+                response = StockAnalysisResponse(
+                    ticker=gainer.ticker,
+                    market=market,
+                    analysis=analysis,
+                    prediction=prediction,
+                    from_cache=False,
+                    analysed_at=datetime.utcnow(),
+                )
+                await cache.set(key, response.model_dump(), settings.analysis_ttl)
+                log.info("gainers.prewarm_done", ticker=gainer.ticker, market=market)
+            except Exception as exc:
+                log.warning("gainers.prewarm_failed", ticker=gainer.ticker, error=str(exc))
+
+    await asyncio.gather(*[_warm_one(g) for g in gainers])
 
 
 # ── Fast data endpoint ────────────────────────────────────────────────────────
@@ -159,7 +234,7 @@ async def get_gainer_detail(
         cached = await cache.get(key)
         if cached:
             log.info("gainers.data_cache_hit", ticker=ticker, market=market)
-            return GainerDetail(**cached)
+            return GainerDetail(**{**cached, "from_cache": True})
 
     # _resolve_gainer returns the raw yfinance info dict alongside the StockGainer.
     # When the gainer came from the cached gainers list the dict is empty ({}),
@@ -231,7 +306,7 @@ async def get_gainer_analysis(
         cached = await cache.get(key)
         if cached:
             log.info("gainers.analysis_cache_hit", ticker=ticker, market=market)
-            return StockAnalysisResponse(**cached)
+            return StockAnalysisResponse(**{**cached, "from_cache": True})
 
     # Resolve gainer + gainers list in parallel (list used for comparison context)
     (gainer, _yf_info), gainers_list = await asyncio.gather(
@@ -340,7 +415,7 @@ async def _resolve_gainer(
     import yfinance as yf
     from services.market_data import _safe_float, _safe_int
 
-    # ── Step 1: today's gainer list (cache hit → instant) ────────────────────
+    # ── Step 1: cached gainers list (instant) ────────────────────────────────
     try:
         gainers = await market_data.get_gainers(market)
         match = next((g for g in gainers if g.ticker == ticker), None)
@@ -349,35 +424,43 @@ async def _resolve_gainer(
     except Exception:
         pass
 
-    # ── Step 2: direct yfinance lookup ────────────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────────────
     async def _yf_lookup(sym: str) -> dict:
+        """yfinance lookup with a hard 8-second timeout.
+        Without this yfinance can hang for 30-40 s waiting for Yahoo Finance."""
         yf_sym = f"{sym}.NS" if market == "india" else sym
-        return await asyncio.to_thread(lambda: yf.Ticker(yf_sym).info)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(lambda: yf.Ticker(yf_sym).info),
+                timeout=8.0,
+            )
+        except asyncio.TimeoutError:
+            log.warning("gainers.yf_lookup_timeout", ticker=sym)
+            return {}
+        except Exception:
+            return {}
+
+    def _looks_like_company_name(s: str) -> bool:
+        """Heuristic: real ticker symbols are ≤5 chars.
+        Longer all-alpha strings (NVIDIA, SANDISK, RELIANCE) are company names —
+        skip the yfinance round-trip and resolve via Gemini directly."""
+        return len(s) > 5 and s.isalpha()
 
     info: dict = {}
-    try:
-        info = await _yf_lookup(ticker)
-    except Exception:
-        pass
 
-    # ── Step 3: name resolution fallback ──────────────────────────────────────
-    # If yfinance returned no market price the user probably typed a company name
-    # (e.g. "SANDISK" → should resolve to "SNDK"). We try Yahoo Finance search
-    # first, then Gemini (training knowledge) as a reliable secondary.
+    # ── Step 2: direct yfinance (only for plausible tickers, ≤5 chars) ───────
+    if not _looks_like_company_name(ticker):
+        info = await _yf_lookup(ticker)
+
+    # ── Step 3: name/ticker resolution ───────────────────────────────────────
+    # Triggered when: (a) input looks like a company name, or (b) yfinance
+    # returned no price for what looked like a ticker (e.g. outdated symbol).
     if not info or not info.get("regularMarketPrice"):
         resolved = await resolve_ticker_by_name(ticker, market)
         if resolved and resolved.upper() != ticker:
-            log.info(
-                "gainers.ticker_resolved",
-                query=ticker,
-                resolved=resolved,
-                market=market,
-            )
+            log.info("gainers.ticker_resolved", query=ticker, resolved=resolved, market=market)
             ticker = resolved.upper()
-            try:
-                info = await _yf_lookup(ticker)
-            except Exception:
-                pass
+            info = await _yf_lookup(ticker)
 
     if not info or not info.get("regularMarketPrice"):
         return None, {}

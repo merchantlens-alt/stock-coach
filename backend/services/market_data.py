@@ -12,7 +12,7 @@ from core.auth import get_cached_token
 from core.config import Settings
 from core.exceptions import MarketDataError, TickerNotFoundError
 from core.logging import get_logger
-from models.schemas import FundamentalsData, Market, StockGainer, compute_quality_score
+from models.schemas import FundamentalsData, Market, SignalTier, StockGainer, compute_quality_score
 
 log = get_logger(__name__)
 
@@ -37,33 +37,78 @@ _US_EXCHANGES = {"NMS", "NYQ", "NGM", "PCX", "BATS", "ASE", "OPR"}
 _TABLE_FORMAT = """
 Output ONLY a pipe-delimited data table — no headers, no prose, no markdown.
 One stock per line in this exact format:
-TICKER|NAME|PRICE|CHANGE_PCT|CHANGE_ABS|VOLUME|SECTOR
+TICKER|NAME|PRICE|CHANGE_PCT|CHANGE_ABS|VOLUME|SECTOR|HAS_CATALYST
+
+HAS_CATALYST: Y if a specific news catalyst exists (FDA/regulatory approval, government contract, \
+earnings beat, major partnership, acquisition, licensing deal), N if no clear catalyst.
 
 Example:
-ASTC|Astrotech Corporation|6.55|165.2|4.08|500000|Industrials
-NVDA|NVIDIA Corporation|950.00|8.5|74.50|45000000|Technology
+ASTC|Astrotech Corporation|6.55|165.2|4.08|500000|Industrials|Y
+NVDA|NVIDIA Corporation|950.00|8.5|74.50|45000000|Technology|N
 
 Output at least 20 stocks. Sort by CHANGE_PCT descending."""
 
-_US_PROMPT = (
-    "Use Google Search to find today's top 50 US stock gainers on NYSE and NASDAQ right now.\n\n"
+_US_NYSE_PROMPT = (
+    "Use Google Search to find the top 25 US stock gainers on NYSE from the most recent trading session (last 24 hours).\n\n"
     "Only include stocks where ALL of these are true:\n"
-    "- Listed on NYSE or NASDAQ (not OTC or pink sheets)\n"
-    "- Current price above $5\n"
-    "- Today's trading volume above 500,000 shares\n"
+    "- Listed on NYSE (not OTC or pink sheets)\n"
+    "- Price above $5\n"
+    "- Session volume above 500,000 shares\n"
+    "- Ticker symbol is 5 characters or fewer\n"
+    "- Not a warrant/right/unit (ticker does not end in W, R, or U)\n\n"
+    + _TABLE_FORMAT
+)
+
+_US_NASDAQ_PROMPT = (
+    "Use Google Search to find the top 25 US stock gainers on NASDAQ from the most recent trading session (last 24 hours).\n\n"
+    "Only include stocks where ALL of these are true:\n"
+    "- Listed on NASDAQ (not OTC or pink sheets)\n"
+    "- Price above $5\n"
+    "- Session volume above 500,000 shares\n"
     "- Ticker symbol is 5 characters or fewer\n"
     "- Not a warrant/right/unit (ticker does not end in W, R, or U)\n\n"
     + _TABLE_FORMAT
 )
 
 _INDIA_PROMPT = (
-    "Use Google Search to find today's top 50 NSE (National Stock Exchange of India) "
-    "stock gainers right now.\n\n"
+    "Use Google Search to find the top 50 NSE (National Stock Exchange of India) "
+    "stock gainers from the most recent trading session (last 24 hours).\n\n"
     "Only include stocks where ALL of these are true:\n"
     "- Listed on NSE India\n"
-    "- Current price above ₹50\n"
-    "- Today's trading volume above 100,000 shares\n\n"
+    "- Price above ₹50\n"
+    "- Session volume above 100,000 shares\n\n"
     "Use the NSE ticker symbol WITHOUT the .NS suffix.\n"
+    "Use INR values for PRICE and CHANGE_ABS.\n\n"
+    + _TABLE_FORMAT
+)
+
+_US_CATALYST_PROMPT = (
+    "Use Google Search to find US stocks (NYSE or NASDAQ) that have significant news catalysts "
+    "published in the last 24 hours. Focus on catalysts that open new markets or represent "
+    "structural changes — not just short-term pops.\n\n"
+    "Target catalyst types: FDA or government regulatory approvals, government contracts or grants, "
+    "major partnerships or licensing deals, clinical trial results, index inclusions, "
+    "earnings surprises, acquisition announcements.\n\n"
+    "Include stocks with ANY positive price change (even 1–5%) — the catalyst matters more than "
+    "the current % gain.\n\n"
+    "Only include stocks where ALL of these are true:\n"
+    "- Listed on NYSE or NASDAQ (not OTC or pink sheets)\n"
+    "- Price above $3\n"
+    "- Ticker symbol is 5 characters or fewer\n"
+    "- Has a specific, identifiable news catalyst\n\n"
+    + _TABLE_FORMAT
+)
+
+_INDIA_CATALYST_PROMPT = (
+    "Use Google Search to find NSE India stocks that have significant news catalysts "
+    "published in the last 24 hours. Focus on catalysts that represent structural changes "
+    "or material business events.\n\n"
+    "Target catalyst types: SEBI or government approvals, major government contracts, "
+    "FII investments or block deals, earnings surprises, major partnerships, "
+    "sector policy changes.\n\n"
+    "Include stocks with ANY positive price change (even 1–5%) — the catalyst matters more than "
+    "the current % gain.\n\n"
+    "Only include NSE-listed stocks. Use ticker WITHOUT the .NS suffix. "
     "Use INR values for PRICE and CHANGE_ABS.\n\n"
     + _TABLE_FORMAT
 )
@@ -83,20 +128,58 @@ class MarketDataService:
 
     async def get_us_gainers(self) -> list[StockGainer]:
         try:
-            raw = await self._fetch_gainers_gemini(_US_PROMPT, "us")
-            gainers = self._build_gainers(raw, "us")
-            log.info("market_data.us_gainers_fetched", count=len(gainers))
-            return gainers[: self._top_n]
+            # Three parallel Gemini calls: NYSE, NASDAQ, and a catalyst scanner.
+            # NYSE/NASDAQ find stocks by % gain; catalyst scanner finds stocks by news quality.
+            nyse_raw, nasdaq_raw, catalyst_raw = await asyncio.gather(
+                self._fetch_gainers_gemini(_US_NYSE_PROMPT, "us-nyse"),
+                self._fetch_gainers_gemini(_US_NASDAQ_PROMPT, "us-nasdaq"),
+                self._fetch_gainers_gemini(_US_CATALYST_PROMPT, "us-catalyst"),
+            )
+            # Build and deduplicate NYSE+NASDAQ gainers
+            gainers = self._build_gainers(nyse_raw + nasdaq_raw, "us")
+            seen: set[str] = set()
+            deduped: list[StockGainer] = []
+            for g in gainers:
+                if g.ticker not in seen:
+                    seen.add(g.ticker)
+                    deduped.append(g)
+            gainers = deduped
+
+            # Build catalyst plays and merge — upgrades movers to confirmed, adds new catalyst stocks
+            catalyst_plays = self._build_gainers(catalyst_raw, "us")
+            merged = self._merge_gainers_and_catalysts(gainers, catalyst_plays)
+
+            log.info(
+                "market_data.us_gainers_fetched",
+                count=len(merged),
+                confirmed=sum(1 for g in merged if g.signal_tier == "confirmed"),
+                catalyst=sum(1 for g in merged if g.signal_tier == "catalyst"),
+                mover=sum(1 for g in merged if g.signal_tier == "mover"),
+            )
+            return merged[: self._top_n]
         except Exception as exc:
             log.error("market_data.us_gainers_error", error=str(exc))
             raise MarketDataError(f"Failed to fetch US gainers: {exc}") from exc
 
     async def get_india_gainers(self) -> list[StockGainer]:
         try:
-            raw = await self._fetch_gainers_gemini(_INDIA_PROMPT, "india")
-            gainers = self._build_gainers(raw, "india")
-            log.info("market_data.india_gainers_fetched", count=len(gainers))
-            return gainers[: self._top_n]
+            # Two parallel Gemini calls: India gainers + India catalyst scanner
+            india_raw, catalyst_raw = await asyncio.gather(
+                self._fetch_gainers_gemini(_INDIA_PROMPT, "india"),
+                self._fetch_gainers_gemini(_INDIA_CATALYST_PROMPT, "india-catalyst"),
+            )
+            gainers = self._build_gainers(india_raw, "india")
+            catalyst_plays = self._build_gainers(catalyst_raw, "india")
+            merged = self._merge_gainers_and_catalysts(gainers, catalyst_plays)
+
+            log.info(
+                "market_data.india_gainers_fetched",
+                count=len(merged),
+                confirmed=sum(1 for g in merged if g.signal_tier == "confirmed"),
+                catalyst=sum(1 for g in merged if g.signal_tier == "catalyst"),
+                mover=sum(1 for g in merged if g.signal_tier == "mover"),
+            )
+            return merged[: self._top_n]
         except Exception as exc:
             log.error("market_data.india_gainers_error", error=str(exc))
             raise MarketDataError(f"Failed to fetch India gainers: {exc}") from exc
@@ -183,6 +266,9 @@ class MarketDataService:
                 if change_pct <= 0:
                     continue
 
+                has_catalyst = bool(q.get("has_catalyst", False))
+                tier: SignalTier = "confirmed" if has_catalyst else "mover"
+
                 score, label = compute_quality_score(price, volume, change_pct, ticker)
                 gainers.append(
                     StockGainer(
@@ -196,12 +282,46 @@ class MarketDataService:
                         sector=q.get("sector"),
                         quality_score=score,
                         quality_label=label,
+                        signal_tier=tier,
                     )
                 )
             except Exception:
                 continue
 
         return sorted(gainers, key=lambda g: g.change_pct, reverse=True)
+
+    def _merge_gainers_and_catalysts(
+        self,
+        gainers: list[StockGainer],
+        catalyst_plays: list[StockGainer],
+    ) -> list[StockGainer]:
+        """
+        Merge gainers list with catalyst plays and assign final signal tiers.
+
+        Rules:
+          - Gainer whose ticker also appears in catalyst_plays → upgraded to 'confirmed'
+          - Catalyst play not in gainers → added as 'catalyst'
+          - Gainer not in catalyst_plays → keeps its tier ('confirmed' or 'mover')
+        Sort: confirmed first, catalyst second, mover third; within each tier by change_pct desc.
+        """
+        gainer_tickers = {g.ticker for g in gainers}
+        seen = gainer_tickers.copy()
+
+        # Build index for O(1) lookup; reconstruct immutably to avoid mutating cached objects.
+        gainer_index: dict[str, int] = {g.ticker: i for i, g in enumerate(gainers)}
+        result: list[StockGainer] = list(gainers)
+
+        for cp in catalyst_plays:
+            if cp.ticker in gainer_tickers:
+                i = gainer_index[cp.ticker]
+                result[i] = result[i].model_copy(update={"signal_tier": "confirmed"})
+            elif cp.ticker not in seen:
+                result.append(cp.model_copy(update={"signal_tier": "catalyst"}))
+                seen.add(cp.ticker)
+
+        _TIER_ORDER: dict[SignalTier, int] = {"confirmed": 0, "catalyst": 1, "mover": 2}
+        result.sort(key=lambda g: (_TIER_ORDER[g.signal_tier], -g.change_pct))
+        return result
 
     # ── yfinance for fundamentals ─────────────────────────────────────────────
 
@@ -270,9 +390,11 @@ def _parse_pipe_table(text: str) -> list[dict[str, Any]]:
         change_abs_str = parts[4]
         volume_str = parts[5]
         sector = parts[6].strip() if len(parts) > 6 else None
+        has_catalyst = parts[7].strip().upper() in ("Y", "YES", "TRUE", "1") if len(parts) > 7 else False
 
-        # Skip header rows (price field is not numeric) and blank tickers
-        if not raw_ticker or len(raw_ticker) > 10:
+        # Skip header rows (price field is not numeric), blank tickers, and
+        # purely numeric strings (e.g. "123") — real tickers have at least one letter.
+        if not raw_ticker or len(raw_ticker) > 10 or not any(c.isalpha() for c in raw_ticker):
             continue
 
         try:
@@ -297,6 +419,7 @@ def _parse_pipe_table(text: str) -> list[dict[str, Any]]:
             "change_abs": change_abs,
             "volume": volume,
             "sector": sector if sector else None,
+            "has_catalyst": has_catalyst,
         })
 
     if results:

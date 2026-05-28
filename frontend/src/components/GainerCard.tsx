@@ -1,11 +1,12 @@
-import { TrendingUp } from "lucide-react";
-import type { QualityLabel, StockGainer } from "../types";
+import { Flame, TrendingUp, Zap } from "lucide-react";
+import type { QualityLabel, SignalTier, StockGainer } from "../types";
 
 interface Props {
   gainer: StockGainer;
   isSelected: boolean;
   isLoading: boolean;
   onClick: () => void;
+  onPrefetch?: () => void;
 }
 
 function formatVolume(vol: number): string {
@@ -21,13 +22,34 @@ const QUALITY_STYLES: Record<QualityLabel, string> = {
   Risky:    "bg-red-50 text-red-500 border-red-200",
 };
 
-export function GainerCard({ gainer, isSelected, isLoading, onClick }: Props) {
+const TIER_CONFIG: Record<SignalTier, { label: string; style: string; icon: React.ReactNode }> = {
+  confirmed: {
+    label: "Confirmed",
+    style: "bg-green-100 text-green-700 border-green-200",
+    icon: <Flame size={10} className="shrink-0" />,
+  },
+  catalyst: {
+    label: "Catalyst",
+    style: "bg-indigo-100 text-indigo-700 border-indigo-200",
+    icon: <Zap size={10} className="shrink-0" />,
+  },
+  mover: {
+    label: "Mover",
+    style: "bg-gray-100 text-gray-500 border-gray-200",
+    icon: <TrendingUp size={10} className="shrink-0" />,
+  },
+};
+
+export function GainerCard({ gainer, isSelected, isLoading, onClick, onPrefetch }: Props) {
   const currency = gainer.market === "india" ? "₹" : "$";
   const qualityStyle = gainer.quality_label ? QUALITY_STYLES[gainer.quality_label] : "";
+  const tier = gainer.signal_tier ?? "mover";
+  const tierConfig = TIER_CONFIG[tier];
 
   return (
     <button
       onClick={onClick}
+      onMouseEnter={onPrefetch}
       className={[
         "w-full text-left rounded-xl border p-4 transition-all duration-150",
         "hover:shadow-md hover:border-green-300",
@@ -41,6 +63,10 @@ export function GainerCard({ gainer, isSelected, isLoading, onClick }: Props) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-bold text-gray-900 text-sm">{gainer.ticker}</span>
+            <span className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border font-semibold ${tierConfig.style}`}>
+              {tierConfig.icon}
+              {tierConfig.label}
+            </span>
             {gainer.quality_label && (
               <span className={`text-xs px-1.5 py-0.5 rounded border font-medium ${qualityStyle}`}>
                 {gainer.quality_label}

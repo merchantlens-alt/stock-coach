@@ -146,9 +146,14 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, onClose }: Pr
           )}
         </div>
 
-        {/* ── AI section — skeleton while loading, content when ready ── */}
+        {/* ── AI section ── */}
         {analysisLoading && !aiData ? (
           <AISkeleton />
+        ) : !analysisLoading && aiData && !aiData.analysis ? (
+          /* Analysis endpoint returned but AI was unable to generate content */
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700">
+            AI analysis could not be generated for this stock. Try refreshing in a moment.
+          </div>
         ) : (
           <>
             {/* Why it gained */}

@@ -257,6 +257,46 @@ class TestStockGainerSchema:
         assert g.sector is None
         assert g.industry is None
 
+    def test_signal_tier_defaults_to_mover(self) -> None:
+        g = StockGainer(
+            ticker="TEST", name="Test", market="us",
+            price=10.0, change_pct=5.0, change_abs=0.5, volume=1_000_000,
+        )
+        assert g.signal_tier == "mover"
+
+    def test_signal_tier_confirmed_accepted(self) -> None:
+        g = StockGainer(
+            ticker="ASTC", name="Astrotech", market="us",
+            price=6.55, change_pct=165.0, change_abs=4.08, volume=500_000,
+            signal_tier="confirmed",
+        )
+        assert g.signal_tier == "confirmed"
+
+    def test_signal_tier_catalyst_accepted(self) -> None:
+        g = StockGainer(
+            ticker="BIO", name="Biotech Co", market="us",
+            price=12.0, change_pct=2.0, change_abs=0.24, volume=200_000,
+            signal_tier="catalyst",
+        )
+        assert g.signal_tier == "catalyst"
+
+    def test_signal_tier_invalid_value_raises(self) -> None:
+        with pytest.raises(Exception):
+            StockGainer(
+                ticker="TEST", name="Test", market="us",
+                price=10.0, change_pct=5.0, change_abs=0.5, volume=1_000_000,
+                signal_tier="unknown",  # type: ignore[arg-type]
+            )
+
+    def test_signal_tier_survives_round_trip_via_model_dump(self) -> None:
+        g = StockGainer(
+            ticker="NVDA", name="NVIDIA", market="us",
+            price=950.0, change_pct=8.5, change_abs=74.5, volume=45_000_000,
+            signal_tier="confirmed",
+        )
+        restored = StockGainer(**g.model_dump())
+        assert restored.signal_tier == "confirmed"
+
 
 class TestGainerAnalysisSchema:
     """Tests for GainerAnalysis model, focusing on the new related_beneficiaries fields."""

@@ -9,6 +9,7 @@ from models.schemas import (
     GainerDetail,
     GainersListResponse,
     MarketSummary,
+    StockAnalysisResponse,
     StockGainer,
 )
 
@@ -52,10 +53,6 @@ class TestListGainers:
     def test_list_includes_summary_from_mock_ai(
         self, client: TestClient, sample_us_gainer: StockGainer
     ) -> None:
-        """
-        With MOCK_AI=true the MarketAnalystAgent returns a mock MarketSummary.
-        The response should include the summary field with all expected keys.
-        """
         with patch(
             "services.market_data.MarketDataService.get_gainers",
             new=AsyncMock(return_value=[sample_us_gainer]),
@@ -70,29 +67,22 @@ class TestListGainers:
         assert "sentiment" in summary
         assert "watch_list" in summary
         assert "watch_reason" in summary
-        # Validate sentiment is one of the allowed values
         valid_sentiments = {"very_bullish", "bullish", "mixed", "bearish", "very_bearish"}
         assert summary["sentiment"] in valid_sentiments
 
     def test_list_gainers_response_schema_is_valid(
         self, client: TestClient, sample_us_gainer: StockGainer
     ) -> None:
-        """Validate that the full response body can be parsed into GainersListResponse."""
         with patch(
             "services.market_data.MarketDataService.get_gainers",
             new=AsyncMock(return_value=[sample_us_gainer]),
         ):
             resp = client.get("/api/gainers/us?refresh=true")
         body = resp.json()
-        # Pydantic should be able to parse the response without error
         parsed = GainersListResponse(**body)
         assert parsed.market == "us"
 
     def test_gainers_have_quality_score_when_set(self, client: TestClient) -> None:
-        """
-        When market_data returns a gainer with quality_score and quality_label,
-        those values should appear in the API response.
-        """
         gainer_with_quality = StockGainer(
             ticker="NVDA",
             name="NVIDIA",
@@ -114,6 +104,25 @@ class TestListGainers:
         assert len(gainers) == 1
         assert gainers[0]["quality_score"] == 9.2
         assert gainers[0]["quality_label"] == "Strong"
+
+    def test_gainers_have_signal_tier(self, client: TestClient) -> None:
+        gainer = StockGainer(
+            ticker="ASTC",
+            name="Astrotech",
+            market="us",
+            price=6.55,
+            change_pct=165.0,
+            change_abs=4.08,
+            volume=500_000,
+            signal_tier="confirmed",
+        )
+        with patch(
+            "services.market_data.MarketDataService.get_gainers",
+            new=AsyncMock(return_value=[gainer]),
+        ):
+            resp = client.get("/api/gainers/us?refresh=true")
+        gainers = resp.json()["gainers"]
+        assert gainers[0]["signal_tier"] == "confirmed"
 
     def test_gainers_quality_label_is_valid_value(self, client: TestClient) -> None:
         gainer = StockGainer(
@@ -143,9 +152,7 @@ class TestListGainers:
             "services.market_data.MarketDataService.get_gainers",
             new=AsyncMock(return_value=[sample_us_gainer]),
         ):
-            # First call — populates cache
             client.get("/api/gainers/us?refresh=true")
-            # Second call — should come from cache
             resp = client.get("/api/gainers/us")
         assert resp.json()["from_cache"] is True
 
@@ -154,15 +161,15 @@ class TestListGainers:
     ) -> None:
         mock_fn = AsyncMock(return_value=[sample_us_gainer])
         with patch("services.market_data.MarketDataService.get_gainers", new=mock_fn):
-            client.get("/api/gainers/us")           # Populate cache
-            client.get("/api/gainers/us?refresh=true")  # Should call real service again
-
-        # Called at least twice (once for populate, once for refresh)
+            client.get("/api/gainers/us")
+            client.get("/api/gainers/us?refresh=true")
         assert mock_fn.call_count >= 2
 
 
 class TestGainerDetail:
-    def test_detail_with_mock_ai_returns_full_response(
+    """Tests for GET /gainers/{market}/{ticker} — fast data endpoint (no AI)."""
+
+    def test_detail_returns_gainer_fundamentals_news(
         self,
         client: TestClient,
         sample_us_gainer: StockGainer,
@@ -170,54 +177,24 @@ class TestGainerDetail:
         sample_news,
     ) -> None:
         with (
-            patch("api.routes.gainers._resolve_gainer", new=AsyncMock(return_value=sample_us_gainer)),
-            patch(
-                "services.market_data.MarketDataService.get_fundamentals",
-                new=AsyncMock(return_value=sample_fundamentals),
-            ),
-            patch(
-                "services.news_fetcher.NewsFetcher.get_news",
-                new=AsyncMock(return_value=sample_news),
-            ),
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(sample_us_gainer, {}))),
+            patch("services.market_data.MarketDataService.get_fundamentals",
+                  new=AsyncMock(return_value=sample_fundamentals)),
+            patch("services.news_fetcher.NewsFetcher.get_news",
+                  new=AsyncMock(return_value=sample_news)),
         ):
             resp = client.get("/api/gainers/us/NVDA")
         assert resp.status_code == 200
         body = resp.json()
         assert body["gainer"]["ticker"] == "NVDA"
-        assert body["analysis"] is not None
-        assert body["prediction"] is not None
+        assert body["fundamentals"] is not None
+        assert len(body["news"]) > 0
+        # analysis and prediction are NOT in the fast endpoint
+        assert "analysis" not in body
+        assert "prediction" not in body
 
-    def test_detail_analysis_includes_related_beneficiaries(
-        self,
-        client: TestClient,
-        sample_us_gainer: StockGainer,
-        sample_fundamentals,
-        sample_news,
-    ) -> None:
-        """
-        Mock AI GainerAnalyst always returns related_beneficiaries.
-        They must appear in the response JSON under analysis.
-        """
-        with (
-            patch("api.routes.gainers._resolve_gainer", new=AsyncMock(return_value=sample_us_gainer)),
-            patch(
-                "services.market_data.MarketDataService.get_fundamentals",
-                new=AsyncMock(return_value=sample_fundamentals),
-            ),
-            patch(
-                "services.news_fetcher.NewsFetcher.get_news",
-                new=AsyncMock(return_value=sample_news),
-            ),
-        ):
-            resp = client.get("/api/gainers/us/NVDA")
-        assert resp.status_code == 200
-        analysis = resp.json()["analysis"]
-        assert "related_beneficiaries" in analysis
-        assert isinstance(analysis["related_beneficiaries"], list)
-        # Mock AI always returns AMD, SMCI, AVGO
-        assert len(analysis["related_beneficiaries"]) > 0
-
-    def test_detail_analysis_includes_beneficiary_reasoning(
+    def test_detail_response_schema_is_valid(
         self,
         client: TestClient,
         sample_us_gainer: StockGainer,
@@ -225,27 +202,25 @@ class TestGainerDetail:
         sample_news,
     ) -> None:
         with (
-            patch("api.routes.gainers._resolve_gainer", new=AsyncMock(return_value=sample_us_gainer)),
-            patch(
-                "services.market_data.MarketDataService.get_fundamentals",
-                new=AsyncMock(return_value=sample_fundamentals),
-            ),
-            patch(
-                "services.news_fetcher.NewsFetcher.get_news",
-                new=AsyncMock(return_value=sample_news),
-            ),
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(sample_us_gainer, {}))),
+            patch("services.market_data.MarketDataService.get_fundamentals",
+                  new=AsyncMock(return_value=sample_fundamentals)),
+            patch("services.news_fetcher.NewsFetcher.get_news",
+                  new=AsyncMock(return_value=sample_news)),
         ):
             resp = client.get("/api/gainers/us/NVDA")
-        analysis = resp.json()["analysis"]
-        assert analysis.get("beneficiary_reasoning") is not None
-        assert len(analysis["beneficiary_reasoning"]) > 10
+        body = resp.json()
+        parsed = GainerDetail(**body)
+        assert parsed.gainer.ticker == "NVDA"
 
     def test_unknown_ticker_returns_404(self, client: TestClient) -> None:
-        with patch("api.routes.gainers._resolve_gainer", new=AsyncMock(return_value=None)):
+        with patch("api.routes.gainers._resolve_gainer",
+                   new=AsyncMock(return_value=(None, {}))):
             resp = client.get("/api/gainers/us/FAKEXYZ999")
         assert resp.status_code == 404
 
-    def test_analysis_cached_on_second_call(
+    def test_detail_cached_on_second_call(
         self,
         client: TestClient,
         sample_us_gainer: StockGainer,
@@ -253,15 +228,12 @@ class TestGainerDetail:
         sample_news,
     ) -> None:
         with (
-            patch("api.routes.gainers._resolve_gainer", new=AsyncMock(return_value=sample_us_gainer)),
-            patch(
-                "services.market_data.MarketDataService.get_fundamentals",
-                new=AsyncMock(return_value=sample_fundamentals),
-            ),
-            patch(
-                "services.news_fetcher.NewsFetcher.get_news",
-                new=AsyncMock(return_value=sample_news),
-            ),
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(sample_us_gainer, {}))),
+            patch("services.market_data.MarketDataService.get_fundamentals",
+                  new=AsyncMock(return_value=sample_fundamentals)),
+            patch("services.news_fetcher.NewsFetcher.get_news",
+                  new=AsyncMock(return_value=sample_news)),
         ):
             resp1 = client.get("/api/gainers/us/NVDA")
             assert resp1.status_code == 200
@@ -271,82 +243,41 @@ class TestGainerDetail:
             assert resp2.status_code == 200
             assert resp2.json()["from_cache"]
 
-    def test_cache_invalidation_endpoint(self, client: TestClient) -> None:
-        resp = client.delete("/api/gainers/us/NVDA/cache")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] == "invalidated"
-        assert "NVDA" in body["key"]
-
-    def test_detail_response_schema_is_valid(
-        self,
-        client: TestClient,
-        sample_us_gainer: StockGainer,
-        sample_fundamentals,
-        sample_news,
-    ) -> None:
-        """Full response body should parse into GainerDetail without error."""
-        with (
-            patch("api.routes.gainers._resolve_gainer", new=AsyncMock(return_value=sample_us_gainer)),
-            patch(
-                "services.market_data.MarketDataService.get_fundamentals",
-                new=AsyncMock(return_value=sample_fundamentals),
-            ),
-            patch(
-                "services.news_fetcher.NewsFetcher.get_news",
-                new=AsyncMock(return_value=sample_news),
-            ),
-        ):
-            resp = client.get("/api/gainers/us/NVDA")
-        body = resp.json()
-        parsed = GainerDetail(**body)
-        assert parsed.gainer.ticker == "NVDA"
-
     def test_fundamentals_failure_returns_partial_result(
         self, client: TestClient, sample_us_gainer: StockGainer, sample_news
     ) -> None:
-        """If fundamentals fail, the route should still return analysis (no prediction)."""
         from core.exceptions import MarketDataError
 
         with (
-            patch("api.routes.gainers._resolve_gainer", new=AsyncMock(return_value=sample_us_gainer)),
-            patch(
-                "services.market_data.MarketDataService.get_fundamentals",
-                new=AsyncMock(side_effect=MarketDataError("yfinance timeout")),
-            ),
-            patch(
-                "services.news_fetcher.NewsFetcher.get_news",
-                new=AsyncMock(return_value=sample_news),
-            ),
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(sample_us_gainer, {}))),
+            patch("services.market_data.MarketDataService.get_fundamentals",
+                  new=AsyncMock(side_effect=MarketDataError("yfinance timeout"))),
+            patch("services.news_fetcher.NewsFetcher.get_news",
+                  new=AsyncMock(return_value=sample_news)),
         ):
             resp = client.get("/api/gainers/us/NVDA")
-        # Should succeed — partial result rather than 500
         assert resp.status_code == 200
         body = resp.json()
-        assert body["fundamentals"] is None   # Failed
-        assert body["analysis"] is not None   # Succeeded (no fundamentals needed)
-        assert body["prediction"] is None     # Skipped (needs fundamentals)
+        assert body["fundamentals"] is None       # failed → null
+        assert body["gainer"]["ticker"] == "NVDA" # gainer always present
 
     def test_news_failure_returns_partial_result(
         self, client: TestClient, sample_us_gainer: StockGainer, sample_fundamentals
     ) -> None:
-        """If news fetch fails, route still returns analysis with empty news."""
         with (
-            patch("api.routes.gainers._resolve_gainer", new=AsyncMock(return_value=sample_us_gainer)),
-            patch(
-                "services.market_data.MarketDataService.get_fundamentals",
-                new=AsyncMock(return_value=sample_fundamentals),
-            ),
-            patch(
-                "services.news_fetcher.NewsFetcher.get_news",
-                new=AsyncMock(side_effect=RuntimeError("News API down")),
-            ),
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(sample_us_gainer, {}))),
+            patch("services.market_data.MarketDataService.get_fundamentals",
+                  new=AsyncMock(return_value=sample_fundamentals)),
+            patch("services.news_fetcher.NewsFetcher.get_news",
+                  new=AsyncMock(side_effect=RuntimeError("News API down"))),
         ):
             resp = client.get("/api/gainers/us/NVDA")
         assert resp.status_code == 200
         body = resp.json()
         assert body["news"] == []
-        assert body["analysis"] is not None
+        assert body["fundamentals"] is not None
 
     def test_india_ticker_lookup(
         self,
@@ -356,16 +287,127 @@ class TestGainerDetail:
         sample_news,
     ) -> None:
         with (
-            patch("api.routes.gainers._resolve_gainer", new=AsyncMock(return_value=sample_india_gainer)),
-            patch(
-                "services.market_data.MarketDataService.get_fundamentals",
-                new=AsyncMock(return_value=sample_fundamentals),
-            ),
-            patch(
-                "services.news_fetcher.NewsFetcher.get_news",
-                new=AsyncMock(return_value=sample_news),
-            ),
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(sample_india_gainer, {}))),
+            patch("services.market_data.MarketDataService.get_fundamentals",
+                  new=AsyncMock(return_value=sample_fundamentals)),
+            patch("services.news_fetcher.NewsFetcher.get_news",
+                  new=AsyncMock(return_value=sample_news)),
         ):
             resp = client.get("/api/gainers/india/RELIANCE")
         assert resp.status_code == 200
         assert resp.json()["gainer"]["market"] == "india"
+
+    def test_cache_invalidation_endpoint(self, client: TestClient) -> None:
+        resp = client.delete("/api/gainers/us/NVDA/cache")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "invalidated"
+        assert body["ticker"] == "NVDA"
+
+
+class TestGainerAnalyse:
+    """Tests for GET /gainers/{market}/{ticker}/analyse — slow AI endpoint."""
+
+    def test_analyse_returns_analysis_and_prediction(
+        self,
+        client: TestClient,
+        sample_us_gainer: StockGainer,
+        sample_fundamentals,
+        sample_news,
+    ) -> None:
+        with (
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(sample_us_gainer, {}))),
+            patch("api.routes.gainers._safe_get_gainers",
+                  new=AsyncMock(return_value=[sample_us_gainer])),
+            patch("services.market_data.MarketDataService.get_fundamentals",
+                  new=AsyncMock(return_value=sample_fundamentals)),
+            patch("services.news_fetcher.NewsFetcher.get_news",
+                  new=AsyncMock(return_value=sample_news)),
+        ):
+            resp = client.get("/api/gainers/us/NVDA/analyse")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ticker"] == "NVDA"
+        assert body["analysis"] is not None
+        assert body["prediction"] is not None
+
+    def test_analyse_response_schema_is_valid(
+        self,
+        client: TestClient,
+        sample_us_gainer: StockGainer,
+        sample_fundamentals,
+        sample_news,
+    ) -> None:
+        with (
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(sample_us_gainer, {}))),
+            patch("api.routes.gainers._safe_get_gainers",
+                  new=AsyncMock(return_value=[sample_us_gainer])),
+            patch("services.market_data.MarketDataService.get_fundamentals",
+                  new=AsyncMock(return_value=sample_fundamentals)),
+            patch("services.news_fetcher.NewsFetcher.get_news",
+                  new=AsyncMock(return_value=sample_news)),
+        ):
+            resp = client.get("/api/gainers/us/NVDA/analyse")
+        body = resp.json()
+        parsed = StockAnalysisResponse(**body)
+        assert parsed.ticker == "NVDA"
+        assert parsed.analysis is not None
+
+    def test_analyse_includes_related_beneficiaries(
+        self,
+        client: TestClient,
+        sample_us_gainer: StockGainer,
+        sample_fundamentals,
+        sample_news,
+    ) -> None:
+        with (
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(sample_us_gainer, {}))),
+            patch("api.routes.gainers._safe_get_gainers",
+                  new=AsyncMock(return_value=[sample_us_gainer])),
+            patch("services.market_data.MarketDataService.get_fundamentals",
+                  new=AsyncMock(return_value=sample_fundamentals)),
+            patch("services.news_fetcher.NewsFetcher.get_news",
+                  new=AsyncMock(return_value=sample_news)),
+        ):
+            resp = client.get("/api/gainers/us/NVDA/analyse")
+        analysis = resp.json()["analysis"]
+        assert "related_beneficiaries" in analysis
+        assert isinstance(analysis["related_beneficiaries"], list)
+        assert len(analysis["related_beneficiaries"]) > 0
+
+    def test_analyse_unknown_ticker_returns_404(self, client: TestClient) -> None:
+        with (
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(None, {}))),
+            patch("api.routes.gainers._safe_get_gainers",
+                  new=AsyncMock(return_value=[])),
+        ):
+            resp = client.get("/api/gainers/us/FAKEXYZ999/analyse")
+        assert resp.status_code == 404
+
+    def test_analyse_cached_on_second_call(
+        self,
+        client: TestClient,
+        sample_us_gainer: StockGainer,
+        sample_fundamentals,
+        sample_news,
+    ) -> None:
+        with (
+            patch("api.routes.gainers._resolve_gainer",
+                  new=AsyncMock(return_value=(sample_us_gainer, {}))),
+            patch("api.routes.gainers._safe_get_gainers",
+                  new=AsyncMock(return_value=[sample_us_gainer])),
+            patch("services.market_data.MarketDataService.get_fundamentals",
+                  new=AsyncMock(return_value=sample_fundamentals)),
+            patch("services.news_fetcher.NewsFetcher.get_news",
+                  new=AsyncMock(return_value=sample_news)),
+        ):
+            resp1 = client.get("/api/gainers/us/NVDA/analyse")
+            assert not resp1.json()["from_cache"]
+
+            resp2 = client.get("/api/gainers/us/NVDA/analyse")
+            assert resp2.json()["from_cache"]
