@@ -12,6 +12,7 @@ from core.config import Settings, get_settings
 from services.cache import CacheBackend, build_cache
 from services.market_data import MarketDataService
 from services.news_fetcher import NewsFetcher
+from services.quarterly_fetcher import QuarterlyFetcher
 
 # Module-level singletons — lru_cache cannot be used here because
 # Pydantic v2 BaseSettings instances are not hashable.
@@ -22,6 +23,7 @@ _gainer_analyst: GainerAnalystAgent | None = None
 _market_analyst: MarketAnalystAgent | None = None
 _thesis_analyst: ThesisAnalystAgent | None = None
 _radar_analyst: RadarAnalystAgent | None = None
+_quarterly_fetcher: QuarterlyFetcher | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -79,5 +81,14 @@ def get_radar_analyst(
     if _radar_analyst is None:
         _radar_analyst = RadarAnalystAgent(settings)
     return _radar_analyst
+
+
+def get_quarterly_fetcher(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> QuarterlyFetcher:
+    global _quarterly_fetcher
+    if _quarterly_fetcher is None:
+        _quarterly_fetcher = QuarterlyFetcher(settings)
+    return _quarterly_fetcher
 
 

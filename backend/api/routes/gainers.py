@@ -15,6 +15,7 @@ from api.deps import (
     get_market_analyst,
     get_market_data,
     get_news_fetcher,
+    get_quarterly_fetcher,
 )
 from core.config import Settings, get_settings
 from core.exceptions import ticker_not_found, upstream_error
@@ -38,6 +39,7 @@ from services.market_data import (
     today_str,
 )
 from services.news_fetcher import NewsFetcher
+from services.quarterly_fetcher import QuarterlyFetcher, format_for_prompt as fmt_quarterly
 
 router = APIRouter(prefix="/gainers", tags=["gainers"])
 log = get_logger(__name__)
@@ -344,6 +346,7 @@ async def get_gainer_analysis(
     market_data: Annotated[MarketDataService, Depends(get_market_data)],
     news_fetcher: Annotated[NewsFetcher, Depends(get_news_fetcher)],
     analyst: Annotated[GainerAnalystAgent, Depends(get_gainer_analyst)],
+    quarterly_fetcher: Annotated[QuarterlyFetcher, Depends(get_quarterly_fetcher)],
     refresh: Annotated[bool, Query(description="Force bypass cache")] = False,
 ) -> StockAnalysisResponse:
     """
@@ -394,6 +397,25 @@ async def get_gainer_analysis(
             log.warning("gainers.analysis_fundamentals_failed", ticker=resolved_ticker, error=str(exc))
             return None
 
+    async def _get_quarterly_data() -> str | None:
+        """Fetch quarterly results from screener.in (India) or yfinance (US).
+        Cached 24 h — results only change once a quarter."""
+        q_key = f"quarterly:{market}:{resolved_ticker}"
+        cached_q = await cache.get(q_key)
+        if cached_q:
+            log.info("gainers.quarterly_cache_hit", ticker=resolved_ticker)
+            # Rebuild snapshot from cached dict
+            from models.schemas import QuarterlySnapshot
+            snap = QuarterlySnapshot(**cached_q)
+            return fmt_quarterly(snap)
+
+        snap = await quarterly_fetcher.fetch(resolved_ticker, market)
+        if snap is None:
+            return None
+
+        await cache.set(q_key, snap.model_dump(), 24 * 3600)
+        return fmt_quarterly(snap)
+
     async def _get_price_history() -> list[dict]:
         # Try NSE first, fall back to BSE for India (some stocks only on BSE)
         suffixes = (".NS", ".BO") if market == "india" else ("",)
@@ -418,10 +440,11 @@ async def get_gainer_analysis(
                 log.warning("gainers.price_history_failed", ticker=resolved_ticker, error=str(exc))
         return []
 
-    fundamentals_result, news, candles = await asyncio.gather(
+    fundamentals_result, news, candles, quarterly_text_result = await asyncio.gather(
         _get_analysis_fundamentals(),
         news_fetcher.get_news(resolved_ticker, gainer.name),
         _get_price_history(),
+        _get_quarterly_data(),
         return_exceptions=True,
     )
 
@@ -431,6 +454,9 @@ async def get_gainer_analysis(
         news = []
     if isinstance(candles, Exception):
         candles = []
+    quarterly_text: str | None = quarterly_text_result if not isinstance(quarterly_text_result, Exception) else None
+    if quarterly_text:
+        log.info("gainers.quarterly_injected", ticker=resolved_ticker, chars=len(quarterly_text))
 
     # Compute technical indicators from price history
     technicals = None
@@ -464,6 +490,7 @@ async def get_gainer_analysis(
             fundamentals=fundamentals if not isinstance(fundamentals, Exception) else None,
             gainers_context=gainers_context,
             technicals_text=technicals_text,
+            quarterly_text=quarterly_text,
         )
     except Exception as exc:
         log.error("gainers.ai_failed", ticker=resolved_ticker, error=str(exc))
@@ -478,6 +505,7 @@ async def get_gainer_analysis(
                 fundamentals=fundamentals if not isinstance(fundamentals, Exception) else None,
                 gainers_context=gainers_context,
                 technicals_text=technicals_text,
+                quarterly_text=quarterly_text,
             )
             is_mock_fallback = True
             log.info("gainers.ai_fallback_mock_used", ticker=resolved_ticker)

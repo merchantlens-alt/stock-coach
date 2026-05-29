@@ -302,3 +302,32 @@ class RadarResponse(BaseModel):
     no_signals_reason: Optional[str] = None  # set when signals is empty
     from_cache: bool = False
     generated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Quarterly results schemas ─────────────────────────────────────────────────
+
+class QuarterlyResult(BaseModel):
+    """One quarter of financial results."""
+    period: str                          # e.g. "Sep 2024" or "Sep '24"
+    revenue: Optional[float] = None      # Cr for India, $M for US
+    operating_profit: Optional[float] = None
+    opm_pct: Optional[float] = None      # operating profit margin %
+    net_profit: Optional[float] = None   # PAT
+    eps: Optional[float] = None
+    revenue_growth_yoy: Optional[float] = None   # % vs same quarter last year
+    pat_growth_yoy: Optional[float] = None        # % vs same quarter last year
+
+
+class QuarterlySnapshot(BaseModel):
+    """
+    Last 6 quarters of results for a stock, plus computed trend labels.
+    Injected into Gemini prompt to ground the 30-day prediction in earnings reality.
+    """
+    ticker: str
+    market: Market
+    quarters: list[QuarterlyResult]  # most recent first, up to 6
+    revenue_trend: str   # accelerating | stable | decelerating | declining | recovering | unknown
+    margin_trend: str    # expanding | stable | compressing | unknown
+    earnings_trend: str  # accelerating | stable | decelerating | declining | recovering | unknown
+    currency: str = "₹"
+    unit: str = "Cr"     # Cr for India, M for US

@@ -60,6 +60,14 @@ When TECHNICAL ANALYSIS data is provided, you MUST factor it into the 30-day pre
 - Surging volume confirms institutional conviction behind the move
 - Combine technical signals with the fundamental catalyst to assess TIMING and MAGNITUDE of the 30-day move
 
+When QUARTERLY RESULTS data is provided, treat it as the strongest fundamental signal:
+- RECOVERING/ACCELERATING revenue trend after a price move = fundamental confirmation, not just speculation
+- EXPANDING margins over 3+ consecutive quarters = operating leverage or pricing power — structurally bullish
+- DECELERATING earnings while the stock is up sharply = elevated reversal risk, downgrade your confidence
+- RECOVERING earnings (turning from negative to positive YoY) = early inflection point, often precedes multi-week re-rating
+- Weak or declining earnings + today's big price move = likely speculative; call it out clearly in key_risks
+- Use the quarterly context to set realistic predicted_change_pct: strong fundamentals justify higher confidence
+
 Always respond in valid JSON matching the schema provided."""
 
 # ── Combined response schema (analysis + prediction in one call) ──────────────
@@ -195,6 +203,7 @@ class GainerAnalystAgent:
         fundamentals: FundamentalsData | None = None,
         gainers_context: list[StockGainer] | None = None,
         technicals_text: str | None = None,
+        quarterly_text: str | None = None,
     ) -> tuple[GainerAnalysis, StockPrediction | None]:
         """
         Single Gemini call that returns both a GainerAnalysis and a StockPrediction.
@@ -246,7 +255,8 @@ class GainerAnalystAgent:
             return analysis, prediction
 
         raw = await self._call_gemini(
-            ticker, change_pct, company_name, sector, news, fundamentals, gainers_context, technicals_text
+            ticker, change_pct, company_name, sector, news, fundamentals,
+            gainers_context, technicals_text, quarterly_text,
         )
         try:
             analysis = GainerAnalysis(
@@ -316,6 +326,7 @@ class GainerAnalystAgent:
         fundamentals: FundamentalsData | None,
         gainers_context: list[StockGainer] | None,
         technicals_text: str | None = None,
+        quarterly_text: str | None = None,
     ) -> dict[str, Any]:
         import asyncio
         import httpx
@@ -341,6 +352,9 @@ class GainerAnalystAgent:
         # Technical analysis section — injected when we have price history
         tech_section = f"\n\n{technicals_text}" if technicals_text else ""
 
+        # Quarterly results — the strongest fundamental signal for 30-day prediction
+        quarterly_section = f"\n\n{quarterly_text}" if quarterly_text else ""
+
         prompt = (
             f"Stock: {company_name} ({ticker})\n"
             f"Sector: {sector or 'Unknown'}\n"
@@ -348,10 +362,12 @@ class GainerAnalystAgent:
             f"RECENT NEWS:\n{headlines or 'No news available.'}\n\n"
             f"FUNDAMENTALS:\n{fund_text}"
             + tech_section
+            + quarterly_section
             + gainers_section
             + "\n\nAnalyse why this stock moved today, whether momentum is likely to continue, "
-            "and predict the 30-day outlook. Factor in the technical signals when assessing "
-            "timing and magnitude of the expected move. Identify 2-4 related beneficiary tickers."
+            "and predict the 30-day outlook. Factor in the technical signals and quarterly "
+            "earnings trends when assessing timing and magnitude of the expected move. "
+            "Identify 2-4 related beneficiary tickers."
         )
 
         payload = {
