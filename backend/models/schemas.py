@@ -334,3 +334,34 @@ class QuarterlySnapshot(BaseModel):
     currency: str = "₹"
     unit: str = "Cr"     # Cr for India, M for US
     quarterly_insight: Optional[str] = None  # plain-English earnings verdict surfaced in the UI
+
+
+# ── Catalyst Scanner schemas ───────────────────────────────────────────────────
+
+CatalystSignal = Literal["strong_move", "emerging", "noise"]
+
+
+class CatalystPlay(BaseModel):
+    """One moving stock with momentum score and AI verdict."""
+    ticker: str
+    name: str
+    market: Market
+    sector: Optional[str] = None
+    price: float
+    change_pct: float
+    change_abs: float
+    volume: int
+    avg_volume: Optional[int] = None      # 20-day average volume
+    volume_ratio: Optional[float] = None  # current / avg, e.g. 3.2 = 3.2× average
+    momentum_score: float                 # 0-100 composite score
+    catalyst_type: CatalystType
+    signal: CatalystSignal                # strong_move | emerging | noise
+    headline_catalyst: Optional[str] = None  # top catalyst headline
+    ai_verdict: str = ""                  # 2-sentence plain English explanation
+
+
+class CatalystScanResponse(BaseModel):
+    market: Market
+    plays: list[CatalystPlay] = Field(default_factory=list)
+    from_cache: bool = False
+    scanned_at: datetime = Field(default_factory=datetime.utcnow)

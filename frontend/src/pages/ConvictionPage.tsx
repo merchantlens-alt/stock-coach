@@ -1,5 +1,5 @@
 import { Lightbulb, Loader2, Sparkles } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ThesisCard } from "../components/ThesisCard";
 import { useConvictionAnalysis } from "../hooks/useConviction";
 import type { Market, ThesisConviction } from "../types";
@@ -30,12 +30,30 @@ function saveToDB(theses: SavedThesis[]) {
   localStorage.setItem("conviction_theses", JSON.stringify(theses.slice(0, 10)));
 }
 
-export function ConvictionPage() {
-  const [belief, setBelief] = useState("");
+interface ConvictionPageProps {
+  /** Pre-filled belief from Analysis Panel "Build Thesis" button */
+  initialBelief?: string;
+  /** Called once the pre-fill has been consumed so App can clear it */
+  onBeliefConsumed?: () => void;
+}
+
+export function ConvictionPage({ initialBelief = "", onBeliefConsumed }: ConvictionPageProps = {}) {
+  const [belief, setBelief] = useState(initialBelief);
   const [market, setMarket] = useState<Market>("us");
   const [saved, setSaved] = useState<SavedThesis[]>(loadSaved);
   const [activeTab, setActiveTab] = useState<"new" | "saved">("new");
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // When App sends a new pre-fill (user navigated from Analysis Panel)
+  useEffect(() => {
+    if (initialBelief) {
+      setBelief(initialBelief);
+      onBeliefConsumed?.();
+      // Auto-focus so user can immediately edit/submit
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialBelief]);
 
   const mutation = useConvictionAnalysis();
 

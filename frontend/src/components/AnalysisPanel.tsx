@@ -1,6 +1,6 @@
 import {
   AlertTriangle, ArrowDown, ArrowUp, GitCompare,
-  Lightbulb, Loader2, Minus, Newspaper, RefreshCw, Sparkles, TrendingDown, TrendingUp, X,
+  Lightbulb, Loader2, Minus, Newspaper, RefreshCw, Sparkles, TrendingDown, TrendingUp, X, Zap,
 } from "lucide-react";
 import type { FundamentalsData, GainerDetail, Period, QuarterlySnapshot, StockAnalysisResponse, TechnicalSignals } from "../types";
 import { CandleChart } from "./CandleChart";
@@ -519,9 +519,11 @@ interface Props {
   convictionMatches?: string[];
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  /** Called when user wants to build a conviction thesis — switches to Thesis tab */
+  onBuildThesis?: (belief: string) => void;
 }
 
-export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d", onClose, convictionMatches, onRefresh, isRefreshing }: Props) {
+export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d", onClose, convictionMatches, onRefresh, isRefreshing, onBuildThesis }: Props) {
   const { gainer, fundamentals, news } = detail;
   const ai = analysis;
   const currency = gainer.market === "india" ? "₹" : "$";
@@ -796,6 +798,31 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
                   <SignalBadge label="Debt" signal={ai.prediction.debt_signal} />
                 </div>
               </section>
+            )}
+
+            {/* ── BUILD THESIS CTA ─────────────────────────────────────────── */}
+            {ai?.analysis && onBuildThesis && (
+              <button
+                onClick={() => {
+                  // Pre-fill with the best available context
+                  const insight = analysis?.quarterly?.quarterly_insight;
+                  const reason  = ai.analysis!.sustainability_reason;
+                  const seed    = insight
+                    ? insight.slice(0, 120)
+                    : reason
+                      ? reason.slice(0, 120)
+                      : "";
+                  const belief = seed
+                    ? `I believe in ${gainer.name} (${gainer.ticker}) — ${seed}`
+                    : `I believe in ${gainer.name} (${gainer.ticker})`;
+                  onBuildThesis(belief);
+                }}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-2xl border border-indigo-200 transition-colors"
+              >
+                <Zap size={14} />
+                Build my conviction thesis for {gainer.ticker}
+                <span className="text-xs font-normal opacity-60 ml-1">→ Thesis tab</span>
+              </button>
             )}
 
             {/* WHO ELSE MAY BENEFIT */}

@@ -247,3 +247,32 @@ export interface RadarResponse {
   from_cache: boolean;
   generated_at: string;
 }
+
+// ── Catalyst Scanner ──────────────────────────────────────────────────────────
+
+export type CatalystSignal = "strong_move" | "emerging" | "noise";
+
+export interface CatalystPlay {
+  ticker: string;
+  name: string;
+  market: Market;
+  sector?: string;
+  price: number;
+  change_pct: number;
+  change_abs: number;
+  volume: number;
+  avg_volume?: number;
+  volume_ratio?: number;      // current / 20-day avg
+  momentum_score: number;     // 0-100
+  catalyst_type: CatalystType;
+  signal: CatalystSignal;
+  headline_catalyst?: string;
+  ai_verdict: string;
+}
+
+export interface CatalystScanResponse {
+  market: Market;
+  plays: CatalystPlay[];
+  from_cache: boolean;
+  scanned_at: string;
+}

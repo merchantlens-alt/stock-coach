@@ -1,4 +1,4 @@
-import type { ConvictionRequest, ConvictionResponse, GainerDetail, GainersListResponse, Market, PriceHistory, RadarResponse, StockAnalysisResponse } from "../types";
+import type { CatalystScanResponse, ConvictionRequest, ConvictionResponse, GainerDetail, GainersListResponse, Market, PriceHistory, RadarResponse, StockAnalysisResponse } from "../types";
 
 const BASE_URL = "/api";
 
@@ -54,4 +54,8 @@ export const api = {
   /** Catalyst radar — structural themes from today's news. Cached 12 h. */
   getRadar: (market: Market): Promise<RadarResponse> =>
     fetchJSON(`/radar/${market}`),
+
+  /** Catalyst Scanner — top movers with confirmed catalysts. Cached 30 min. */
+  getCatalystScan: (market: Market): Promise<CatalystScanResponse> =>
+    fetchJSON(`/catalyst/${market}`),
 };

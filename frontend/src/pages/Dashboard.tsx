@@ -1,5 +1,6 @@
 import { RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { Market } from "../types";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { AnalysisPanel } from "../components/AnalysisPanel";
@@ -8,7 +9,7 @@ import { MarketNarrative } from "../components/MarketNarrative";
 import { MarketToggle } from "../components/MarketToggle";
 import { SearchBar } from "../components/SearchBar";
 import { useGainerAnalysis, useGainerDetail, useGainers, useRefreshAnalysis } from "../hooks/useGainers";
-import type { Market, Period, SignalTier } from "../types";
+import type { Period, SignalTier } from "../types";
 
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
   { value: "1d", label: "Today" },
@@ -34,7 +35,16 @@ function loadConvictionTickerMap(): Record<string, string[]> {
   }
 }
 
-export function Dashboard() {
+interface DashboardProps {
+  /** When set, auto-selects this stock (from Scanner or external navigation) */
+  jumpTo?: { market: Market; ticker: string } | null;
+  /** Called after jumpTo is consumed so App can clear it */
+  onJumpConsumed?: () => void;
+  /** Called when user clicks "Build Thesis" in the Analysis Panel */
+  onBuildThesis?: (belief: string) => void;
+}
+
+export function Dashboard({ jumpTo, onJumpConsumed, onBuildThesis }: DashboardProps = {}) {
   const [market, setMarket] = useState<Market>("us");
   const [period, setPeriod] = useState<Period>("1d");
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
@@ -58,6 +68,18 @@ export function Dashboard() {
       queryClient.cancelQueries({ queryKey: ["gainer-analysis", market, prev] });
     }
   }, [activeTicker, market, queryClient]);
+
+  // ── Cross-tab jump: when Scanner sends us a stock to open ─────────────────
+  useEffect(() => {
+    if (jumpTo) {
+      setMarket(jumpTo.market);
+      setSearchedTicker(jumpTo.ticker);
+      setSelectedTicker(null);
+      setTierFilter("all");
+      onJumpConsumed?.();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpTo]);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -286,6 +308,7 @@ export function Dashboard() {
             convictionMatches={activeTicker ? convictionMap[activeTicker] : undefined}
             onRefresh={() => refreshAnalysis.mutate()}
             isRefreshing={refreshAnalysis.isPending}
+            onBuildThesis={onBuildThesis}
           />
         ) : (
           <div className="h-full flex flex-col text-gray-400">

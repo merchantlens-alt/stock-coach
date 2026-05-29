@@ -430,6 +430,15 @@ class MarketDataService:
             log.error("market_data.india_gainers_error", period=period, error=str(exc))
             raise MarketDataError(f"Failed to fetch India gainers: {exc}") from exc
 
+    async def get_raw_movers(self, market: str) -> list[dict[str, Any]]:
+        """
+        Return raw mover dicts for the catalyst scanner — no tier assignment or quality
+        scoring applied.  Uses the same screener as the gainers list (1d only).
+        """
+        if market == "us":
+            return await self._get_us_gainers_screener()
+        return await self._get_india_gainers_screener()
+
     async def get_fundamentals(self, ticker: str, market: Market) -> FundamentalsData:
         yf_ticker = f"{ticker}.NS" if market == "india" else ticker
         try:

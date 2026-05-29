@@ -1,4 +1,4 @@
-import { AlertTriangle, Radio, RefreshCw, TrendingUp } from "lucide-react";
+import { AlertTriangle, Radio, RefreshCw, TrendingUp, Zap } from "lucide-react";
 import { useState } from "react";
 import { MarketToggle } from "../components/MarketToggle";
 import { useGainers } from "../hooks/useGainers";
@@ -61,9 +61,11 @@ function formatAge(iso: string): string {
 function SignalCard({
   signal,
   pulseGainers,
+  onFindMoving,
 }: {
   signal: RadarSignal;
   pulseGainers: Set<string>;
+  onFindMoving: (tickers: string[]) => void;
 }) {
   const confirming = signal.tickers.filter((t) => pulseGainers.has(t));
 
@@ -146,6 +148,15 @@ function SignalCard({
             ))}
           </ul>
         )}
+
+        {/* ── Radar → Scanner CTA ──────────────────────────────────────────── */}
+        <button
+          onClick={() => onFindMoving(signal.tickers)}
+          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-green-700 bg-green-50 hover:bg-green-100 rounded-xl border border-green-100 transition-colors"
+        >
+          <Zap size={11} />
+          Find stocks moving on this theme →
+        </button>
       </div>
     </div>
   );
@@ -181,7 +192,11 @@ function RadarSkeleton() {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export function RadarPage() {
+interface RadarPageProps {
+  onFindMoving: (tickers: string[]) => void;
+}
+
+export function RadarPage({ onFindMoving }: RadarPageProps) {
   const [market, setMarket] = useState<Market>("us");
   const { data, isLoading, isError, refetch, isFetching } = useRadar(market);
 
@@ -257,7 +272,7 @@ export function RadarPage() {
               {data?.signals.length ?? 0} signal{data?.signals.length !== 1 ? "s" : ""} · cross-referenced against today's PULSE gainers
             </p>
             {data?.signals.map((signal, i) => (
-              <SignalCard key={i} signal={signal} pulseGainers={pulseGainers} />
+              <SignalCard key={i} signal={signal} pulseGainers={pulseGainers} onFindMoving={onFindMoving} />
             ))}
           </>
         )}

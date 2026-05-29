@@ -96,3 +96,18 @@ export function useRadar(market: Market) {
     retry: 1,
   });
 }
+
+/**
+ * Catalyst Scanner — top movers with confirmed catalysts + momentum scores.
+ * Cold path: screener + volume history + news + AI verdict (~12-18 s).
+ * Cached 30 min server-side; 5-min stale client-side.
+ */
+export function useCatalystScan(market: Market) {
+  return useQuery({
+    queryKey: ["catalyst-scan", market],
+    queryFn: () => api.getCatalystScan(market),
+    staleTime: 5 * 60 * 1000,   // 5 min client stale
+    gcTime: 60 * 60 * 1000,     // 1 h in memory
+    retry: 1,
+  });
+}

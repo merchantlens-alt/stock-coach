@@ -4,12 +4,14 @@ from typing import Annotated
 
 from fastapi import Depends
 
+from agents.catalyst_analyst import CatalystAnalystAgent
 from agents.gainer_analyst import GainerAnalystAgent
 from agents.market_analyst import MarketAnalystAgent
 from agents.radar_analyst import RadarAnalystAgent
 from agents.thesis_analyst import ThesisAnalystAgent
 from core.config import Settings, get_settings
 from services.cache import CacheBackend, build_cache
+from services.catalyst_scanner import CatalystScannerService
 from services.market_data import MarketDataService
 from services.news_fetcher import NewsFetcher
 from services.quarterly_fetcher import QuarterlyFetcher
@@ -24,6 +26,8 @@ _market_analyst: MarketAnalystAgent | None = None
 _thesis_analyst: ThesisAnalystAgent | None = None
 _radar_analyst: RadarAnalystAgent | None = None
 _quarterly_fetcher: QuarterlyFetcher | None = None
+_catalyst_analyst: CatalystAnalystAgent | None = None
+_catalyst_scanner: CatalystScannerService | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -90,5 +94,28 @@ def get_quarterly_fetcher(
     if _quarterly_fetcher is None:
         _quarterly_fetcher = QuarterlyFetcher(settings)
     return _quarterly_fetcher
+
+
+def get_catalyst_analyst(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> CatalystAnalystAgent:
+    global _catalyst_analyst
+    if _catalyst_analyst is None:
+        _catalyst_analyst = CatalystAnalystAgent(settings)
+    return _catalyst_analyst
+
+
+def get_catalyst_scanner(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> CatalystScannerService:
+    global _catalyst_scanner
+    if _catalyst_scanner is None:
+        _catalyst_scanner = CatalystScannerService(
+            settings,
+            get_market_data(settings),
+            get_news_fetcher(settings),
+            get_catalyst_analyst(settings),
+        )
+    return _catalyst_scanner
 
 
