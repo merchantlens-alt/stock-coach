@@ -6,6 +6,7 @@ from fastapi import Depends
 
 from agents.gainer_analyst import GainerAnalystAgent
 from agents.market_analyst import MarketAnalystAgent
+from agents.radar_analyst import RadarAnalystAgent
 from agents.thesis_analyst import ThesisAnalystAgent
 from core.config import Settings, get_settings
 from services.cache import CacheBackend, build_cache
@@ -20,6 +21,7 @@ _news_fetcher: NewsFetcher | None = None
 _gainer_analyst: GainerAnalystAgent | None = None
 _market_analyst: MarketAnalystAgent | None = None
 _thesis_analyst: ThesisAnalystAgent | None = None
+_radar_analyst: RadarAnalystAgent | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -68,5 +70,14 @@ def get_thesis_analyst(
     if _thesis_analyst is None:
         _thesis_analyst = ThesisAnalystAgent(settings)
     return _thesis_analyst
+
+
+def get_radar_analyst(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RadarAnalystAgent:
+    global _radar_analyst
+    if _radar_analyst is None:
+        _radar_analyst = RadarAnalystAgent(settings)
+    return _radar_analyst
 
 

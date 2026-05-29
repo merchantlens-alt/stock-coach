@@ -2,6 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { Market, Period } from "../types";
 
+// Radar: 10-min stale (backend cache is 12 h), keep in memory 2 h
+const RADAR_STALE = 10 * 60 * 1000;
+const RADAR_GC = 2 * 60 * 60 * 1000;
+
 // Note: DETAIL_STALE / DETAIL_GC are reused for the analysis hook too.
 
 // Gainers list: 5-min stale (backend cache is 30 min), keep in memory 2 hours
@@ -46,6 +50,32 @@ export function useGainerAnalysis(market: Market, ticker: string | null) {
     enabled: ticker !== null,
     staleTime: DETAIL_STALE,   // 30 min
     gcTime: DETAIL_GC,         // 6 hours in memory
+    retry: 1,
+  });
+}
+
+/** OHLCV price history for candlestick chart. Cached 30 min. */
+export function usePriceHistory(market: Market, ticker: string | null, period = "3mo") {
+  return useQuery({
+    queryKey: ["price-history", market, ticker, period],
+    queryFn: () => api.getPriceHistory(market, ticker!, period),
+    enabled: ticker !== null,
+    staleTime: 30 * 60 * 1000,
+    gcTime: 2 * 60 * 60 * 1000,
+    retry: 1,
+  });
+}
+
+/**
+ * Catalyst radar — structural themes from today's news.
+ * Cold call hits Gemini (~10-15 s); after that cached 12 h server-side.
+ */
+export function useRadar(market: Market) {
+  return useQuery({
+    queryKey: ["radar", market],
+    queryFn: () => api.getRadar(market),
+    staleTime: RADAR_STALE,
+    gcTime: RADAR_GC,
     retry: 1,
   });
 }

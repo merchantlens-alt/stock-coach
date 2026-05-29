@@ -182,12 +182,35 @@ class GainerDetail(BaseModel):
     fetched_at: Optional[datetime] = None
 
 
+class TechnicalSignals(BaseModel):
+    """Computed technical indicators from live OHLCV price history."""
+    rsi_14: Optional[float] = None
+    rsi_signal: Optional[str] = None            # "overbought" | "neutral" | "oversold"
+    macd_line: Optional[float] = None
+    macd_histogram: Optional[float] = None
+    macd_signal: Optional[str] = None           # "bullish_cross" | "bearish_cross"
+    macd_direction: Optional[str] = None        # "bullish" | "bearish"
+    sma_20: Optional[float] = None
+    sma_50: Optional[float] = None
+    price_vs_sma20: Optional[str] = None        # "above" | "below"
+    price_vs_sma50: Optional[str] = None        # "above" | "below"
+    golden_cross: Optional[bool] = None         # True = golden cross (SMA20 > SMA50)
+    volume_trend: Optional[str] = None          # "surging" | "rising" | "neutral" | "falling"
+    volume_ratio: Optional[float] = None        # recent 5d avg / 20d avg
+    momentum_5d: Optional[float] = None         # 5-day price change %
+    momentum_20d: Optional[float] = None        # 20-day price change %
+    pct_of_52w_range: Optional[float] = None    # 0-100 where price sits in 52-week range
+    support: Optional[float] = None             # recent 20-day low (support level)
+    resistance: Optional[float] = None          # recent 20-day high (resistance level)
+
+
 class StockAnalysisResponse(BaseModel):
     """Slow AI response — analysis + 30-day prediction. ~10-15 s cold, cached 6 h."""
     ticker: str
     market: Market
     analysis: Optional[GainerAnalysis] = None
     prediction: Optional[StockPrediction] = None
+    technicals: Optional[TechnicalSignals] = None
     from_cache: bool = False
     analysed_at: Optional[datetime] = None
 
@@ -257,3 +280,25 @@ class ConvictionResponse(BaseModel):
     conviction: ThesisConviction
     from_cache: bool = False
     analysed_at: Optional[datetime] = None
+
+
+# ── Radar / catalyst-scanner schemas ─────────────────────────────────────────
+
+class RadarSignal(BaseModel):
+    """One structural theme identified from news that could move specific stocks."""
+    theme: str = Field(description="Short theme label, e.g. 'AI Memory Bandwidth Squeeze'")
+    narrative: str = Field(description="2-3 sentence explanation of the theme and why it matters now")
+    tickers: list[str] = Field(description="1-4 tickers that haven't fully priced in this theme yet")
+    catalyst_type: CatalystType
+    conviction: float = Field(ge=0.0, le=1.0, description="0-1 evidence score")
+    time_frame: str = Field(description="When this could play out, e.g. '3-5 days', '1-2 weeks'")
+    evidence: str = Field(description="The specific news item or data point driving this signal")
+    source_headlines: list[str] = Field(description="1-3 headlines that support this theme")
+
+
+class RadarResponse(BaseModel):
+    market: Market
+    signals: list[RadarSignal] = Field(default_factory=list)
+    no_signals_reason: Optional[str] = None  # set when signals is empty
+    from_cache: bool = False
+    generated_at: datetime = Field(default_factory=datetime.utcnow)

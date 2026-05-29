@@ -17,7 +17,13 @@ from models.schemas import NewsItem
 log = get_logger(__name__)
 
 _NEWSAPI_BASE = "https://newsapi.org/v2/everything"
+_NEWSAPI_HEADLINES = "https://newsapi.org/v2/top-headlines"
 _GNEWS_RSS = "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+
+# Broad baskets used for Radar yfinance fallback — major tickers whose news
+# reflects macro themes rather than single-stock events.
+_US_RADAR_BASKET = ["SPY", "QQQ", "NVDA", "MSFT", "AAPL", "JPM", "XLK", "XLE"]
+_IN_RADAR_BASKET = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "NIFTYBEES.NS"]
 
 
 class NewsFetcher:
@@ -138,6 +144,75 @@ class NewsFetcher:
         except Exception as exc:
             log.error("news.google_rss_failed", ticker=ticker, error=str(exc))
             return []
+
+    async def get_market_news(self, market: str, limit: int = 25) -> list[NewsItem]:
+        """
+        Fetch broad market / business news for the Radar feature.
+        Uses NewsAPI top-headlines (if key available) + yfinance on a basket of
+        index / ETF tickers to gather macro themes rather than single-stock news.
+        """
+        tasks: list = []
+        if self._api_key:
+            tasks.append(self._fetch_newsapi_headlines(market, min(limit, 20)))
+        basket = _US_RADAR_BASKET if market == "us" else _IN_RADAR_BASKET
+        tasks.append(self._fetch_basket_yf_news(basket, limit_per_ticker=3))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        seen: set[str] = set()
+        merged: list[NewsItem] = []
+        for batch in results:
+            if isinstance(batch, Exception):
+                log.warning("news.market_news_batch_failed", error=str(batch))
+                continue
+            for item in batch:
+                key = item.title.lower()[:60]
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(item)
+
+        merged.sort(
+            key=lambda x: x.published_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        log.info("news.market_news_done", market=market, count=len(merged))
+        return merged[:limit]
+
+    async def _fetch_newsapi_headlines(self, market: str, limit: int) -> list[NewsItem]:
+        country = "us" if market == "us" else "in"
+        params = {
+            "country": country,
+            "category": "business",
+            "pageSize": limit,
+            "apiKey": self._api_key,
+        }
+        resp = await self._client.get(_NEWSAPI_HEADLINES, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        items: list[NewsItem] = []
+        for article in data.get("articles", []):
+            published = _parse_dt(article.get("publishedAt"))
+            title = article.get("title", "")
+            if not title or title == "[Removed]":
+                continue
+            items.append(NewsItem(
+                title=title,
+                source=article.get("source", {}).get("name", "NewsAPI"),
+                published_at=published,
+                url=article.get("url"),
+                summary=article.get("description"),
+            ))
+        return items
+
+    async def _fetch_basket_yf_news(self, tickers: list[str], limit_per_ticker: int = 3) -> list[NewsItem]:
+        """Fetch yfinance news for a basket of tickers in parallel."""
+        tasks = [self._fetch_yf_news(ticker, limit_per_ticker) for ticker in tickers]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        items: list[NewsItem] = []
+        for batch in results:
+            if not isinstance(batch, Exception):
+                items.extend(batch)
+        return items
 
     async def close(self) -> None:
         await self._client.aclose()

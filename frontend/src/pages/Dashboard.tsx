@@ -1,5 +1,5 @@
 import { RefreshCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { AnalysisPanel } from "../components/AnalysisPanel";
@@ -16,6 +16,24 @@ const PERIOD_OPTIONS: { value: Period; label: string }[] = [
   { value: "1m", label: "1 Month" },
 ];
 
+/** Map of ticker → [theme_label, ...] from saved conviction theses. */
+function loadConvictionTickerMap(): Record<string, string[]> {
+  try {
+    const theses: { conviction: { instruments: { ticker: string }[]; theme_label: string } }[] =
+      JSON.parse(localStorage.getItem("conviction_theses") || "[]");
+    const map: Record<string, string[]> = {};
+    for (const t of theses) {
+      for (const inst of t.conviction.instruments ?? []) {
+        if (!map[inst.ticker]) map[inst.ticker] = [];
+        map[inst.ticker].push(t.conviction.theme_label);
+      }
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
 export function Dashboard() {
   const [market, setMarket] = useState<Market>("us");
   const [period, setPeriod] = useState<Period>("1d");
@@ -23,6 +41,9 @@ export function Dashboard() {
   const [searchedTicker, setSearchedTicker] = useState<string | null>(null);
   const [tierFilter, setTierFilter] = useState<SignalTier | "all">("all");
   const queryClient = useQueryClient();
+
+  // Read saved conviction theses from localStorage so we can cross-reference with gainers
+  const convictionMap = useMemo(() => loadConvictionTickerMap(), []);
 
   // Active ticker is either a searched one or one clicked from the list
   const activeTicker = searchedTicker ?? selectedTicker;
@@ -230,6 +251,8 @@ export function Dashboard() {
                 gainer={gainer}
                 isSelected={activeTicker === gainer.ticker}
                 isLoading={activeTicker === gainer.ticker && detailLoading}
+                period={period}
+                convictionThemes={convictionMap[gainer.ticker]}
                 onClick={() => {
                   setSearchedTicker(null);
                   setSelectedTicker(selectedTicker === gainer.ticker ? null : gainer.ticker);
@@ -257,7 +280,9 @@ export function Dashboard() {
             detail={detail}
             analysis={analysisData}
             analysisLoading={analysisLoading}
+            period={period}
             onClose={() => { setSelectedTicker(null); setSearchedTicker(null); }}
+            convictionMatches={activeTicker ? convictionMap[activeTicker] : undefined}
           />
         ) : (
           <div className="h-full flex flex-col text-gray-400">

@@ -1,4 +1,4 @@
-import type { ConvictionRequest, ConvictionResponse, GainerDetail, GainersListResponse, Market, StockAnalysisResponse } from "../types";
+import type { ConvictionRequest, ConvictionResponse, GainerDetail, GainersListResponse, Market, PriceHistory, RadarResponse, StockAnalysisResponse } from "../types";
 
 const BASE_URL = "/api";
 
@@ -46,4 +46,12 @@ export const api = {
       body: JSON.stringify(body),
       headers: { "Content-Type": "application/json" },
     }),
+
+  /** OHLCV candlestick data. Cached 30 min. */
+  getPriceHistory: (market: Market, ticker: string, period = "3mo"): Promise<PriceHistory> =>
+    fetchJSON(`/gainers/${market}/${ticker}/history?period=${period}`),
+
+  /** Catalyst radar — structural themes from today's news. Cached 12 h. */
+  getRadar: (market: Market): Promise<RadarResponse> =>
+    fetchJSON(`/radar/${market}`),
 };

@@ -1,6 +1,5 @@
-import { Lightbulb, TrendingUp } from "lucide-react";
-
-type AppTab = "pulse" | "conviction";
+import { Lightbulb, Radio, TrendingUp } from "lucide-react";
+import type { AppTab } from "../App";
 
 interface HeaderProps {
   activeTab: AppTab;
@@ -26,7 +25,7 @@ export function Header({ activeTab, onTabChange }: HeaderProps) {
         <button
           onClick={() => onTabChange("pulse")}
           className={[
-            "flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg transition-all",
+            "flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all",
             activeTab === "pulse"
               ? "bg-white text-gray-900 shadow-sm"
               : "text-gray-500 hover:text-gray-700",
@@ -36,9 +35,21 @@ export function Header({ activeTab, onTabChange }: HeaderProps) {
           PULSE
         </button>
         <button
+          onClick={() => onTabChange("radar")}
+          className={[
+            "flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all",
+            activeTab === "radar"
+              ? "bg-white text-gray-900 shadow-sm"
+              : "text-gray-500 hover:text-gray-700",
+          ].join(" ")}
+        >
+          <Radio size={12} />
+          RADAR
+        </button>
+        <button
           onClick={() => onTabChange("conviction")}
           className={[
-            "flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg transition-all",
+            "flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all",
             activeTab === "conviction"
               ? "bg-white text-gray-900 shadow-sm"
               : "text-gray-500 hover:text-gray-700",
@@ -49,7 +60,7 @@ export function Header({ activeTab, onTabChange }: HeaderProps) {
         </button>
       </nav>
 
-      {/* Spacer to center the nav */}
+      {/* Spacer to balance layout */}
       <div className="w-8 sm:w-32" />
     </header>
   );

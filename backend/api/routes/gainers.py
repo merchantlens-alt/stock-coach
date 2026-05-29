@@ -380,8 +380,11 @@ async def get_gainer_analysis(
     in_gainers = any(g.ticker == resolved_ticker for g in gainers_list)
     gainers_context = gainers_list[:3] if not in_gainers and gainers_list else None
 
-    # Fetch fundamentals + news (needed for AI prompt quality).
-    # If yfinance info was already fetched during gainer resolution reuse it.
+    # Fetch fundamentals + news + price history in parallel.
+    # Price history → technical indicators → injected into Gemini prompt.
+    import yfinance as yf
+    from services.technicals import compute_technicals, format_for_prompt as fmt_technicals
+
     async def _get_analysis_fundamentals():
         if _yf_info:
             return fundamentals_from_info(_yf_info)
@@ -391,9 +394,34 @@ async def get_gainer_analysis(
             log.warning("gainers.analysis_fundamentals_failed", ticker=resolved_ticker, error=str(exc))
             return None
 
-    fundamentals_result, news = await asyncio.gather(
+    async def _get_price_history() -> list[dict]:
+        # Try NSE first, fall back to BSE for India (some stocks only on BSE)
+        suffixes = (".NS", ".BO") if market == "india" else ("",)
+        for suffix in suffixes:
+            yf_sym = f"{resolved_ticker}{suffix}" if market == "india" else resolved_ticker
+            try:
+                hist = await asyncio.wait_for(
+                    asyncio.to_thread(lambda s=yf_sym: yf.Ticker(s).history(period="3mo", interval="1d")),
+                    timeout=10.0,
+                )
+                if not hist.empty:
+                    candles = []
+                    for ts, row in hist.iterrows():
+                        candles.append({
+                            "time": int(ts.timestamp()),
+                            "open": float(row["Open"]), "high": float(row["High"]),
+                            "low": float(row["Low"]),  "close": float(row["Close"]),
+                            "volume": int(row["Volume"]),
+                        })
+                    return candles
+            except Exception as exc:
+                log.warning("gainers.price_history_failed", ticker=resolved_ticker, error=str(exc))
+        return []
+
+    fundamentals_result, news, candles = await asyncio.gather(
         _get_analysis_fundamentals(),
         news_fetcher.get_news(resolved_ticker, gainer.name),
+        _get_price_history(),
         return_exceptions=True,
     )
 
@@ -401,8 +429,28 @@ async def get_gainer_analysis(
     if isinstance(news, Exception):
         log.warning("gainers.analysis_news_failed", ticker=resolved_ticker, error=str(news))
         news = []
+    if isinstance(candles, Exception):
+        candles = []
 
-    # Single combined Gemini call — analysis + 30-day prediction
+    # Compute technical indicators from price history
+    technicals = None
+    technicals_text: str | None = None
+    if candles:
+        try:
+            currency = "₹" if market == "india" else "$"
+            technicals = compute_technicals(candles, gainer.price)
+            technicals_text = fmt_technicals(technicals, gainer.price, currency)
+            log.info(
+                "gainers.technicals_computed",
+                ticker=resolved_ticker,
+                rsi=technicals.rsi_14,
+                macd_direction=technicals.macd_direction,
+                candles=len(candles),
+            )
+        except Exception as exc:
+            log.warning("gainers.technicals_failed", ticker=resolved_ticker, error=str(exc))
+
+    # Single combined Gemini call — analysis + 30-day prediction (now includes technical signals)
     analysis = None
     prediction = None
     is_mock_fallback = False
@@ -415,11 +463,10 @@ async def get_gainer_analysis(
             news=news if not isinstance(news, Exception) else [],
             fundamentals=fundamentals if not isinstance(fundamentals, Exception) else None,
             gainers_context=gainers_context,
+            technicals_text=technicals_text,
         )
     except Exception as exc:
         log.error("gainers.ai_failed", ticker=resolved_ticker, error=str(exc))
-        # Fallback to mock agent so users always see analysis rather than a blank error banner.
-        # Mock responses are NOT cached — the next request retries the live Gemini call.
         try:
             mock_agent = GainerAnalystAgent(settings.model_copy(update={"mock_ai": True}))
             analysis, prediction = await mock_agent.analyse_full(
@@ -430,6 +477,7 @@ async def get_gainer_analysis(
                 news=news if not isinstance(news, Exception) else [],
                 fundamentals=fundamentals if not isinstance(fundamentals, Exception) else None,
                 gainers_context=gainers_context,
+                technicals_text=technicals_text,
             )
             is_mock_fallback = True
             log.info("gainers.ai_fallback_mock_used", ticker=resolved_ticker)
@@ -441,6 +489,7 @@ async def get_gainer_analysis(
         market=market,
         analysis=analysis,
         prediction=prediction,
+        technicals=technicals,
         from_cache=False,
         analysed_at=datetime.utcnow(),
     )
@@ -449,6 +498,66 @@ async def get_gainer_analysis(
     if not is_mock_fallback:
         await cache.set(key, response.model_dump(), settings.analysis_ttl)
     return response
+
+
+# ── Price history (candlestick data) ─────────────────────────────────────────
+
+@router.get("/{market}/{ticker}/history")
+async def get_price_history(
+    market: Annotated[Market, Path()],
+    ticker: Annotated[str, Path()],
+    cache: Annotated[CacheBackend, Depends(get_cache)],
+    period: Annotated[str, Query(description="yfinance period: 1mo, 3mo, 6mo, 1y")] = "3mo",
+) -> dict:
+    """
+    OHLCV candlestick data for a ticker. Used by the price chart in AnalysisPanel.
+    Cached 30 minutes — stale enough to survive re-clicks, fresh enough for intraday charts.
+    """
+    import asyncio
+    import yfinance as yf
+
+    ticker = ticker.upper()
+    key = f"history:{market}:{ticker}:{period}"
+
+    cached = await cache.get(key)
+    if cached:
+        return cached
+
+    # Try NSE first, fall back to BSE for India (some stocks only on BSE)
+    hist = None
+    for suffix in (".NS", ".BO") if market == "india" else ("",):
+        yf_sym = f"{ticker}{suffix}" if market == "india" else ticker
+        try:
+            h = await asyncio.wait_for(
+                asyncio.to_thread(lambda s=yf_sym: yf.Ticker(s).history(period=period, interval="1d")),
+                timeout=10.0,
+            )
+            if not h.empty:
+                hist = h
+                break
+        except Exception as exc:
+            log.warning("gainers.history_failed", ticker=ticker, error=str(exc))
+
+    if hist is None or hist.empty:
+        return {"ticker": ticker, "candles": []}
+
+    candles = []
+    for ts, row in hist.iterrows():
+        try:
+            candles.append({
+                "time": int(ts.timestamp()),
+                "open":  round(float(row["Open"]),  4),
+                "high":  round(float(row["High"]),  4),
+                "low":   round(float(row["Low"]),   4),
+                "close": round(float(row["Close"]), 4),
+                "volume": int(row["Volume"]),
+            })
+        except Exception:
+            continue
+
+    result = {"ticker": ticker, "period": period, "candles": candles}
+    await cache.set(key, result, 30 * 60)  # 30 min TTL
+    return result
 
 
 # ── Cache invalidation ────────────────────────────────────────────────────────
@@ -531,11 +640,26 @@ async def _resolve_gainer(
     # ── Helpers ───────────────────────────────────────────────────────────────
     async def _yf_lookup(sym: str) -> dict:
         """yfinance lookup with a hard 8-second timeout.
-        Without this yfinance can hang for 30-40 s waiting for Yahoo Finance."""
-        yf_sym = f"{sym}.NS" if market == "india" else sym
+        For India, tries NSE (.NS) first then BSE (.BO) as fallback —
+        some stocks (e.g. VOEPL) only trade on BSE."""
+        if market == "india":
+            for suffix in (".NS", ".BO"):
+                yf_sym = f"{sym}{suffix}"
+                try:
+                    info = await asyncio.wait_for(
+                        asyncio.to_thread(lambda s=yf_sym: yf.Ticker(s).info),
+                        timeout=8.0,
+                    )
+                    if _best_price(info):
+                        return info
+                except asyncio.TimeoutError:
+                    log.warning("gainers.yf_lookup_timeout", ticker=sym)
+                except Exception:
+                    pass
+            return {}
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(lambda: yf.Ticker(yf_sym).info),
+                asyncio.to_thread(lambda: yf.Ticker(sym).info),
                 timeout=8.0,
             )
         except asyncio.TimeoutError:
@@ -545,10 +669,12 @@ async def _resolve_gainer(
             return {}
 
     def _looks_like_company_name(s: str) -> bool:
-        """Heuristic: real ticker symbols are ≤5 chars.
-        Longer all-alpha strings (NVIDIA, SANDISK, RELIANCE) are company names —
-        skip the yfinance round-trip and resolve via Gemini directly."""
-        return len(s) > 5 and s.isalpha()
+        """Heuristic: skip direct yfinance and go straight to name/ticker resolution.
+        US tickers are ≤5 chars (NVDA, AAPL, MSFT).
+        Indian NSE/BSE tickers can be up to 10 chars (TRANSRAIL=9, TATASTEEL=9,
+        HDFCBANK=8) — so we only treat it as a 'company name' if it exceeds that."""
+        threshold = 10 if market == "india" else 5
+        return len(s) > threshold and s.isalpha()
 
     info: dict = {}
 
@@ -562,9 +688,14 @@ async def _resolve_gainer(
     original_query = ticker
     if not info or not _best_price(info):
         resolved = await resolve_ticker_by_name(ticker, market)
-        if resolved and resolved.upper() != ticker:
-            log.info("gainers.ticker_resolved", query=ticker, resolved=resolved, market=market)
-            ticker = resolved.upper()
+        if resolved:
+            resolved_upper = resolved.upper()
+            if resolved_upper != ticker:
+                # Gemini mapped a company name to a different ticker symbol
+                log.info("gainers.ticker_resolved", query=ticker, resolved=resolved_upper, market=market)
+                ticker = resolved_upper
+            # Always do yfinance after Gemini resolution — even when resolved
+            # equals input (e.g. TRANSRAIL → "TRANSRAIL" on NSE/BSE).
             info = await _yf_lookup(ticker)
             # Cache the resolution so parallel/future requests skip Gemini+yfinance
             if cache is not None and _best_price(info):

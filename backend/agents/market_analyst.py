@@ -99,6 +99,7 @@ class MarketAnalystAgent:
                 "maxOutputTokens": 600,
                 "responseMimeType": "application/json",
                 "responseSchema": _RESPONSE_SCHEMA,
+                "thinkingConfig": {"thinkingBudget": 0},  # disable thinking — JSON extraction, not reasoning
             },
         }
 

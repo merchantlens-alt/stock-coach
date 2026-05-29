@@ -98,12 +98,34 @@ export interface GainerDetail {
   fetched_at?: string;
 }
 
+export interface TechnicalSignals {
+  rsi_14?: number;
+  rsi_signal?: "overbought" | "neutral" | "oversold";
+  macd_line?: number;
+  macd_histogram?: number;
+  macd_signal?: "bullish_cross" | "bearish_cross";
+  macd_direction?: "bullish" | "bearish";
+  sma_20?: number;
+  sma_50?: number;
+  price_vs_sma20?: "above" | "below";
+  price_vs_sma50?: "above" | "below";
+  golden_cross?: boolean;
+  volume_trend?: "surging" | "rising" | "neutral" | "falling";
+  volume_ratio?: number;
+  momentum_5d?: number;
+  momentum_20d?: number;
+  pct_of_52w_range?: number;
+  support?: number;
+  resistance?: number;
+}
+
 /** Returned by GET /gainers/{market}/{ticker}/analyse — slow AI endpoint */
 export interface StockAnalysisResponse {
   ticker: string;
   market: Market;
   analysis?: GainerAnalysis;
   prediction?: StockPrediction;
+  technicals?: TechnicalSignals;
   from_cache: boolean;
   analysed_at?: string;
 }
@@ -160,4 +182,42 @@ export interface ConvictionResponse {
   conviction: ThesisConviction;
   from_cache: boolean;
   analysed_at?: string;
+}
+
+// ── Price history (candlestick) ───────────────────────────────────────────────
+
+export interface Candle {
+  time: number;   // Unix timestamp (seconds)
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface PriceHistory {
+  ticker: string;
+  period: string;
+  candles: Candle[];
+}
+
+// ── Radar / catalyst-scanner ──────────────────────────────────────────────────
+
+export interface RadarSignal {
+  theme: string;
+  narrative: string;
+  tickers: string[];
+  catalyst_type: CatalystType;
+  conviction: number;       // 0–1
+  time_frame: string;
+  evidence: string;
+  source_headlines: string[];
+}
+
+export interface RadarResponse {
+  market: Market;
+  signals: RadarSignal[];
+  no_signals_reason?: string | null;
+  from_cache: boolean;
+  generated_at: string;
 }

@@ -135,9 +135,18 @@ class TestBuildGainers:
         assert all(g.quality_score is not None for g in result)
         assert all(g.quality_label is not None for g in result)
 
-    def test_has_catalyst_true_sets_confirmed_tier(self, service: MarketDataService) -> None:
+    def test_has_catalyst_true_high_quality_sets_confirmed_tier(self, service: MarketDataService) -> None:
+        # NVDA defaults: price=950, vol=45M, change_pct=8.5 → quality ≥ 5.5 → confirmed
         result = service._build_gainers([self._row(has_catalyst=True)], "us")
         assert result[0].signal_tier == "confirmed"
+
+    def test_has_catalyst_true_low_quality_sets_catalyst_tier(self, service: MarketDataService) -> None:
+        # Small-cap micro-mover: quality score < 5.5 → "catalyst" not "confirmed"
+        # price=1.5 → 1.0, vol=80K → 1.0, change_pct=50% (suspicious) → 1.0, ticker=4 → 1.0
+        # total raw = 4.0, normalized = 4.4 → "Watch" (< 5.5) → tier = "catalyst"
+        row = self._row(ticker="TINY", price=1.5, volume=80_000, change_pct=50.0, has_catalyst=True)
+        result = service._build_gainers([row], "us")
+        assert result[0].signal_tier == "catalyst"
 
     def test_has_catalyst_false_sets_mover_tier(self, service: MarketDataService) -> None:
         result = service._build_gainers([self._row(has_catalyst=False)], "us")

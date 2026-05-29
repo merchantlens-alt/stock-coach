@@ -992,9 +992,17 @@ class MarketDataService:
                     continue
 
                 has_catalyst = bool(q.get("has_catalyst", False))
-                tier: SignalTier = "confirmed" if has_catalyst else "mover"
 
                 score, label = compute_quality_score(price, volume, change_pct, ticker)
+
+                # Tier assignment:
+                #   confirmed = has news catalyst + Moderate-or-better quality (score ≥ 5.5)
+                #   catalyst  = has news catalyst but smaller/lower-quality stock (score < 5.5)
+                #   mover     = no identifiable news catalyst
+                if has_catalyst:
+                    tier: SignalTier = "confirmed" if score >= 5.5 else "catalyst"
+                else:
+                    tier = "mover"
                 gainers.append(
                     StockGainer(
                         ticker=ticker,
@@ -1227,7 +1235,7 @@ async def _resolve_ticker_via_gemini(query: str, market: str) -> str | None:
     if not settings.google_cloud_project:
         return None
 
-    exchange_hint = "NASDAQ or NYSE" if market == "us" else "NSE India"
+    exchange_hint = "NASDAQ or NYSE" if market == "us" else "NSE or BSE India"
     prompt = (
         f"What is the {exchange_hint} stock ticker symbol for the company '{query}'?\n"
         "Reply with ONLY the ticker symbol — no explanation, no punctuation.\n"

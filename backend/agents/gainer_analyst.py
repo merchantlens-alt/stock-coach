@@ -34,6 +34,7 @@ from models.schemas import (
     NewsItem,
     StockGainer,
     StockPrediction,
+    TechnicalSignals,
 )
 
 log = get_logger(__name__)
@@ -50,6 +51,15 @@ Write clearly for a beginner investor — no jargon without explanation.
 Never recommend buying or selling. Only describe what happened and what the data suggests.
 Identify related stocks that may benefit from the same catalyst.
 If context about today's top gainers is provided, compare the analysed stock against them.
+
+When TECHNICAL ANALYSIS data is provided, you MUST factor it into the 30-day prediction:
+- An overbought RSI (>70) after a big move often means a short-term pullback before any sustained move
+- An oversold RSI (<30) can signal a reversal/bounce opportunity
+- Price far above SMA20/SMA50 indicates the stock is extended and may consolidate
+- A golden cross (SMA20 > SMA50) is a medium-term bullish structure
+- Surging volume confirms institutional conviction behind the move
+- Combine technical signals with the fundamental catalyst to assess TIMING and MAGNITUDE of the 30-day move
+
 Always respond in valid JSON matching the schema provided."""
 
 # ── Combined response schema (analysis + prediction in one call) ──────────────
@@ -184,14 +194,18 @@ class GainerAnalystAgent:
         news: list[NewsItem],
         fundamentals: FundamentalsData | None = None,
         gainers_context: list[StockGainer] | None = None,
+        technicals_text: str | None = None,
     ) -> tuple[GainerAnalysis, StockPrediction | None]:
         """
         Single Gemini call that returns both a GainerAnalysis and a StockPrediction.
         ~40-50 % faster than two sequential calls.
 
-        gainers_context: top gainers from today's list — when supplied (i.e. the
-        searched ticker is not in the gainer list) the model compares this stock
-        against the day's winners.
+        gainers_context:  top gainers from today's list — when supplied (i.e. the
+                          searched ticker is not in the gainer list) the model compares
+                          this stock against the day's winners.
+        technicals_text:  pre-formatted technical analysis block from services/technicals.py
+                          injected directly into the Gemini prompt so the model factors
+                          RSI / MACD / SMA / volume into the 30-day prediction.
         """
         if self._mock:
             log.info("gainer_analyst.mock_response", ticker=ticker)
@@ -232,7 +246,7 @@ class GainerAnalystAgent:
             return analysis, prediction
 
         raw = await self._call_gemini(
-            ticker, change_pct, company_name, sector, news, fundamentals, gainers_context
+            ticker, change_pct, company_name, sector, news, fundamentals, gainers_context, technicals_text
         )
         try:
             analysis = GainerAnalysis(
@@ -301,6 +315,7 @@ class GainerAnalystAgent:
         news: list[NewsItem],
         fundamentals: FundamentalsData | None,
         gainers_context: list[StockGainer] | None,
+        technicals_text: str | None = None,
     ) -> dict[str, Any]:
         import asyncio
         import httpx
@@ -323,15 +338,20 @@ class GainerAnalystAgent:
                 "Populate the `comparison_to_gainers` field with 2-3 sentences."
             )
 
+        # Technical analysis section — injected when we have price history
+        tech_section = f"\n\n{technicals_text}" if technicals_text else ""
+
         prompt = (
             f"Stock: {company_name} ({ticker})\n"
             f"Sector: {sector or 'Unknown'}\n"
             f"Today's move: +{change_pct:.1f}%\n\n"
             f"RECENT NEWS:\n{headlines or 'No news available.'}\n\n"
             f"FUNDAMENTALS:\n{fund_text}"
+            + tech_section
             + gainers_section
             + "\n\nAnalyse why this stock moved today, whether momentum is likely to continue, "
-            "and predict the 30-day outlook. Identify 2-4 related beneficiary tickers."
+            "and predict the 30-day outlook. Factor in the technical signals when assessing "
+            "timing and magnitude of the expected move. Identify 2-4 related beneficiary tickers."
         )
 
         payload = {
@@ -339,9 +359,10 @@ class GainerAnalystAgent:
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.1,
-                "maxOutputTokens": 2500,   # raised from 1500 — combined schema needs ~1800-2200 tokens
+                "maxOutputTokens": 2500,   # combined schema needs ~1800-2200 tokens
                 "responseMimeType": "application/json",
                 "responseSchema": _COMBINED_SCHEMA,
+                "thinkingConfig": {"thinkingBudget": 0},  # disable thinking — JSON extraction, not reasoning
             },
         }
 

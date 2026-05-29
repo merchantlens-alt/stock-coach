@@ -41,6 +41,8 @@ def reset_singletons() -> None:
     deps._news_fetcher = None
     deps._gainer_analyst = None
     deps._market_analyst = None
+    deps._thesis_analyst = None
+    deps._radar_analyst = None
     get_settings.cache_clear()
 
 

@@ -1,12 +1,17 @@
-import { Flame, TrendingUp, Zap } from "lucide-react";
-import type { QualityLabel, SignalTier, StockGainer } from "../types";
+import { Flame, Lightbulb, TrendingUp, Zap } from "lucide-react";
+import type { Period, QualityLabel, SignalTier, StockGainer } from "../types";
+
+const PERIOD_SUFFIX: Record<string, string> = { "1d": "", "1w": " 1W", "1m": " 1M" };
 
 interface Props {
   gainer: StockGainer;
   isSelected: boolean;
   isLoading: boolean;
+  period?: Period;
   onClick: () => void;
   onPrefetch?: () => void;
+  /** Theme labels of saved conviction theses that include this ticker */
+  convictionThemes?: string[];
 }
 
 function formatVolume(vol: number): string {
@@ -40,7 +45,7 @@ const TIER_CONFIG: Record<SignalTier, { label: string; style: string; icon: Reac
   },
 };
 
-export function GainerCard({ gainer, isSelected, isLoading, onClick, onPrefetch }: Props) {
+export function GainerCard({ gainer, isSelected, isLoading, period = "1d", onClick, onPrefetch, convictionThemes }: Props) {
   const currency = gainer.market === "india" ? "₹" : "$";
   const qualityStyle = gainer.quality_label ? QUALITY_STYLES[gainer.quality_label] : "";
   const tier = gainer.signal_tier ?? "mover";
@@ -86,7 +91,7 @@ export function GainerCard({ gainer, isSelected, isLoading, onClick, onPrefetch 
 
         <div className="flex items-center gap-1 shrink-0 bg-green-100 text-green-700 font-bold text-sm px-2 py-1 rounded-lg">
           <TrendingUp size={13} />
-          <span>+{gainer.change_pct.toFixed(1)}%</span>
+          <span>+{gainer.change_pct.toFixed(1)}%{PERIOD_SUFFIX[period]}</span>
         </div>
       </div>
 
@@ -97,6 +102,13 @@ export function GainerCard({ gainer, isSelected, isLoading, onClick, onPrefetch 
         </span>
         <span>Vol {formatVolume(gainer.volume)}</span>
       </div>
+
+      {convictionThemes && convictionThemes.length > 0 && (
+        <div className="mt-2 flex items-center gap-1.5 text-xs text-indigo-600 bg-indigo-50 rounded-lg px-2 py-1">
+          <Lightbulb size={11} className="shrink-0" />
+          <span className="truncate">Your thesis: {convictionThemes[0]}</span>
+        </div>
+      )}
 
       {isLoading && (
         <div className="mt-2 flex items-center gap-1.5 text-xs text-green-600">
