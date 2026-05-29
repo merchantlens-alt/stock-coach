@@ -194,20 +194,21 @@ export function RadarPage() {
   return (
     <div className="flex flex-col h-full overflow-y-auto bg-gray-50">
       {/* ── Page header ──────────────────────────────────────────────────────── */}
-      <div className="bg-white border-b border-gray-100 px-5 py-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 mb-0.5">
-              <Radio size={16} className="text-indigo-500" />
+      <div className="bg-white border-b border-gray-100 px-4 md:px-5 py-4">
+        {/* Title row — wraps on mobile so refresh button doesn't overlap the badge */}
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap mb-0.5">
+              <Radio size={16} className="text-indigo-500 shrink-0" />
               <h1 className="text-base font-bold text-gray-900 tracking-tight">RADAR</h1>
               {data && !isLoading && (
-                <span className="text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full font-medium">
+                <span className="text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full font-medium whitespace-nowrap">
                   {data.from_cache ? "cached" : "live"} · {formatAge(data.generated_at)}
                 </span>
               )}
             </div>
-            <p className="text-xs text-gray-500 max-w-sm">
-              Structural themes from today's financial news — stocks that{" "}
+            <p className="text-xs text-gray-500">
+              Structural themes from today's news — stocks that{" "}
               <span className="font-semibold text-gray-700">haven't moved yet</span> but are
               positioned to benefit.
             </p>

@@ -71,11 +71,11 @@ export function ConvictionPage() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Two-column layout on desktop */}
-      <div className="flex-1 flex overflow-hidden">
+      {/* Stacked on mobile, side-by-side on desktop */}
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
 
-        {/* Left: belief input panel */}
-        <div className="w-full md:w-[420px] lg:w-[460px] shrink-0 flex flex-col border-r border-gray-200 bg-white">
+        {/* Left: belief input panel — capped at 55vh on mobile so results are visible below */}
+        <div className="max-h-[55vh] md:max-h-none md:w-[420px] lg:w-[460px] shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-gray-200 bg-white">
           <div className="px-5 py-4 border-b border-gray-100 bg-gray-50">
             <div className="flex items-center gap-2 mb-1">
               <Lightbulb size={16} className="text-indigo-500" />
@@ -166,8 +166,8 @@ export function ConvictionPage() {
           </div>
         </div>
 
-        {/* Right: thesis results */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-gray-50">
+        {/* Right: thesis results — min-h-0 prevents flex-1 overflowing in flex-col on mobile */}
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-gray-50">
           {/* Tabs: new result / saved */}
           {saved.length > 0 && (
             <div className="px-5 py-3 border-b border-gray-200 bg-white flex items-center gap-1">

@@ -20,14 +20,24 @@ const PERIOD_RETURN_LABEL: Record<string, string> = {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function ConfidencePill({ value, color = "green" }: { value: number; color?: "green" | "amber" | "indigo" }) {
+function ConfidencePill({
+  value,
+  variant = "bullish",
+}: {
+  value: number;
+  /** bullish = green (positive outlook), bearish = red (negative outlook), neutral = indigo */
+  variant?: "bullish" | "bearish" | "neutral";
+}) {
   const pct = Math.round(value * 100);
-  const styles = {
-    green:  pct >= 70 ? "bg-green-100 text-green-700" : pct >= 50 ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500",
-    amber:  "bg-amber-100 text-amber-700",
-    indigo: "bg-indigo-100 text-indigo-700",
-  };
-  return <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${styles[color]}`}>{pct}% confident</span>;
+  let cls: string;
+  if (variant === "bearish") {
+    cls = pct >= 70 ? "bg-red-100 text-red-700" : pct >= 50 ? "bg-orange-100 text-orange-700" : "bg-gray-100 text-gray-500";
+  } else if (variant === "neutral") {
+    cls = "bg-indigo-100 text-indigo-700";
+  } else {
+    cls = pct >= 70 ? "bg-green-100 text-green-700" : pct >= 50 ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500";
+  }
+  return <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cls}`}>{pct}% confident</span>;
 }
 
 type MetricSignal = "positive" | "neutral" | "negative" | "unknown";
@@ -550,7 +560,10 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
                   <SectionHeader icon={<span className="text-xs">📅</span>} label="30-day picture" />
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="text-xs text-gray-400 capitalize">{ai.prediction.time_horizon} horizon</span>
-                    <ConfidencePill value={ai.prediction.confidence} />
+                    <ConfidencePill
+                      value={ai.prediction.confidence}
+                      variant={ai.prediction.predicted_change_pct < 0 ? "bearish" : "bullish"}
+                    />
                   </div>
                 </div>
 
