@@ -1,8 +1,8 @@
 import {
   AlertTriangle, ArrowDown, ArrowUp, GitCompare,
-  Lightbulb, Minus, Newspaper, Sparkles, TrendingDown, TrendingUp, X,
+  Lightbulb, Loader2, Minus, Newspaper, RefreshCw, Sparkles, TrendingDown, TrendingUp, X,
 } from "lucide-react";
-import type { FundamentalsData, GainerDetail, Period, StockAnalysisResponse, TechnicalSignals } from "../types";
+import type { FundamentalsData, GainerDetail, Period, QuarterlySnapshot, StockAnalysisResponse, TechnicalSignals } from "../types";
 import { CandleChart } from "./CandleChart";
 
 // ── Period helpers ────────────────────────────────────────────────────────────
@@ -312,6 +312,109 @@ function TechnicalPanel({ t, currency, currentPrice }: { t: TechnicalSignals; cu
   );
 }
 
+// ── Quarterly results panel ───────────────────────────────────────────────────
+
+const TREND_STYLE: Record<string, { cls: string; icon: string }> = {
+  accelerating: { cls: "bg-green-100 text-green-700",   icon: "↑↑" },
+  recovering:   { cls: "bg-emerald-100 text-emerald-700", icon: "↑"  },
+  stable:       { cls: "bg-gray-100 text-gray-600",      icon: "→"  },
+  decelerating: { cls: "bg-amber-100 text-amber-700",    icon: "↓"  },
+  compressing:  { cls: "bg-amber-100 text-amber-700",    icon: "↓"  },
+  declining:    { cls: "bg-red-100 text-red-600",        icon: "↓↓" },
+  expanding:    { cls: "bg-green-100 text-green-700",    icon: "↑"  },
+  unknown:      { cls: "bg-gray-100 text-gray-400",      icon: "?"  },
+};
+
+function TrendBadge({ label, trend }: { label: string; trend: string }) {
+  const { cls, icon } = TREND_STYLE[trend] ?? TREND_STYLE.unknown;
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <span className="text-[9px] text-gray-400 font-semibold uppercase tracking-wide">{label}</span>
+      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${cls}`}>
+        {icon} {trend}
+      </span>
+    </div>
+  );
+}
+
+function GrowthCell({ value }: { value?: number | null }) {
+  if (value == null) return <td className="py-2 px-2 text-center text-gray-300 text-[10px]">—</td>;
+  const positive = value >= 0;
+  return (
+    <td className={`py-2 px-2 text-center text-[11px] font-semibold ${positive ? "text-green-600" : "text-red-500"}`}>
+      {positive ? "+" : ""}{value.toFixed(1)}%
+    </td>
+  );
+}
+
+function QuarterlyPanel({ q, currency }: { q: QuarterlySnapshot; currency: string }) {
+  // Show last 4 quarters (most recent first)
+  const rows = q.quarters.slice(0, 4);
+  if (rows.length === 0) return null;
+
+  const unit = q.unit || (q.market === "india" ? "Cr" : "M");
+
+  return (
+    <section>
+      <div className="flex items-center gap-1.5 mb-3">
+        <span className="text-xs">📋</span>
+        <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Quarterly results</span>
+        <span className="text-[10px] text-gray-400 ml-1">— used by AI for 30-day prediction</span>
+      </div>
+
+      {/* Trend badges */}
+      <div className="flex items-center gap-3 mb-3">
+        <TrendBadge label="Revenue" trend={q.revenue_trend} />
+        <TrendBadge label="Margins" trend={q.margin_trend} />
+        <TrendBadge label="Earnings" trend={q.earnings_trend} />
+      </div>
+
+      {/* Earnings table */}
+      <div className="rounded-xl border border-gray-100 overflow-hidden overflow-x-auto">
+        <table className="w-full text-xs min-w-[340px]">
+          <thead className="bg-gray-50 border-b border-gray-100">
+            <tr>
+              <th className="py-2 px-3 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wide">Quarter</th>
+              <th className="py-2 px-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wide">
+                Revenue <span className="font-normal normal-case opacity-60">({currency}{unit})</span>
+              </th>
+              <th className="py-2 px-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wide">OPM%</th>
+              <th className="py-2 px-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wide">
+                PAT <span className="font-normal normal-case opacity-60">({currency}{unit})</span>
+              </th>
+              <th className="py-2 px-2 text-center text-[10px] font-bold text-gray-500 uppercase tracking-wide">Rev YoY</th>
+              <th className="py-2 px-2 text-center text-[10px] font-bold text-gray-500 uppercase tracking-wide">PAT YoY</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {rows.map((r, i) => (
+              <tr key={i} className={i === 0 ? "bg-white" : "bg-white"}>
+                <td className="py-2 px-3 font-semibold text-gray-700 whitespace-nowrap">{r.period}</td>
+                <td className="py-2 px-2 text-right text-gray-800 font-medium">
+                  {r.revenue != null ? r.revenue.toLocaleString() : <span className="text-gray-300">—</span>}
+                </td>
+                <td className="py-2 px-2 text-right text-gray-700">
+                  {r.opm_pct != null ? `${r.opm_pct.toFixed(1)}%` : <span className="text-gray-300">—</span>}
+                </td>
+                <td className="py-2 px-2 text-right text-gray-800 font-medium">
+                  {r.net_profit != null ? r.net_profit.toLocaleString() : <span className="text-gray-300">—</span>}
+                </td>
+                <GrowthCell value={r.revenue_growth_yoy} />
+                <GrowthCell value={r.pat_growth_yoy} />
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Attribution */}
+      <p className="text-[9px] text-gray-300 mt-1.5 text-right">
+        {q.market === "india" ? "Source: screener.in" : "Source: yfinance"}
+      </p>
+    </section>
+  );
+}
+
 /** Pulsing skeleton while AI is loading */
 function AISkeleton() {
   return (
@@ -369,6 +472,15 @@ function ChangePill({ pct }: { pct: number }) {
 
 // ── Main panel ────────────────────────────────────────────────────────────────
 
+function _formatAge(iso: string): string {
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (diff < 2) return "just now";
+  if (diff < 60) return `${diff}m ago`;
+  const h = Math.floor(diff / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 interface Props {
   detail: GainerDetail;
   analysis?: StockAnalysisResponse | null;
@@ -376,9 +488,11 @@ interface Props {
   period?: Period;
   onClose: () => void;
   convictionMatches?: string[];
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
-export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d", onClose, convictionMatches }: Props) {
+export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d", onClose, convictionMatches, onRefresh, isRefreshing }: Props) {
   const { gainer, fundamentals, news } = detail;
   const ai = analysis;
   const currency = gainer.market === "india" ? "₹" : "$";
@@ -489,10 +603,57 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
           />
         )}
 
+        {/* ── QUARTERLY RESULTS (fed to AI for the 30-day prediction) ──────── */}
+        {ai?.quarterly && (
+          <QuarterlyPanel q={ai.quarterly} currency={currency} />
+        )}
+
         {/* ── AI ANALYSIS ──────────────────────────────────────────────────── */}
-        {analysisLoading && !ai ? (
+
+        {/* Cache status + Re-analyse button — shown whenever AI data is present */}
+        {ai && !analysisLoading && (
+          <div className="flex items-center justify-between gap-2 py-1.5 px-0.5">
+            <span className="text-[11px] text-gray-400 flex items-center gap-1">
+              {ai.from_cache ? (
+                <>
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  Cached · {ai.analysed_at ? _formatAge(ai.analysed_at) : "earlier"}
+                </>
+              ) : (
+                <>
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400" />
+                  Fresh analysis
+                </>
+              )}
+            </span>
+            {onRefresh && (
+              <button
+                onClick={onRefresh}
+                disabled={isRefreshing}
+                title="Re-run analysis — fetches latest quarterly results + fresh Gemini call"
+                className="flex items-center gap-1 text-[11px] font-medium text-indigo-500 hover:text-indigo-700 disabled:opacity-40 transition-colors"
+              >
+                {isRefreshing
+                  ? <Loader2 size={11} className="animate-spin" />
+                  : <RefreshCw size={11} />
+                }
+                {isRefreshing ? "Re-analysing…" : "Re-analyse"}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Re-analysing overlay — dim the old content while the new one loads */}
+        {isRefreshing && (
+          <div className="rounded-xl bg-indigo-50 border border-indigo-100 px-4 py-3 text-xs text-indigo-600 flex items-center gap-2">
+            <Loader2 size={13} className="animate-spin shrink-0" />
+            Fetching quarterly results + re-running AI analysis — 10-15 seconds…
+          </div>
+        )}
+
+        {!isRefreshing && analysisLoading && !ai ? (
           <AISkeleton />
-        ) : !analysisLoading && ai && !ai.analysis ? (
+        ) : !analysisLoading && !isRefreshing && ai && !ai.analysis ? (
           <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700">
             AI analysis could not be generated. Try refreshing in a moment.
           </div>

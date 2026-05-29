@@ -7,7 +7,7 @@ import { GainerCard } from "../components/GainerCard";
 import { MarketNarrative } from "../components/MarketNarrative";
 import { MarketToggle } from "../components/MarketToggle";
 import { SearchBar } from "../components/SearchBar";
-import { useGainerAnalysis, useGainerDetail, useGainers } from "../hooks/useGainers";
+import { useGainerAnalysis, useGainerDetail, useGainers, useRefreshAnalysis } from "../hooks/useGainers";
 import type { Market, Period, SignalTier } from "../types";
 
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
@@ -77,6 +77,7 @@ export function Dashboard() {
   // The panel renders as soon as the data hook returns; AI fills in when ready.
   const { data: detail, isLoading: detailLoading, error: detailError } = useGainerDetail(market, activeTicker);
   const { data: analysisData, isLoading: analysisLoading } = useGainerAnalysis(market, activeTicker);
+  const refreshAnalysis = useRefreshAnalysis(market, activeTicker);
 
   function handleMarketChange(m: Market) {
     setMarket(m);
@@ -283,6 +284,8 @@ export function Dashboard() {
             period={period}
             onClose={() => { setSelectedTicker(null); setSearchedTicker(null); }}
             convictionMatches={activeTicker ? convictionMap[activeTicker] : undefined}
+            onRefresh={() => refreshAnalysis.mutate()}
+            isRefreshing={refreshAnalysis.isPending}
           />
         ) : (
           <div className="h-full flex flex-col text-gray-400">

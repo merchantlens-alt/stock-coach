@@ -211,6 +211,7 @@ class StockAnalysisResponse(BaseModel):
     analysis: Optional[GainerAnalysis] = None
     prediction: Optional[StockPrediction] = None
     technicals: Optional[TechnicalSignals] = None
+    quarterly: Optional[QuarterlySnapshot] = None  # last 6 quarters — fed to AI + shown in UI
     from_cache: bool = False
     analysed_at: Optional[datetime] = None
 

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { Market, Period } from "../types";
 
@@ -51,6 +51,23 @@ export function useGainerAnalysis(market: Market, ticker: string | null) {
     staleTime: DETAIL_STALE,   // 30 min
     gcTime: DETAIL_GC,         // 6 hours in memory
     retry: 1,
+  });
+}
+
+/**
+ * Force-refresh a stock's AI analysis, bypassing both the React Query
+ * in-memory cache and the server-side 24 h cache.
+ * On success, writes the fresh result back into the React Query cache
+ * so the UI re-renders immediately without a page reload.
+ */
+export function useRefreshAnalysis(market: Market, ticker: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.getGainerAnalysis(market, ticker!, { refresh: true }),
+    onSuccess: (data) => {
+      // Overwrite the cached entry — AnalysisPanel re-renders with quarterly data
+      queryClient.setQueryData(["gainer-analysis", market, ticker], data);
+    },
   });
 }
 

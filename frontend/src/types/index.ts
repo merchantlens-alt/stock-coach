@@ -119,6 +119,30 @@ export interface TechnicalSignals {
   resistance?: number;
 }
 
+// ── Quarterly results ─────────────────────────────────────────────────────────
+
+export interface QuarterlyResult {
+  period: string;              // e.g. "Sep 2024"
+  revenue?: number | null;     // Cr for India, $M for US
+  operating_profit?: number | null;
+  opm_pct?: number | null;     // operating profit margin %
+  net_profit?: number | null;  // PAT
+  eps?: number | null;
+  revenue_growth_yoy?: number | null;  // % vs same quarter last year
+  pat_growth_yoy?: number | null;      // % vs same quarter last year
+}
+
+export interface QuarterlySnapshot {
+  ticker: string;
+  market: Market;
+  quarters: QuarterlyResult[];  // most recent first, up to 6
+  revenue_trend: string;   // accelerating | stable | decelerating | declining | recovering | unknown
+  margin_trend: string;    // expanding | stable | compressing | unknown
+  earnings_trend: string;  // accelerating | stable | decelerating | declining | recovering | unknown
+  currency: string;
+  unit: string;            // Cr for India, M for US
+}
+
 /** Returned by GET /gainers/{market}/{ticker}/analyse — slow AI endpoint */
 export interface StockAnalysisResponse {
   ticker: string;
@@ -126,6 +150,7 @@ export interface StockAnalysisResponse {
   analysis?: GainerAnalysis;
   prediction?: StockPrediction;
   technicals?: TechnicalSignals;
+  quarterly?: QuarterlySnapshot | null;
   from_cache: boolean;
   analysed_at?: string;
 }

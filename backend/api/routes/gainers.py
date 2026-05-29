@@ -397,24 +397,22 @@ async def get_gainer_analysis(
             log.warning("gainers.analysis_fundamentals_failed", ticker=resolved_ticker, error=str(exc))
             return None
 
-    async def _get_quarterly_data() -> str | None:
+    async def _get_quarterly_data() -> "QuarterlySnapshot | None":
         """Fetch quarterly results from screener.in (India) or yfinance (US).
         Cached 24 h — results only change once a quarter."""
+        from models.schemas import QuarterlySnapshot
         q_key = f"quarterly:{market}:{resolved_ticker}"
         cached_q = await cache.get(q_key)
         if cached_q:
             log.info("gainers.quarterly_cache_hit", ticker=resolved_ticker)
-            # Rebuild snapshot from cached dict
-            from models.schemas import QuarterlySnapshot
-            snap = QuarterlySnapshot(**cached_q)
-            return fmt_quarterly(snap)
+            return QuarterlySnapshot(**cached_q)
 
         snap = await quarterly_fetcher.fetch(resolved_ticker, market)
         if snap is None:
             return None
 
         await cache.set(q_key, snap.model_dump(), 24 * 3600)
-        return fmt_quarterly(snap)
+        return snap
 
     async def _get_price_history() -> list[dict]:
         # Try NSE first, fall back to BSE for India (some stocks only on BSE)
@@ -454,7 +452,8 @@ async def get_gainer_analysis(
         news = []
     if isinstance(candles, Exception):
         candles = []
-    quarterly_text: str | None = quarterly_text_result if not isinstance(quarterly_text_result, Exception) else None
+    quarterly_snap = quarterly_text_result if not isinstance(quarterly_text_result, Exception) else None
+    quarterly_text: str | None = fmt_quarterly(quarterly_snap) if quarterly_snap else None
     if quarterly_text:
         log.info("gainers.quarterly_injected", ticker=resolved_ticker, chars=len(quarterly_text))
 
@@ -518,6 +517,7 @@ async def get_gainer_analysis(
         analysis=analysis,
         prediction=prediction,
         technicals=technicals,
+        quarterly=quarterly_snap,
         from_cache=False,
         analysed_at=datetime.utcnow(),
     )
