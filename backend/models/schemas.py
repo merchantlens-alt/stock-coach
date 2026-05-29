@@ -99,9 +99,10 @@ class StockGainer(BaseModel):
 
     @field_validator("change_pct")
     @classmethod
-    def must_be_positive_for_gainer(cls, v: float) -> float:
-        if v < 0:
-            raise ValueError("Gainers must have positive change_pct")
+    def round_change_pct(cls, v: float) -> float:
+        # Gainers list only ever has positive values (filtered upstream in market_data.py).
+        # Searched stocks can be negative — allow the real value through so the UI
+        # can display the correct sign and colour.
         return round(v, 2)
 
 

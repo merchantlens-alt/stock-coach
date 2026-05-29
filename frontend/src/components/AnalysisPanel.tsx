@@ -526,7 +526,9 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
   const ai = analysis;
   const currency = gainer.market === "india" ? "₹" : "$";
   const periodLabel = PERIOD_LABEL[period] ?? "today";
-  const returnLabel = PERIOD_RETURN_LABEL[period] ?? "Today's gain";
+  const returnLabel = PERIOD_RETURN_LABEL[period] ?? "Today's change";
+  const isDown = gainer.change_pct < 0;
+  const changeSign = isDown ? "" : "+";  // negative numbers already carry their own "-"
 
   const hasFundamentals = fundamentals && (
     fundamentals.pe_ratio != null ||
@@ -549,8 +551,8 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-xl font-bold text-gray-900">{gainer.ticker}</h2>
-              <span className="bg-green-100 text-green-700 text-sm font-bold px-2.5 py-0.5 rounded-full">
-                +{gainer.change_pct.toFixed(1)}%
+              <span className={`text-sm font-bold px-2.5 py-0.5 rounded-full ${isDown ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}`}>
+                {changeSign}{gainer.change_pct.toFixed(1)}%
               </span>
               {period !== "1d" && (
                 <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full font-medium">
@@ -585,11 +587,11 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
             <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Price</p>
             <p className="text-base font-bold text-gray-900 mt-0.5">{currency}{gainer.price.toLocaleString()}</p>
           </div>
-          <div className="bg-green-50 rounded-xl p-3">
-            <p className="text-[10px] text-green-600 font-semibold uppercase tracking-wide">{returnLabel}</p>
-            <p className="text-base font-bold text-green-700 mt-0.5">
-              +{currency}{Math.abs(gainer.change_abs).toFixed(2)}
-              <span className="text-xs font-medium ml-1 opacity-70">(+{gainer.change_pct.toFixed(1)}%)</span>
+          <div className={`rounded-xl p-3 ${isDown ? "bg-red-50" : "bg-green-50"}`}>
+            <p className={`text-[10px] font-semibold uppercase tracking-wide ${isDown ? "text-red-600" : "text-green-600"}`}>{returnLabel}</p>
+            <p className={`text-base font-bold mt-0.5 ${isDown ? "text-red-700" : "text-green-700"}`}>
+              {changeSign}{currency}{Math.abs(gainer.change_abs).toFixed(2)}
+              <span className="text-xs font-medium ml-1 opacity-70">({changeSign}{gainer.change_pct.toFixed(1)}%)</span>
             </p>
           </div>
           <div className="bg-gray-50 rounded-xl p-3">

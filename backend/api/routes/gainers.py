@@ -464,7 +464,9 @@ async def get_gainer_analysis(
     fundamentals_result, news, candles, quarterly_text_result = await asyncio.gather(
         _get_analysis_fundamentals(),
         news_fetcher.get_news(resolved_ticker, gainer.name),
-        _get_price_history(),
+        # Hard cap: India stocks try .NS then .BO (10 s each = 20 s worst case).
+        # Cap at 8 s total so Gemini always has headroom before the server timeout.
+        asyncio.wait_for(_get_price_history(), timeout=8.0),
         _get_quarterly_data(),
         return_exceptions=True,
     )
@@ -761,8 +763,8 @@ async def _resolve_gainer(
         return None, {}
 
     change_pct = info.get("regularMarketChangePercent") or 0.0
-    if change_pct < 0:
-        change_pct = 0.01  # minimum so the validator passes for searched non-gainers
+    # Pass the real value through — can be negative for searched non-gainers.
+    # The validator no longer enforces positive-only; the UI handles sign/colour.
 
     gainer = StockGainer(
         ticker=ticker,

@@ -7,7 +7,6 @@ from urllib.parse import quote_plus
 
 import httpx
 import yfinance as yf
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from core.config import Settings
 from core.exceptions import NewsError
@@ -38,6 +37,9 @@ class NewsFetcher:
         deduplicates by title, and returns the most recent `limit` articles.
         yfinance news has broader coverage of stock-moving events (press releases,
         earnings, FDA, government contracts) that NewsAPI often misses.
+
+        Hard-capped at 10 s total so a slow/rate-limited external API never
+        blocks the detail or analysis endpoints.
         """
         tasks = [self._fetch_yf_news(ticker, limit)]
         if self._api_key:
@@ -45,7 +47,14 @@ class NewsFetcher:
         else:
             tasks.append(self._fetch_google_news_rss(ticker, company_name, limit))
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            log.warning("news.get_news_timeout", ticker=ticker)
+            return []
 
         seen_titles: set[str] = set()
         merged: list[NewsItem] = []
@@ -68,7 +77,10 @@ class NewsFetcher:
         Handles both US tickers and NSE tickers (with/without .NS suffix).
         """
         try:
-            raw = await asyncio.to_thread(lambda: yf.Ticker(ticker).news)
+            raw = await asyncio.wait_for(
+                asyncio.to_thread(lambda: yf.Ticker(ticker).news),
+                timeout=8.0,
+            )
             items: list[NewsItem] = []
             for item in (raw or [])[:limit]:
                 content = item.get("content", {})
@@ -101,35 +113,41 @@ class NewsFetcher:
             log.warning("news.yf_news_failed", ticker=ticker, error=str(exc))
             return []
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     async def _fetch_newsapi(
         self, ticker: str, company_name: str, limit: int
     ) -> list[NewsItem]:
-        query = f"{company_name} OR {ticker} stock"
-        params = {
-            "q": query,
-            "sortBy": "publishedAt",
-            "pageSize": limit,
-            "language": "en",
-            "apiKey": self._api_key,
-        }
-        resp = await self._client.get(_NEWSAPI_BASE, params=params)
-        resp.raise_for_status()
-        data = resp.json()
+        # No retry — a failing NewsAPI call should fail fast (< 10 s) so it
+        # never blocks the detail/analysis endpoints.  The yfinance fallback
+        # already runs in parallel and typically has good coverage.
+        try:
+            query = f"{company_name} OR {ticker} stock"
+            params = {
+                "q": query,
+                "sortBy": "publishedAt",
+                "pageSize": limit,
+                "language": "en",
+                "apiKey": self._api_key,
+            }
+            resp = await self._client.get(_NEWSAPI_BASE, params=params)
+            resp.raise_for_status()
+            data = resp.json()
 
-        items: list[NewsItem] = []
-        for article in data.get("articles", []):
-            published = _parse_dt(article.get("publishedAt"))
-            items.append(
-                NewsItem(
-                    title=article.get("title", ""),
-                    source=article.get("source", {}).get("name", "NewsAPI"),
-                    published_at=published,
-                    url=article.get("url"),
-                    summary=article.get("description"),
+            items: list[NewsItem] = []
+            for article in data.get("articles", []):
+                published = _parse_dt(article.get("publishedAt"))
+                items.append(
+                    NewsItem(
+                        title=article.get("title", ""),
+                        source=article.get("source", {}).get("name", "NewsAPI"),
+                        published_at=published,
+                        url=article.get("url"),
+                        summary=article.get("description"),
+                    )
                 )
-            )
-        return items
+            return items
+        except Exception as exc:
+            log.warning("news.newsapi_failed", ticker=ticker, error=str(exc))
+            return []
 
     async def _fetch_google_news_rss(
         self, ticker: str, company_name: str, limit: int
