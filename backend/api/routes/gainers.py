@@ -402,11 +402,25 @@ async def get_gainer_analysis(
         Cached 24 h — results only change once a quarter.
         Hard-capped at 6 s total so it never blocks the Gemini call."""
         from models.schemas import QuarterlySnapshot
+        from services.quarterly_fetcher import _compute_quarterly_insight
         q_key = f"quarterly:{market}:{resolved_ticker}"
         cached_q = await cache.get(q_key)
         if cached_q:
             log.info("gainers.quarterly_cache_hit", ticker=resolved_ticker)
-            return QuarterlySnapshot(**cached_q)
+            snap = QuarterlySnapshot(**cached_q)
+            # Always recompute the insight from the cached trend data — pure Python,
+            # no I/O, so no overhead.  This ensures any improvement to
+            # _compute_quarterly_insight is picked up without waiting 24 h for
+            # the quarterly cache to expire or requiring a manual re-analyse.
+            if snap.quarters:
+                fresh_insight = _compute_quarterly_insight(
+                    snap.revenue_trend, snap.margin_trend,
+                    snap.earnings_trend, snap.quarters,
+                )
+                if fresh_insight != snap.quarterly_insight:
+                    snap = snap.model_copy(update={"quarterly_insight": fresh_insight})
+                    await cache.set(q_key, snap.model_dump(), 24 * 3600)
+            return snap
 
         try:
             snap = await asyncio.wait_for(

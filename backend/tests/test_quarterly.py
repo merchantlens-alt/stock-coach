@@ -378,3 +378,35 @@ class TestComputeQuarterlyInsight:
         quarters = [QuarterlyResult(period="Sep 2024", revenue=1000.0)]
         insight = _compute_quarterly_insight("stable", "stable", "stable", quarters)
         assert isinstance(insight, str)
+
+    def test_unknown_trends_with_yoy_data(self):
+        """US stocks often return only 1 YoY data point → trends are 'unknown'.
+        Insight should still surface the latest quarter's performance."""
+        quarters = [QuarterlyResult(
+            period="Mar '26",
+            revenue=111_184.0,
+            opm_pct=35.4,
+            net_profit=29_578.0,
+            revenue_growth_yoy=16.6,
+            pat_growth_yoy=19.4,
+        )]
+        insight = _compute_quarterly_insight("unknown", "expanding", "unknown", quarters)
+        assert "growing" in insight.lower() or "expanding" in insight.lower()
+        assert "+19%" in insight or "+16%" in insight
+
+    def test_unknown_trends_all_positive_tone(self):
+        """When latest YoY is positive across the board the insight should say 'expanding'."""
+        quarters = [QuarterlyResult(
+            period="Mar '26",
+            revenue_growth_yoy=10.0,
+            pat_growth_yoy=15.0,
+        )]
+        insight = _compute_quarterly_insight("unknown", "unknown", "unknown", quarters)
+        assert "expanding" in insight.lower() or "growing" in insight.lower()
+
+    def test_unknown_trends_no_yoy_data(self):
+        """Unknown trends + no YoY data should return a graceful fallback string."""
+        quarters = [QuarterlyResult(period="Mar '26", revenue=1000.0)]
+        insight = _compute_quarterly_insight("unknown", "unknown", "unknown", quarters)
+        assert isinstance(insight, str)
+        assert len(insight) > 10

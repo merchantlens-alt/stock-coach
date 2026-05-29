@@ -356,6 +356,43 @@ def _compute_quarterly_insight(
             "Watch for signs that volume or pricing is recovering."
         )
 
+    # ── Limited history (US stocks often have only 4-5 quarters → 1 YoY point) ─
+    # 1 YoY point is too few for trend detection (returns "unknown") but still
+    # meaningful: state what the latest quarter actually shows.
+    if earnings_trend == "unknown" or revenue_trend == "unknown":
+        if latest:
+            pieces: list[str] = []
+            if latest.pat_growth_yoy is not None:
+                direction = "growing" if latest.pat_growth_yoy >= 0 else "declining"
+                pieces.append(f"earnings {direction}{_pat_str()}")
+            if latest.revenue_growth_yoy is not None:
+                direction = "growing" if latest.revenue_growth_yoy >= 0 else "declining"
+                pieces.append(f"revenue {direction}{_rev_str()}")
+            if pieces:
+                margin_note = (
+                    f" with {margin_trend} margins" if margin_trend != "unknown" else ""
+                )
+                all_positive = all(
+                    (v >= 0)
+                    for v in [latest.revenue_growth_yoy, latest.pat_growth_yoy]
+                    if v is not None
+                )
+                tone = (
+                    "Business expanding year-over-year across the board."
+                    if all_positive
+                    else "Mixed year-over-year performance."
+                )
+                return (
+                    f"Latest quarter: {' and '.join(pieces)}{margin_note}. "
+                    f"{tone} "
+                    "Insufficient quarterly history to assess multi-period trend — "
+                    "results factored into the AI's 30-day prediction."
+                )
+        return (
+            "Quarterly data available but insufficient history to assess trend direction. "
+            "Results have been factored into the AI's 30-day prediction."
+        )
+
     # ── Default ───────────────────────────────────────────────────────────────
     return (
         f"Revenue: {revenue_trend} · Margins: {margin_trend} · Earnings: {earnings_trend}. "
