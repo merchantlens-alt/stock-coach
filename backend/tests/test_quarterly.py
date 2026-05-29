@@ -19,6 +19,7 @@ from models.schemas import QuarterlyResult, QuarterlySnapshot
 from services.quarterly_fetcher import (
     QuarterlyFetcher,
     _build_results_newest_first,
+    _compute_quarterly_insight,
     _earnings_trend,
     _margin_trend,
     _parse_screener_html,
@@ -300,3 +301,80 @@ class TestQuarterlyFetcherFallback:
             assert result.market == "india"
             assert len(result.quarters) > 0
             assert result.quarters[0].period == "Sep 2024"  # most recent first
+            # Insight should always be populated by the fetcher
+            assert result.quarterly_insight is not None
+            assert len(result.quarterly_insight) > 20
+
+
+# ── _compute_quarterly_insight tests ─────────────────────────────────────────
+
+class TestComputeQuarterlyInsight:
+    def _quarters(self, pat_yoy: float | None = 20.0, rev_yoy: float | None = 15.0) -> list[QuarterlyResult]:
+        """Minimal quarter list for insight tests."""
+        return [
+            QuarterlyResult(
+                period="Sep 2024",
+                revenue=1260.0,
+                opm_pct=20.0,
+                net_profit=140.0,
+                revenue_growth_yoy=rev_yoy,
+                pat_growth_yoy=pat_yoy,
+            )
+        ]
+
+    def test_best_case_compounding(self):
+        insight = _compute_quarterly_insight(
+            "accelerating", "expanding", "accelerating", self._quarters(pat_yoy=35.0)
+        )
+        assert "compounding" in insight.lower() or "pricing power" in insight.lower()
+        assert "+35%" in insight
+
+    def test_accelerating_earnings_no_margin_signal(self):
+        insight = _compute_quarterly_insight(
+            "accelerating", "stable", "accelerating", self._quarters(pat_yoy=22.0)
+        )
+        assert "building" in insight.lower() or "momentum" in insight.lower()
+
+    def test_stable_stable(self):
+        insight = _compute_quarterly_insight(
+            "stable", "stable", "stable", self._quarters(pat_yoy=None)
+        )
+        assert "boring" in insight.lower() or "predictable" in insight.lower() or "steady" in insight.lower()
+
+    def test_double_squeeze(self):
+        insight = _compute_quarterly_insight(
+            "declining", "compressing", "declining", self._quarters(pat_yoy=-40.0)
+        )
+        assert "double" in insight.lower() or "squeeze" in insight.lower() or "red flag" in insight.lower()
+        assert "-40%" in insight
+
+    def test_declining_earnings_expanding_margins(self):
+        insight = _compute_quarterly_insight(
+            "declining", "expanding", "declining", self._quarters(pat_yoy=-15.0)
+        )
+        # Should attribute to top-line issue, not margin
+        assert "top line" in insight.lower() or "revenue" in insight.lower()
+
+    def test_decelerating_compressing(self):
+        insight = _compute_quarterly_insight(
+            "decelerating", "compressing", "decelerating", self._quarters(pat_yoy=5.0)
+        )
+        assert "leverage" in insight.lower() or "slowing" in insight.lower() or "thin" in insight.lower()
+
+    def test_recovering_turnaround(self):
+        insight = _compute_quarterly_insight(
+            "recovering", "expanding", "recovering", self._quarters(pat_yoy=10.0)
+        )
+        assert "recover" in insight.lower() or "turnaround" in insight.lower()
+
+    def test_always_returns_string(self):
+        """Edge case: unknown trends should still return a non-empty string."""
+        insight = _compute_quarterly_insight("unknown", "unknown", "unknown", [])
+        assert isinstance(insight, str)
+        assert len(insight) > 10
+
+    def test_no_yoy_data_does_not_crash(self):
+        """No YoY numbers in quarters — should still return a coherent string."""
+        quarters = [QuarterlyResult(period="Sep 2024", revenue=1000.0)]
+        insight = _compute_quarterly_insight("stable", "stable", "stable", quarters)
+        assert isinstance(insight, str)

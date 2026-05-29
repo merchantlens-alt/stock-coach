@@ -141,6 +141,7 @@ export interface QuarterlySnapshot {
   earnings_trend: string;  // accelerating | stable | decelerating | declining | recovering | unknown
   currency: string;
   unit: string;            // Cr for India, M for US
+  quarterly_insight?: string | null;  // plain-English earnings verdict
 }
 
 /** Returned by GET /gainers/{market}/{ticker}/analyse — slow AI endpoint */

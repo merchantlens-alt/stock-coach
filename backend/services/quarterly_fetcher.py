@@ -255,6 +255,114 @@ def _earnings_trend(results: list[QuarterlyResult]) -> str:
     return "stable"
 
 
+# ── Quarterly insight (plain-English verdict shown in the UI) ─────────────────
+
+def _compute_quarterly_insight(
+    revenue_trend: str,
+    margin_trend: str,
+    earnings_trend: str,
+    quarters: list[QuarterlyResult],
+) -> str:
+    """
+    Warren Buffett-style 1–2 sentence plain-English verdict.
+    Generated from trend labels + latest YoY numbers — no AI call required.
+    """
+    latest = quarters[0] if quarters else None
+
+    def _pat_str() -> str:
+        if latest and latest.pat_growth_yoy is not None:
+            sign = "+" if latest.pat_growth_yoy >= 0 else ""
+            return f" ({sign}{latest.pat_growth_yoy:.0f}% YoY)"
+        return ""
+
+    def _rev_str() -> str:
+        if latest and latest.revenue_growth_yoy is not None:
+            sign = "+" if latest.revenue_growth_yoy >= 0 else ""
+            return f" ({sign}{latest.revenue_growth_yoy:.0f}% YoY)"
+        return ""
+
+    # ── Best cases ────────────────────────────────────────────────────────────
+    if earnings_trend == "accelerating" and margin_trend == "expanding":
+        return (
+            f"Earnings accelerating{_pat_str()} with expanding margins — "
+            "each rupee of revenue is turning into more profit than before. "
+            "This is the compounding flywheel Buffett looks for: pricing power plus operating leverage."
+        )
+    if earnings_trend == "accelerating":
+        return (
+            f"Earnings momentum is building{_pat_str()}. "
+            f"Margins are {margin_trend} — growth is flowing through to the bottom line. "
+            "Strong execution; watch whether margins hold as growth continues."
+        )
+    if earnings_trend == "recovering" and margin_trend in ("expanding", "stable"):
+        return (
+            f"Earnings recovering{_pat_str()} with "
+            f"{'improving' if margin_trend == 'expanding' else 'stable'} margins. "
+            "The turnaround is showing in the numbers, not just the narrative — "
+            "a meaningful distinction when separating hope from reality."
+        )
+    if earnings_trend == "stable" and margin_trend == "expanding":
+        return (
+            "Consistent earnings with improving margins — the business is getting more efficient. "
+            "Buffett's definition of quality: predictable profits, improving returns on capital, "
+            "no drama."
+        )
+    if earnings_trend == "stable" and margin_trend == "stable":
+        return (
+            "Steady, predictable earnings with stable margins. "
+            "Boring — and that's exactly what long-term investors should want. "
+            "Reliable cash flow with no unpleasant surprises is worth more than volatile growth."
+        )
+
+    # ── Warning cases ─────────────────────────────────────────────────────────
+    if earnings_trend == "declining" and margin_trend == "compressing":
+        return (
+            f"Double squeeze: profits falling{_pat_str()} AND margins compressing. "
+            "Costs are rising faster than revenue can cover. "
+            "Buffett's red flag — a business earning less each quarter while becoming less efficient "
+            "is actively eroding its competitive advantage."
+        )
+    if earnings_trend == "declining" and margin_trend == "expanding":
+        return (
+            f"Earnings declining{_pat_str()} despite improving margins — "
+            "profitability is fine but the top line is the problem. "
+            "Revenue needs to recover before profits follow; "
+            "watch whether demand is cyclically weak or structurally impaired."
+        )
+    if earnings_trend == "declining":
+        return (
+            f"Earnings in decline{_pat_str()} with {margin_trend} margins. "
+            "The business is earning less than a year ago. "
+            "Key question: is this cyclical (expect recovery) or structural (pricing power eroded)? "
+            "The answer determines whether today's price is an opportunity or a value trap."
+        )
+    if earnings_trend == "decelerating" and margin_trend == "compressing":
+        return (
+            "Growth is slowing while margins thin — the business is losing operating leverage. "
+            "Rising costs are absorbing revenue growth before it reaches the bottom line. "
+            "Not in crisis, but the direction requires monitoring."
+        )
+    if earnings_trend == "decelerating":
+        return (
+            f"Earnings growth is decelerating{_pat_str()}. "
+            f"Revenue is {revenue_trend}, margins are {margin_trend}. "
+            "Still profitable and growing, but the pace is slowing — "
+            "a temporary plateau or the early signal of a longer slowdown."
+        )
+    if revenue_trend == "declining":
+        return (
+            f"Top-line revenue shrinking{_rev_str()} with {earnings_trend} earnings. "
+            "When revenue falls, everything downstream follows eventually. "
+            "Watch for signs that volume or pricing is recovering."
+        )
+
+    # ── Default ───────────────────────────────────────────────────────────────
+    return (
+        f"Revenue: {revenue_trend} · Margins: {margin_trend} · Earnings: {earnings_trend}. "
+        "Quarterly results have been factored into the AI's 30-day prediction."
+    )
+
+
 # ── Prompt formatter ──────────────────────────────────────────────────────────
 
 def format_for_prompt(snap: QuarterlySnapshot) -> str:
@@ -351,15 +459,21 @@ class QuarterlyFetcher:
                 if not results:
                     continue
 
+                rev_trend = _revenue_trend(results)
+                mar_trend = _margin_trend(results)
+                ear_trend = _earnings_trend(results)
                 snap = QuarterlySnapshot(
                     ticker=ticker,
                     market="india",
                     quarters=results[:6],
-                    revenue_trend=_revenue_trend(results),
-                    margin_trend=_margin_trend(results),
-                    earnings_trend=_earnings_trend(results),
+                    revenue_trend=rev_trend,
+                    margin_trend=mar_trend,
+                    earnings_trend=ear_trend,
                     currency="₹",
                     unit="Cr",
+                    quarterly_insight=_compute_quarterly_insight(
+                        rev_trend, mar_trend, ear_trend, results[:6]
+                    ),
                 )
                 log.info(
                     "quarterly.screener_ok",
@@ -445,15 +559,21 @@ class QuarterlyFetcher:
                 if r.net_profit is not None and prev.net_profit and prev.net_profit != 0:
                     r.pat_growth_yoy = (r.net_profit - prev.net_profit) / abs(prev.net_profit) * 100
 
+            rev_trend = _revenue_trend(results)
+            mar_trend = _margin_trend(results)
+            ear_trend = _earnings_trend(results)
             snap = QuarterlySnapshot(
                 ticker=ticker,
                 market="us",
                 quarters=results[:6],
-                revenue_trend=_revenue_trend(results),
-                margin_trend=_margin_trend(results),
-                earnings_trend=_earnings_trend(results),
+                revenue_trend=rev_trend,
+                margin_trend=mar_trend,
+                earnings_trend=ear_trend,
                 currency="$",
                 unit="M",
+                quarterly_insight=_compute_quarterly_insight(
+                    rev_trend, mar_trend, ear_trend, results[:6]
+                ),
             )
             log.info(
                 "quarterly.yfinance_ok",

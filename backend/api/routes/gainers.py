@@ -399,7 +399,8 @@ async def get_gainer_analysis(
 
     async def _get_quarterly_data() -> "QuarterlySnapshot | None":
         """Fetch quarterly results from screener.in (India) or yfinance (US).
-        Cached 24 h — results only change once a quarter."""
+        Cached 24 h — results only change once a quarter.
+        Hard-capped at 6 s total so it never blocks the Gemini call."""
         from models.schemas import QuarterlySnapshot
         q_key = f"quarterly:{market}:{resolved_ticker}"
         cached_q = await cache.get(q_key)
@@ -407,7 +408,15 @@ async def get_gainer_analysis(
             log.info("gainers.quarterly_cache_hit", ticker=resolved_ticker)
             return QuarterlySnapshot(**cached_q)
 
-        snap = await quarterly_fetcher.fetch(resolved_ticker, market)
+        try:
+            snap = await asyncio.wait_for(
+                quarterly_fetcher.fetch(resolved_ticker, market),
+                timeout=6.0,
+            )
+        except asyncio.TimeoutError:
+            log.warning("gainers.quarterly_timeout", ticker=resolved_ticker)
+            return None
+
         if snap is None:
             return None
 

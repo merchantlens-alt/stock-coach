@@ -348,11 +348,24 @@ function GrowthCell({ value }: { value?: number | null }) {
 }
 
 function QuarterlyPanel({ q, currency }: { q: QuarterlySnapshot; currency: string }) {
-  // Show last 4 quarters (most recent first)
-  const rows = q.quarters.slice(0, 4);
+  // Defensive: quarters may be absent on malformed cached data
+  const rows = (q?.quarters ?? []).slice(0, 4);
   if (rows.length === 0) return null;
 
   const unit = q.unit || (q.market === "india" ? "Cr" : "M");
+
+  // Determine insight callout tone from trend signals
+  const isPositive =
+    (q.earnings_trend === "accelerating" || q.earnings_trend === "recovering") &&
+    (q.margin_trend === "expanding" || q.margin_trend === "stable");
+  const isWarning =
+    q.earnings_trend === "declining" ||
+    (q.earnings_trend === "decelerating" && q.margin_trend === "compressing");
+  const insightStyle = isWarning
+    ? "bg-red-50 border-red-100 text-red-800"
+    : isPositive
+      ? "bg-green-50 border-green-100 text-green-800"
+      : "bg-amber-50 border-amber-100 text-amber-800";
 
   return (
     <section>
@@ -388,7 +401,7 @@ function QuarterlyPanel({ q, currency }: { q: QuarterlySnapshot; currency: strin
           </thead>
           <tbody className="divide-y divide-gray-50">
             {rows.map((r, i) => (
-              <tr key={i} className={i === 0 ? "bg-white" : "bg-white"}>
+              <tr key={i} className="bg-white">
                 <td className="py-2 px-3 font-semibold text-gray-700 whitespace-nowrap">{r.period}</td>
                 <td className="py-2 px-2 text-right text-gray-800 font-medium">
                   {r.revenue != null ? r.revenue.toLocaleString() : <span className="text-gray-300">—</span>}
@@ -406,6 +419,14 @@ function QuarterlyPanel({ q, currency }: { q: QuarterlySnapshot; currency: strin
           </tbody>
         </table>
       </div>
+
+      {/* Key takeaway — Warren Buffett style plain-English verdict */}
+      {q.quarterly_insight && (
+        <div className={`mt-3 rounded-xl border px-4 py-3 ${insightStyle}`}>
+          <p className="text-[10px] font-bold uppercase tracking-wide opacity-60 mb-1">Key takeaway</p>
+          <p className="text-xs leading-relaxed">{q.quarterly_insight}</p>
+        </div>
+      )}
 
       {/* Attribution */}
       <p className="text-[9px] text-gray-300 mt-1.5 text-right">

@@ -332,3 +332,4 @@ class QuarterlySnapshot(BaseModel):
     earnings_trend: str  # accelerating | stable | decelerating | declining | recovering | unknown
     currency: str = "₹"
     unit: str = "Cr"     # Cr for India, M for US
+    quarterly_insight: Optional[str] = None  # plain-English earnings verdict surfaced in the UI
