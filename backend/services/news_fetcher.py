@@ -30,7 +30,9 @@ class NewsFetcher:
         self._api_key = settings.news_api_key
         self._client = httpx.AsyncClient(timeout=10.0)
 
-    async def get_news(self, ticker: str, company_name: str, limit: int = 8) -> list[NewsItem]:
+    async def get_news(
+        self, ticker: str, company_name: str, limit: int = 8, market: str = "us"
+    ) -> list[NewsItem]:
         """
         Fetch recent news for a ticker.
         Runs NewsAPI/Google News RSS + yfinance Yahoo Finance news in parallel,
@@ -40,8 +42,18 @@ class NewsFetcher:
 
         Hard-capped at 10 s total so a slow/rate-limited external API never
         blocks the detail or analysis endpoints.
+
+        For India stocks, market_data strips the .NS/.BO suffix before storing
+        the ticker.  We reconstruct the yfinance-compatible symbol here so the
+        news fetch doesn't miss 70 % of articles (RELIANCE → 3 items vs
+        RELIANCE.NS → 10 items).
         """
-        tasks = [self._fetch_yf_news(ticker, limit)]
+        # Build the correct yfinance symbol for news (may differ from stored ticker)
+        yf_ticker = ticker
+        if market == "india" and not ticker.endswith((".NS", ".BO")):
+            yf_ticker = f"{ticker}.NS"
+
+        tasks = [self._fetch_yf_news(yf_ticker, limit)]
         if self._api_key:
             tasks.append(self._fetch_newsapi(ticker, company_name, limit))
         else:

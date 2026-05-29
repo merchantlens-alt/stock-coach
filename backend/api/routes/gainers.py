@@ -237,7 +237,7 @@ async def _prewarm_top_analysis(
                 log.info("gainers.prewarm_start", ticker=gainer.ticker, market=market)
                 fundamentals, news = await asyncio.gather(
                     market_data.get_fundamentals(gainer.ticker, market),
-                    news_fetcher.get_news(gainer.ticker, gainer.name),
+                    news_fetcher.get_news(gainer.ticker, gainer.name, market=market),
                     return_exceptions=True,
                 )
                 analysis, prediction = await analyst.analyse_full(
@@ -314,7 +314,7 @@ async def get_gainer_detail(
 
     fundamentals_result, news = await asyncio.gather(
         _get_fundamentals(),
-        news_fetcher.get_news(ticker, gainer.name),
+        news_fetcher.get_news(ticker, gainer.name, market=market),
         return_exceptions=True,
     )
 
@@ -331,7 +331,11 @@ async def get_gainer_detail(
         fetched_at=datetime.utcnow(),
     )
 
-    await cache.set(key, detail.model_dump(), settings.gainers_list_ttl)
+    # If news is empty the API source was likely rate-limited or unreachable —
+    # cache briefly so the next request retries quickly rather than serving
+    # stale empty-news for the full 2-hour TTL.
+    detail_ttl = settings.gainers_list_ttl if news else 120
+    await cache.set(key, detail.model_dump(), detail_ttl)
     return detail
 
 
@@ -463,7 +467,7 @@ async def get_gainer_analysis(
 
     fundamentals_result, news, candles, quarterly_text_result = await asyncio.gather(
         _get_analysis_fundamentals(),
-        news_fetcher.get_news(resolved_ticker, gainer.name),
+        news_fetcher.get_news(resolved_ticker, gainer.name, market=market),
         # Hard cap: India stocks try .NS then .BO (10 s each = 20 s worst case).
         # Cap at 8 s total so Gemini always has headroom before the server timeout.
         asyncio.wait_for(_get_price_history(), timeout=8.0),

@@ -163,17 +163,19 @@ class TestComputeQualityScore:
 class TestStockGainerSchema:
     """Tests for StockGainer model validation."""
 
-    def test_negative_change_pct_raises_validation_error(self) -> None:
-        with pytest.raises(Exception):  # pydantic ValidationError
-            StockGainer(
-                ticker="BAD",
-                name="Bad Stock",
-                market="us",
-                price=10.0,
-                change_pct=-5.0,
-                change_abs=-0.5,
-                volume=1_000_000,
-            )
+    def test_negative_change_pct_is_allowed(self) -> None:
+        # Searched stocks (non-gainers) can have a negative day change — the model
+        # must accept and round the value so the UI can display the correct sign/colour.
+        g = StockGainer(
+            ticker="NFLX",
+            name="Netflix",
+            market="us",
+            price=86.36,
+            change_pct=-1.13,
+            change_abs=-0.99,
+            volume=37_600_000,
+        )
+        assert g.change_pct == -1.13
 
     def test_zero_change_pct_does_not_raise(self) -> None:
         # 0% is technically not a gainer but the validator allows it (>= 0)

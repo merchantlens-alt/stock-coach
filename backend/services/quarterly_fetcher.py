@@ -3,7 +3,9 @@ QuarterlyFetcher — pulls quarterly financial results for any stock.
 
 India : scrapes screener.in (the same site the user was manually reading).
         12–13 quarters of Sales, OPM%, Net Profit, EPS with YoY growth.
-US    : uses yfinance quarterly_income_stmt (works well for large/mid caps).
+US    : SEC EDGAR XBRL (primary) → yfinance fallback.
+        SEC EDGAR returns 8+ quarters so every row gets a YoY comparison.
+        yfinance only returns 4 quarters, which gives at most 1 YoY value.
 
 Cache TTL : 24 h — results only change once a quarter; daily refresh
             catches any late filings we'd otherwise miss.
@@ -15,6 +17,7 @@ with fundamentals + news + candles).
 from __future__ import annotations
 
 import asyncio
+from datetime import date as _date
 from html.parser import HTMLParser
 from typing import Optional
 
@@ -36,6 +39,31 @@ _HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.5",
 }
+
+# ── SEC EDGAR XBRL constants ──────────────────────────────────────────────────
+
+_SEC_FACTS_BASE = "https://data.sec.gov/api/xbrl"
+_SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+# SEC requires a descriptive User-Agent header (rate-limit enforcement)
+_SEC_HEADERS = {
+    "User-Agent": "StockCoach/1.0 (financial research tool; contact@stockcoach.app)",
+    "Accept": "application/json",
+}
+
+# XBRL concept alternatives — companies use different tags; try in order
+_REVENUE_TAGS = [
+    "Revenues",
+    "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "SalesRevenueNet",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
+]
+_OP_INCOME_TAGS = ["OperatingIncomeLoss"]
+_NET_INCOME_TAGS = ["NetIncomeLoss"]
+_EPS_TAGS = ["EarningsPerShareBasic"]
+
+# In-process CIK lookup table: ticker_upper → CIK integer.
+# Populated lazily on first US quarterly request; persists for server lifetime.
+_cik_map: dict[str, int] = {}
 
 
 # ── HTML parser ───────────────────────────────────────────────────────────────
@@ -285,7 +313,7 @@ def _compute_quarterly_insight(
     if earnings_trend == "accelerating" and margin_trend == "expanding":
         return (
             f"Earnings accelerating{_pat_str()} with expanding margins — "
-            "each rupee of revenue is turning into more profit than before. "
+            "each unit of revenue is turning into more profit than before. "
             "This is the compounding flywheel Buffett looks for: pricing power plus operating leverage."
         )
     if earnings_trend == "accelerating":
@@ -312,6 +340,20 @@ def _compute_quarterly_insight(
             "Steady, predictable earnings with stable margins. "
             "Boring — and that's exactly what long-term investors should want. "
             "Reliable cash flow with no unpleasant surprises is worth more than volatile growth."
+        )
+    if earnings_trend == "stable" and margin_trend == "compressing":
+        pat_clause = _pat_str()
+        # If the latest YoY is negative, don't say "holding steady" — say "under pressure"
+        pat_yoy = latest.pat_growth_yoy if latest else None
+        if pat_yoy is not None and pat_yoy < 0:
+            profit_desc = f"Profits are under pressure{pat_clause}"
+        else:
+            profit_desc = f"Profits are holding steady{pat_clause}"
+        return (
+            f"{profit_desc} while margins are quietly shrinking — "
+            "the business is working harder to earn the same rupee. "
+            "Something is eating into profitability: rising input costs, wage pressure, or intensifying competition. "
+            "Buffett's question: is pricing power strong enough to restore margins, or is this the beginning of a structural decline?"
         )
 
     # ── Warning cases ─────────────────────────────────────────────────────────
@@ -367,25 +409,40 @@ def _compute_quarterly_insight(
 
             # ── Both numbers available → compare them; the gap is the story ──
             if rev is not None and pat is not None:
+                # _rev_str / _pat_str return " (+22% YoY)" — strip the wrapping space+parens
+                # for inline use.  Must strip ' ()' (with space) not just '()' because
+                # the leading space prevents the '(' from being at the string boundary.
+                def _r() -> str: return _rev_str().strip(' ()')
+                def _p() -> str: return _pat_str().strip(' ()')
+
                 margin_clause = (
                     f" with {margin_trend} margins" if margin_trend != "unknown" else ""
                 )
 
                 if pat >= 0 and rev >= 0 and pat > rev + 15:
-                    # Profits growing far faster than revenue = operating leverage
-                    return (
-                        f"Revenue grew {_rev_str().strip('()')} but profits grew {_pat_str().strip('()')} "
-                        f"{margin_clause}. "
-                        "Profits expanding far faster than revenue is the signature of operating leverage — "
-                        "the business earns disproportionately more on each extra dollar of revenue. "
-                        "Buffett calls this the hallmark of a durable competitive advantage."
-                    )
+                    # Profits growing far faster than revenue.
+                    # Differentiate: expanding margins = true operating leverage;
+                    # stable/compressing margins = financial engineering (buybacks, tax).
+                    if margin_trend == "expanding":
+                        return (
+                            f"Revenue grew {_r()} but profits surged {_p()} with expanding margins. "
+                            "Profits growing far faster than revenue on rising margins is the clearest "
+                            "signal of operating leverage — each additional dollar of revenue drops "
+                            "disproportionately to the bottom line. "
+                            "Buffett calls this the hallmark of a durable competitive advantage."
+                        )
+                    else:
+                        return (
+                            f"Revenue grew {_r()} but profits grew {_p()}{margin_clause}. "
+                            "Profits are expanding much faster than revenue — likely driven by buybacks, "
+                            "tax tailwinds, or cost cuts rather than pure operating leverage. "
+                            "Confirm whether margins are actually expanding before attributing this to pricing power."
+                        )
 
                 if pat >= 0 and rev >= 0 and pat > rev + 5:
                     # Profits outpacing revenue moderately — healthy
                     return (
-                        f"Revenue up {_rev_str().strip('()')} and profits up {_pat_str().strip('()')} "
-                        f"{margin_clause}. "
+                        f"Revenue up {_r()} and profits up {_p()}{margin_clause}. "
                         "Earnings growing faster than revenue means the business is getting more profitable "
                         "with scale — the right direction."
                     )
@@ -394,7 +451,7 @@ def _compute_quarterly_insight(
                     # Growing in lockstep — consistent execution
                     return (
                         f"Revenue and profits both growing at a similar pace "
-                        f"({_rev_str().strip('()')} revenue, {_pat_str().strip('()')} earnings){margin_clause}. "
+                        f"({_r()} revenue, {_p()} earnings){margin_clause}. "
                         "Steady, consistent execution — "
                         "no dramatic margin shifts, just a business reliably compounding."
                     )
@@ -402,8 +459,7 @@ def _compute_quarterly_insight(
                 if pat >= 0 and rev >= 0 and rev > pat + 5:
                     # Revenue growing faster than profits — margin pressure
                     return (
-                        f"Revenue grew {_rev_str().strip('()')} but profits only grew {_pat_str().strip('()')} "
-                        f"{margin_clause}. "
+                        f"Revenue grew {_r()} but profits only grew {_p()}{margin_clause}. "
                         "Costs are rising faster than revenue — the business is growing its top line "
                         "but not converting it into proportional profit. Watch margins closely."
                     )
@@ -411,8 +467,7 @@ def _compute_quarterly_insight(
                 if pat < 0 <= rev:
                     # Revenue up but profits down — margin erosion
                     return (
-                        f"Revenue grew {_rev_str().strip('()')} yet profits fell {_pat_str().strip('()')} "
-                        f"{margin_clause}. "
+                        f"Revenue grew {_r()} yet profits fell {_p()}{margin_clause}. "
                         "Growing revenue while profits shrink means cost inflation is outpacing pricing power. "
                         "The business is working harder for less — a Buffett caution sign."
                     )
@@ -420,8 +475,7 @@ def _compute_quarterly_insight(
                 if rev < 0 and pat >= 0:
                     # Revenue falling but profits holding — efficiency or mix shift
                     return (
-                        f"Revenue declined {_rev_str().strip('()')} yet profits still grew {_pat_str().strip('()')} "
-                        f"{margin_clause}. "
+                        f"Revenue declined {_r()} yet profits still grew {_p()}{margin_clause}. "
                         "Holding or growing profitability on falling revenue signals strong cost discipline "
                         "or a favourable product mix shift — quality management."
                     )
@@ -429,8 +483,7 @@ def _compute_quarterly_insight(
                 if rev < 0 and pat < 0:
                     # Both falling
                     return (
-                        f"Both revenue {_rev_str().strip('()')} and profits {_pat_str().strip('()')} declining "
-                        f"{margin_clause}. "
+                        f"Both revenue ({_r()}) and profits ({_p()}) declining{margin_clause}. "
                         "A business shrinking at both lines. "
                         "Key question: is this cyclical (weather the storm) or structural (the moat is eroding)?"
                     )
@@ -524,10 +577,247 @@ class QuarterlyFetcher:
         try:
             if market == "india":
                 return await self._fetch_screener(ticker)
+            # US: SEC EDGAR gives 8+ quarters → full YoY on every row.
+            # Fall back to yfinance (4 quarters, ≤1 YoY) if EDGAR fails.
+            snap = await self._fetch_sec_edgar_us(ticker)
+            if snap:
+                return snap
+            log.info("quarterly.edgar_miss_fallback_yfinance", ticker=ticker)
             return await self._fetch_yfinance_us(ticker)
         except Exception as exc:
             log.warning("quarterly.fetch_error", ticker=ticker, market=market, error=str(exc))
             return None
+
+    # ── US: SEC EDGAR XBRL ───────────────────────────────────────────────────
+
+    async def _load_cik_map(self) -> None:
+        """
+        Download SEC's company_tickers.json (~3 MB gzip ~350 KB) and populate
+        the module-level _cik_map dict.  Called at most once per server run.
+        """
+        global _cik_map
+        if _cik_map:
+            return  # already loaded
+        try:
+            import certifi
+            async with httpx.AsyncClient(timeout=12.0, verify=certifi.where()) as client:
+                resp = await client.get(
+                    _SEC_TICKERS_URL,
+                    headers={"User-Agent": _SEC_HEADERS["User-Agent"]},
+                    follow_redirects=True,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            for entry in data.values():
+                t = str(entry.get("ticker", "")).upper()
+                cik = int(entry.get("cik_str", 0))
+                if t and cik:
+                    _cik_map[t] = cik
+            log.info("sec_edgar.cik_map_loaded", count=len(_cik_map))
+        except Exception as exc:
+            log.warning("sec_edgar.cik_map_failed", error=str(exc))
+
+    async def _sec_concept_quarterly(self, cik: int, tag: str) -> list[dict]:
+        """
+        Fetch quarterly values for one XBRL concept from SEC EDGAR.
+        Returns records sorted newest-end-date first, deduplicated per period.
+
+        Includes Q1/Q2/Q3 from 10-Q filings and Q4 when companies provide it
+        in their 10-K XBRL (most large-caps do).
+        """
+        url = f"{_SEC_FACTS_BASE}/companyconcept/CIK{cik:010d}/us-gaap/{tag}.json"
+        try:
+            import certifi
+            async with httpx.AsyncClient(timeout=8.0, verify=certifi.where()) as client:
+                resp = await client.get(url, headers=_SEC_HEADERS, follow_redirects=True)
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            log.warning("sec_edgar.concept_failed", cik=cik, tag=tag, error=str(exc))
+            return []
+
+        units = data.get("units", {}).get("USD", [])
+        # Keep standalone quarterly periods (Q1-Q4) — exclude cumulative YTD and annual (FY).
+        quarterly = [
+            r for r in units
+            if r.get("fp") in ("Q1", "Q2", "Q3", "Q4")
+        ]
+        # Deduplicate: for each period-end date prefer the record that has a
+        # `frame` value (e.g. "CY2025Q3").  Framed records are standalone quarterly;
+        # un-framed records from the same 10-Q are cumulative YTD figures.
+        # Within the same frame-status, keep the most recently *filed* record
+        # to handle amendments / re-statements.
+        by_end: dict[str, dict] = {}
+        for r in quarterly:
+            end = r["end"]
+            has_frame = bool(r.get("frame"))
+            existing = by_end.get(end)
+            if existing is None:
+                by_end[end] = r
+            elif has_frame and not existing.get("frame"):
+                # Standalone (framed) beats cumulative YTD (un-framed)
+                by_end[end] = r
+            elif has_frame == bool(existing.get("frame")):
+                # Same frame-status: keep the later filing (amendment)
+                if r.get("filed", "") > existing.get("filed", ""):
+                    by_end[end] = r
+
+        return sorted(by_end.values(), key=lambda r: r["end"], reverse=True)
+
+    async def _fetch_sec_edgar_us(self, ticker: str) -> Optional[QuarterlySnapshot]:
+        """
+        Fetch 8 quarters of US financial data from SEC EDGAR XBRL.
+
+        Workflow:
+          1. Resolve ticker → CIK via SEC's company_tickers.json (cached in memory).
+          2. Fetch Revenue, Operating Income, Net Income concepts in parallel.
+          3. Merge into QuarterlyResult list sorted newest first.
+          4. Compute YoY (results[i] vs results[i+4]).
+          5. Build QuarterlySnapshot with real trend signals and Buffett insight.
+
+        Falls back gracefully: if CIK lookup or concept fetch fails, fetch()
+        retries with _fetch_yfinance_us().
+        """
+        await self._load_cik_map()
+        cik = _cik_map.get(ticker.upper())
+        if not cik:
+            log.warning("sec_edgar.no_cik", ticker=ticker)
+            return None
+
+        # Try revenue tags in order — fetch the first one that returns data
+        rev_records: list[dict] = []
+        for tag in _REVENUE_TAGS:
+            rev_records = await self._sec_concept_quarterly(cik, tag)
+            if rev_records:
+                break
+        if not rev_records:
+            log.warning("sec_edgar.no_revenue_data", ticker=ticker, cik=cik)
+            return None
+
+        # Fetch operating income, net income, and EPS in parallel
+        op_task = self._sec_concept_quarterly(cik, _OP_INCOME_TAGS[0])
+        ni_task = self._sec_concept_quarterly(cik, _NET_INCOME_TAGS[0])
+        eps_task = self._sec_concept_quarterly(cik, _EPS_TAGS[0])
+        op_records, ni_records, eps_records = await asyncio.gather(
+            op_task, ni_task, eps_task, return_exceptions=True
+        )
+        if isinstance(op_records, Exception):
+            op_records = []
+        if isinstance(ni_records, Exception):
+            ni_records = []
+        if isinstance(eps_records, Exception):
+            eps_records = []
+
+        # Build end-date lookup dicts (values in $M)
+        def _lookup(records: list[dict]) -> dict[str, float]:
+            return {
+                r["end"]: float(r["val"]) / 1_000_000
+                for r in records
+                if r.get("val") is not None
+            }
+
+        rev_by_end = _lookup(rev_records)
+        op_by_end = _lookup(op_records)
+        ni_by_end = _lookup(ni_records)
+        # EPS stays in per-share units — don't divide by 1M
+        eps_by_end: dict[str, float] = {
+            r["end"]: float(r["val"])
+            for r in (eps_records if not isinstance(eps_records, Exception) else [])
+            if r.get("val") is not None
+        }
+
+        # Use revenue as the period anchor (most consistently available).
+        # Take up to 12 periods: 6 for display + 6 to serve as prior-year comparators
+        # for the YoY computation.  Many companies (e.g. Alphabet) don't file a Q4
+        # 10-Q, so the sequence may have only 3 quarters per fiscal year — we can't
+        # rely on "4 slots back" to find the prior-year same quarter.
+        periods = [r["end"] for r in rev_records[:12]]
+
+        results: list[QuarterlyResult] = []
+        for end_str in periods:
+            try:
+                d = _date.fromisoformat(end_str)
+                period_label = f"{d.strftime('%b')} '{d.strftime('%y')}"
+            except ValueError:
+                period_label = end_str[:7]
+
+            revenue = rev_by_end.get(end_str)
+            op_income = op_by_end.get(end_str)
+            net_profit = ni_by_end.get(end_str)
+            eps = eps_by_end.get(end_str)
+
+            opm_pct: Optional[float] = None
+            if op_income is not None and revenue and revenue != 0:
+                opm_pct = op_income / revenue * 100
+
+            results.append(QuarterlyResult(
+                period=period_label,
+                revenue=revenue,
+                operating_profit=op_income,
+                opm_pct=opm_pct,
+                net_profit=net_profit,
+                eps=eps,
+            ))
+
+        if not results:
+            return None
+
+        # Compute YoY by calendar-date matching — replace the year by 1 and look up
+        # the prior-year end date in our result set.  This is correct regardless of
+        # whether Q4 data is present (index-based i+4 breaks when Q4 is missing).
+        result_by_end: dict[str, QuarterlyResult] = dict(zip(periods, results))
+        from datetime import timedelta
+        for end_str, r in zip(periods, results):
+            try:
+                d = _date.fromisoformat(end_str)
+                prior = d.replace(year=d.year - 1)
+            except ValueError:
+                # Feb 29 → Feb 28 in non-leap prior year
+                prior = _date(d.year - 1, d.month, 28)
+            # Tolerate ±3-day drift for month-end calendar variations
+            prev: Optional[QuarterlyResult] = None
+            for delta in [0, 1, -1, 2, -2, 3, -3]:
+                candidate = (prior + timedelta(days=delta)).isoformat()
+                if candidate != end_str and candidate in result_by_end:
+                    prev = result_by_end[candidate]
+                    break
+            if prev:
+                if r.revenue is not None and prev.revenue and prev.revenue != 0:
+                    r.revenue_growth_yoy = round(
+                        (r.revenue - prev.revenue) / abs(prev.revenue) * 100, 1
+                    )
+                if r.net_profit is not None and prev.net_profit and prev.net_profit != 0:
+                    r.pat_growth_yoy = round(
+                        (r.net_profit - prev.net_profit) / abs(prev.net_profit) * 100, 1
+                    )
+
+        rev_trend = _revenue_trend(results)
+        mar_trend = _margin_trend(results)
+        ear_trend = _earnings_trend(results)
+
+        snap = QuarterlySnapshot(
+            ticker=ticker,
+            market="us",
+            quarters=results[:6],   # show 6 quarters in the UI
+            revenue_trend=rev_trend,
+            margin_trend=mar_trend,
+            earnings_trend=ear_trend,
+            currency="$",
+            unit="M",
+            quarterly_insight=_compute_quarterly_insight(
+                rev_trend, mar_trend, ear_trend, results[:6]
+            ),
+        )
+        log.info(
+            "sec_edgar.ok",
+            ticker=ticker,
+            cik=cik,
+            quarters=len(snap.quarters),
+            rev_trend=rev_trend,
+            mar_trend=mar_trend,
+            ear_trend=ear_trend,
+        )
+        return snap
 
     # ── India: screener.in ────────────────────────────────────────────────────
 

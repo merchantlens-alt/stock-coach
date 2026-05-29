@@ -426,3 +426,60 @@ class TestComputeQuarterlyInsight:
         insight = _compute_quarterly_insight("unknown", "unknown", "unknown", quarters)
         assert isinstance(insight, str)
         assert len(insight) > 10
+
+    def test_stable_earnings_compressing_margins_negative_yoy(self):
+        """India-style: earnings trend stable but latest YoY negative → 'under pressure' not 'holding steady'."""
+        quarters = [
+            QuarterlyResult(period="Mar 2026", revenue=35577, pat=1481, pat_growth_yoy=-40.9),
+        ]
+        insight = _compute_quarterly_insight("stable", "compressing", "stable", quarters)
+        assert "under pressure" in insight
+        assert "margin" in insight.lower()
+        # Should NOT say "holding steady" when latest YoY is negative
+        assert "holding steady" not in insight
+
+    def test_stable_earnings_compressing_margins_positive_yoy(self):
+        """Stable earnings, positive YoY → 'holding steady'."""
+        quarters = [
+            QuarterlyResult(period="Mar 2026", revenue=35000, pat=2000, pat_growth_yoy=2.0),
+        ]
+        insight = _compute_quarterly_insight("stable", "compressing", "stable", quarters)
+        assert "holding steady" in insight
+        assert "margin" in insight.lower()
+
+    def test_unknown_trends_operating_leverage_expanding_margins(self):
+        """PAT >> REV with expanding margins → clearest operating leverage signal."""
+        quarters = [
+            QuarterlyResult(period="Mar '26", revenue=109896, pat=62578,
+                            revenue_growth_yoy=21.8, pat_growth_yoy=81.2),
+        ]
+        insight = _compute_quarterly_insight("unknown", "expanding", "unknown", quarters)
+        assert "surged" in insight  # stronger language for the expanding-margin case
+        assert "operating leverage" in insight
+        # Should NOT mention buybacks for the expanding-margin case
+        assert "buyback" not in insight
+
+    def test_unknown_trends_operating_leverage_stable_margins(self):
+        """PAT >> REV but stable/compressing margins → attribute to financial engineering."""
+        quarters = [
+            QuarterlyResult(period="Mar '26", revenue=109896, pat=62578,
+                            revenue_growth_yoy=21.8, pat_growth_yoy=81.2),
+        ]
+        insight = _compute_quarterly_insight("unknown", "stable", "unknown", quarters)
+        # Should flag that this may not be true operating leverage
+        assert any(word in insight for word in ["buyback", "tax", "financial"])
+
+    def test_insight_no_broken_parentheses(self):
+        """Ensure inline number formatting produces well-formed strings (no dangling '(' )."""
+        quarters = [
+            QuarterlyResult(period="Mar '26", revenue=109896, pat=62578,
+                            revenue_growth_yoy=21.8, pat_growth_yoy=81.2),
+        ]
+        for rt in ("unknown", "stable", "accelerating"):
+            for mt in ("unknown", "expanding", "compressing", "stable"):
+                for et in ("unknown", "stable", "declining", "accelerating"):
+                    insight = _compute_quarterly_insight(rt, mt, et, quarters)
+                    # Every opening paren must have a matching close
+                    assert insight.count("(") == insight.count(")"), (
+                        f"Unmatched parens for ({rt},{mt},{et}): {insight}"
+                    )
