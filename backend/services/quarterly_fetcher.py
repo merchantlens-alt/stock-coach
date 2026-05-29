@@ -357,41 +357,98 @@ def _compute_quarterly_insight(
         )
 
     # ── Limited history (US stocks often have only 4-5 quarters → 1 YoY point) ─
-    # 1 YoY point is too few for trend detection (returns "unknown") but still
-    # meaningful: state what the latest quarter actually shows.
+    # 1 YoY point is insufficient for multi-period trend detection, but the
+    # relationship *between* revenue growth and earnings growth is itself the
+    # insight — that gap tells you about operating leverage and margin quality.
     if earnings_trend == "unknown" or revenue_trend == "unknown":
         if latest:
-            pieces: list[str] = []
-            if latest.pat_growth_yoy is not None:
-                direction = "growing" if latest.pat_growth_yoy >= 0 else "declining"
-                pieces.append(f"earnings {direction}{_pat_str()}")
-            if latest.revenue_growth_yoy is not None:
-                direction = "growing" if latest.revenue_growth_yoy >= 0 else "declining"
-                pieces.append(f"revenue {direction}{_rev_str()}")
-            if pieces:
-                margin_note = (
+            rev = latest.revenue_growth_yoy
+            pat = latest.pat_growth_yoy
+
+            # ── Both numbers available → compare them; the gap is the story ──
+            if rev is not None and pat is not None:
+                margin_clause = (
                     f" with {margin_trend} margins" if margin_trend != "unknown" else ""
                 )
-                all_positive = all(
-                    (v >= 0)
-                    for v in [latest.revenue_growth_yoy, latest.pat_growth_yoy]
-                    if v is not None
-                )
-                tone = (
-                    "Business expanding year-over-year across the board."
-                    if all_positive
-                    else "Mixed year-over-year performance."
-                )
+
+                if pat >= 0 and rev >= 0 and pat > rev + 15:
+                    # Profits growing far faster than revenue = operating leverage
+                    return (
+                        f"Revenue grew {_rev_str().strip('()')} but profits grew {_pat_str().strip('()')} "
+                        f"{margin_clause}. "
+                        "Profits expanding far faster than revenue is the signature of operating leverage — "
+                        "the business earns disproportionately more on each extra dollar of revenue. "
+                        "Buffett calls this the hallmark of a durable competitive advantage."
+                    )
+
+                if pat >= 0 and rev >= 0 and pat > rev + 5:
+                    # Profits outpacing revenue moderately — healthy
+                    return (
+                        f"Revenue up {_rev_str().strip('()')} and profits up {_pat_str().strip('()')} "
+                        f"{margin_clause}. "
+                        "Earnings growing faster than revenue means the business is getting more profitable "
+                        "with scale — the right direction."
+                    )
+
+                if pat >= 0 and rev >= 0 and abs(pat - rev) <= 5:
+                    # Growing in lockstep — consistent execution
+                    return (
+                        f"Revenue and profits both growing at a similar pace "
+                        f"({_rev_str().strip('()')} revenue, {_pat_str().strip('()')} earnings){margin_clause}. "
+                        "Steady, consistent execution — "
+                        "no dramatic margin shifts, just a business reliably compounding."
+                    )
+
+                if pat >= 0 and rev >= 0 and rev > pat + 5:
+                    # Revenue growing faster than profits — margin pressure
+                    return (
+                        f"Revenue grew {_rev_str().strip('()')} but profits only grew {_pat_str().strip('()')} "
+                        f"{margin_clause}. "
+                        "Costs are rising faster than revenue — the business is growing its top line "
+                        "but not converting it into proportional profit. Watch margins closely."
+                    )
+
+                if pat < 0 <= rev:
+                    # Revenue up but profits down — margin erosion
+                    return (
+                        f"Revenue grew {_rev_str().strip('()')} yet profits fell {_pat_str().strip('()')} "
+                        f"{margin_clause}. "
+                        "Growing revenue while profits shrink means cost inflation is outpacing pricing power. "
+                        "The business is working harder for less — a Buffett caution sign."
+                    )
+
+                if rev < 0 and pat >= 0:
+                    # Revenue falling but profits holding — efficiency or mix shift
+                    return (
+                        f"Revenue declined {_rev_str().strip('()')} yet profits still grew {_pat_str().strip('()')} "
+                        f"{margin_clause}. "
+                        "Holding or growing profitability on falling revenue signals strong cost discipline "
+                        "or a favourable product mix shift — quality management."
+                    )
+
+                if rev < 0 and pat < 0:
+                    # Both falling
+                    return (
+                        f"Both revenue {_rev_str().strip('()')} and profits {_pat_str().strip('()')} declining "
+                        f"{margin_clause}. "
+                        "A business shrinking at both lines. "
+                        "Key question: is this cyclical (weather the storm) or structural (the moat is eroding)?"
+                    )
+
+            # ── Only earnings available ───────────────────────────────────────
+            if pat is not None:
+                direction = "growing" if pat >= 0 else "declining"
                 return (
-                    f"Latest quarter: {' and '.join(pieces)}{margin_note}. "
-                    f"{tone} "
-                    "Insufficient quarterly history to assess multi-period trend — "
-                    "results factored into the AI's 30-day prediction."
-                )
-        return (
-            "Quarterly data available but insufficient history to assess trend direction. "
-            "Results have been factored into the AI's 30-day prediction."
-        )
+                    f"Latest earnings {direction}{_pat_str()} year-over-year. "
+                    f"{'Expanding margins — the business is becoming more profitable.' if margin_trend == 'expanding' else ''}"
+                ).strip()
+
+            # ── Only revenue available ────────────────────────────────────────
+            if rev is not None:
+                direction = "growing" if rev >= 0 else "declining"
+                return f"Latest revenue {direction}{_rev_str()} year-over-year."
+
+        return "Only the latest quarter is available — not enough history to assess trend direction."
 
     # ── Default ───────────────────────────────────────────────────────────────
     return (
@@ -563,11 +620,17 @@ class QuarterlyFetcher:
 
                 revenue = _yf_val("Total Revenue")
                 net_profit = _yf_val("Net Income")
-                ebitda = _yf_val("EBITDA")
+
+                # Operating Income (EBIT) gives the true operating margin.
+                # EBITDA is misleadingly high for tech companies because it
+                # excludes D&A — e.g. Alphabet's EBITDA margin looks ~75 %
+                # while real OPM is ~30 %.  Fall back to EBITDA only when
+                # Operating Income is unavailable.
+                op_income = _yf_val("Operating Income") or _yf_val("EBIT")
 
                 opm_pct: Optional[float] = None
-                if revenue and ebitda and revenue != 0:
-                    opm_pct = ebitda / revenue * 100
+                if op_income is not None and revenue and revenue != 0:
+                    opm_pct = op_income / revenue * 100
 
                 eps_raw = None
                 if "Basic EPS" in q_stmt.index:
@@ -579,7 +642,7 @@ class QuarterlyFetcher:
                 results.append(QuarterlyResult(
                     period=period,
                     revenue=revenue,
-                    operating_profit=ebitda,
+                    operating_profit=op_income,
                     opm_pct=opm_pct,
                     net_profit=net_profit,
                     eps=eps_raw,

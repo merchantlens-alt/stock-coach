@@ -375,12 +375,20 @@ function QuarterlyPanel({ q, currency }: { q: QuarterlySnapshot; currency: strin
         <span className="text-[10px] text-gray-400 ml-1">— used by AI for 30-day prediction</span>
       </div>
 
-      {/* Trend badges */}
-      <div className="flex items-center gap-3 mb-3">
-        <TrendBadge label="Revenue" trend={q.revenue_trend} />
-        <TrendBadge label="Margins" trend={q.margin_trend} />
-        <TrendBadge label="Earnings" trend={q.earnings_trend} />
-      </div>
+      {/* Trend badges — only shown when at least one trend is known.
+          US stocks often have only 4-5 quarters from yfinance, giving a single
+          YoY data point which is too few to compute a trend direction. */}
+      {(q.revenue_trend !== "unknown" || q.margin_trend !== "unknown" || q.earnings_trend !== "unknown") ? (
+        <div className="flex items-center gap-3 mb-3">
+          {q.revenue_trend !== "unknown" && <TrendBadge label="Revenue" trend={q.revenue_trend} />}
+          {q.margin_trend !== "unknown" && <TrendBadge label="Margins" trend={q.margin_trend} />}
+          {q.earnings_trend !== "unknown" && <TrendBadge label="Earnings" trend={q.earnings_trend} />}
+        </div>
+      ) : (
+        <p className="text-[10px] text-gray-400 mb-3">
+          Trend direction requires 6+ quarters — showing latest available data below.
+        </p>
+      )}
 
       {/* Earnings table */}
       <div className="rounded-xl border border-gray-100 overflow-hidden overflow-x-auto">

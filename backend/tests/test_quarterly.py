@@ -379,30 +379,46 @@ class TestComputeQuarterlyInsight:
         insight = _compute_quarterly_insight("stable", "stable", "stable", quarters)
         assert isinstance(insight, str)
 
-    def test_unknown_trends_with_yoy_data(self):
-        """US stocks often return only 1 YoY data point → trends are 'unknown'.
-        Insight should still surface the latest quarter's performance."""
+    def test_unknown_trends_operating_leverage(self):
+        """Profits growing far faster than revenue → operating leverage insight."""
         quarters = [QuarterlyResult(
             period="Mar '26",
-            revenue=111_184.0,
-            opm_pct=35.4,
-            net_profit=29_578.0,
-            revenue_growth_yoy=16.6,
-            pat_growth_yoy=19.4,
+            revenue_growth_yoy=22.0,
+            pat_growth_yoy=81.2,
         )]
         insight = _compute_quarterly_insight("unknown", "expanding", "unknown", quarters)
-        assert "growing" in insight.lower() or "expanding" in insight.lower()
-        assert "+19%" in insight or "+16%" in insight
+        assert "leverage" in insight.lower() or "competitive advantage" in insight.lower() or "faster" in insight.lower()
+        assert "+81%" in insight or "+22%" in insight
 
-    def test_unknown_trends_all_positive_tone(self):
-        """When latest YoY is positive across the board the insight should say 'expanding'."""
+    def test_unknown_trends_cost_pressure(self):
+        """Revenue growing faster than profits → margin pressure insight."""
+        quarters = [QuarterlyResult(
+            period="Mar '26",
+            revenue_growth_yoy=20.0,
+            pat_growth_yoy=5.0,
+        )]
+        insight = _compute_quarterly_insight("unknown", "unknown", "unknown", quarters)
+        assert "cost" in insight.lower() or "margin" in insight.lower() or "faster" in insight.lower()
+
+    def test_unknown_trends_revenue_up_profits_down(self):
+        """Revenue positive but profits negative → margin erosion insight."""
         quarters = [QuarterlyResult(
             period="Mar '26",
             revenue_growth_yoy=10.0,
-            pat_growth_yoy=15.0,
+            pat_growth_yoy=-15.0,
         )]
         insight = _compute_quarterly_insight("unknown", "unknown", "unknown", quarters)
-        assert "expanding" in insight.lower() or "growing" in insight.lower()
+        assert "pricing power" in insight.lower() or "cost" in insight.lower() or "shrink" in insight.lower()
+
+    def test_unknown_trends_both_declining(self):
+        """Both revenue and profits falling → 'cyclical or structural' question."""
+        quarters = [QuarterlyResult(
+            period="Mar '26",
+            revenue_growth_yoy=-8.0,
+            pat_growth_yoy=-20.0,
+        )]
+        insight = _compute_quarterly_insight("unknown", "unknown", "unknown", quarters)
+        assert "cyclical" in insight.lower() or "structural" in insight.lower() or "declining" in insight.lower()
 
     def test_unknown_trends_no_yoy_data(self):
         """Unknown trends + no YoY data should return a graceful fallback string."""
