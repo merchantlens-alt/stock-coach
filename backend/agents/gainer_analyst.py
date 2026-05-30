@@ -355,16 +355,20 @@ class GainerAnalystAgent:
         # Quarterly results — the strongest fundamental signal for 30-day prediction
         quarterly_section = f"\n\n{quarterly_text}" if quarterly_text else ""
 
+        # Use sign-aware format: Python's :+.1f gives "+5.3" or "-2.1"
+        move_label = "DECLINED" if change_pct < 0 else "GAINED"
         prompt = (
             f"Stock: {company_name} ({ticker})\n"
             f"Sector: {sector or 'Unknown'}\n"
-            f"Today's move: +{change_pct:.1f}%\n\n"
+            f"Today's move: {change_pct:+.1f}% ({move_label})\n\n"
             f"RECENT NEWS:\n{headlines or 'No news available.'}\n\n"
             f"FUNDAMENTALS:\n{fund_text}"
             + tech_section
             + quarterly_section
             + gainers_section
-            + "\n\nAnalyse why this stock moved today, whether momentum is likely to continue, "
+            + "\n\nAnalyse why this stock moved today"
+            + (" (it DECLINED — use 'fell/dropped/declined' language, NOT 'gained/surged')" if change_pct < 0 else "")
+            + ", whether momentum is likely to continue, "
             "and predict the 30-day outlook. Factor in the technical signals and quarterly "
             "earnings trends when assessing timing and magnitude of the expected move. "
             "Identify 2-4 related beneficiary tickers."

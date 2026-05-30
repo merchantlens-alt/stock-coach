@@ -42,28 +42,49 @@ _US_TICKER_UNIVERSE: list[str] = [
     # Mega-cap tech
     "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "NFLX", "AMD",
     # Semis
-    "AVGO", "QCOM", "MU", "INTC", "AMAT", "KLAC", "LRCX", "ON",
+    "AVGO", "QCOM", "MU", "INTC", "AMAT", "KLAC", "LRCX", "ON", "ARM", "MRVL",
+    # AI / Cloud
+    "CRM", "NOW", "SNOW", "DDOG", "AI", "BBAI", "ARCT", "PATH", "NET",
     # Biotech / Pharma — high catalyst potential
     "MRNA", "BNTX", "GILD", "BIIB", "REGN", "VRTX", "ABBV", "LLY", "PFE", "BMY",
+    "NVAX", "INSM", "RXRX", "BEAM", "CRSP", "EDIT",
     # Healthcare devices
-    "ISRG", "DXCM",
+    "ISRG", "DXCM", "PODD", "ALGN",
     # Energy / clean
-    "FSLR", "ENPH", "NEE", "CVX", "XOM",
+    "FSLR", "ENPH", "NEE", "CVX", "XOM", "OXY", "CEG", "VST",
     # Finance
-    "GS", "MS", "JPM", "BAC",
+    "GS", "MS", "JPM", "BAC", "C", "COIN", "SQ",
     # Industrial / Aerospace — catalyst-prone
-    "BA", "LMT", "RTX", "GE", "NOC",
+    "BA", "LMT", "RTX", "GE", "NOC", "RCAT",
+    # Consumer / Retail
+    "AMZN", "UBER", "LYFT", "ABNB", "DASH",
     # Mid / small caps with catalyst potential
     "SMCI", "PLTR", "IONQ", "RKLB", "SOUN", "MSTR", "SOFI", "HOOD",
+    "RXST", "WOLF", "ACHR", "JOBY", "LILM", "EVGO",
 ]
 
 _INDIA_TICKER_UNIVERSE: list[str] = [
+    # Large-cap bellwethers
     "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "ITC",
     "SBIN", "BHARTIARTL", "BAJFINANCE", "KOTAKBANK", "AXISBANK", "LT",
-    "HCLTECH", "WIPRO", "ASIANPAINT", "MARUTI", "TATAMOTORS", "ULTRACEMCO",
-    "ADANIENT", "ADANIPORTS", "SUNPHARMA", "DIVISLAB", "CIPLA", "DRREDDY",
-    "NESTLEIND", "TITAN", "BAJAJFINSV", "PERSISTENT", "MPHASIS",
-    "COFORGE", "ZOMATO", "PAYTM",
+    # IT / Tech
+    "HCLTECH", "WIPRO", "PERSISTENT", "MPHASIS", "COFORGE", "LTIM", "KPITTECH",
+    # Pharma — high catalyst potential
+    "SUNPHARMA", "DIVISLAB", "CIPLA", "DRREDDY", "AUROPHARMA", "TORNTPHARM",
+    # Consumer / FMCG
+    "NESTLEIND", "TITAN", "DMART", "TATACONSUM", "MARICO", "DABUR",
+    # Auto
+    "MARUTI", "TATAMOTORS", "BAJAJ-AUTO", "HEROMOTOCO", "M&M",
+    # Conglomerates / Infra
+    "ADANIENT", "ADANIPORTS", "ADANIGREEN", "ULTRACEMCO", "SHREECEM",
+    # New-age / Fintech — volatile, catalyst-prone
+    "ZOMATO", "PAYTM", "POLICYBZR", "NYKAA", "DELHIVERY",
+    # Metals / Energy
+    "TATASTEEL", "HINDALCO", "VEDL", "NTPC", "POWERGRID", "COALINDIA",
+    # Banking mid-cap
+    "IDFCFIRSTB", "BANDHANBNK", "FEDERALBNK",
+    # Others with high catalyst potential
+    "BAJAJFINSV", "ASIANPAINT", "PIDILITIND",
 ]
 
 # ── Catalyst type keyword map (ordered — first match wins) ────────────────────
@@ -184,7 +205,7 @@ class CatalystScannerService:
         self._news_fetcher = news_fetcher
         self._analyst = analyst
 
-    async def scan(self, market: Market, limit: int = 15) -> CatalystScanResponse:
+    async def scan(self, market: Market, limit: int = 25) -> CatalystScanResponse:
         """
         Full catalyst scan pipeline. Returns a CatalystScanResponse with:
           - up to `limit` movers ranked by momentum score
@@ -196,7 +217,7 @@ class CatalystScannerService:
             self._scan_potential_universe(market),
         )
 
-        raw_movers = raw_movers[:20]
+        raw_movers = raw_movers[:35]
         mover_tickers = {r["ticker"] for r in raw_movers}
 
         # Dedup: drop universe candidates already caught by the screener
@@ -204,7 +225,7 @@ class CatalystScannerService:
             p for p in potential_candidates if p["ticker"] not in mover_tickers
         ]
         potential_candidates.sort(key=lambda x: x.get("volume_ratio", 0), reverse=True)
-        potential_candidates = potential_candidates[:10]  # cap universe candidates
+        potential_candidates = potential_candidates[:15]  # cap universe candidates
 
         if not raw_movers and not potential_candidates:
             log.warning("catalyst_scanner.no_plays", market=market)
@@ -291,8 +312,8 @@ class CatalystScannerService:
         enriched_movers.sort(key=lambda x: x["momentum_score"], reverse=True)
         top_movers = enriched_movers[:limit]
 
-        # ── 6. AI verdicts: top 7 movers + top 3 potential ───────────────────
-        verdict_batch = top_movers[:7] + enriched_potential[:3]
+        # ── 6. AI verdicts: top 10 movers + top 5 potential ─────────────────
+        verdict_batch = top_movers[:10] + enriched_potential[:5]
         verdicts = await self._analyst.analyse(verdict_batch, market)
 
         # ── 7. Build response — movers first, then potential ──────────────────

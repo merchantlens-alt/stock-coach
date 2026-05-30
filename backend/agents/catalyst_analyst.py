@@ -28,7 +28,7 @@ log = get_logger(__name__)
 _SYSTEM_PROMPT = """\
 You are a catalyst analyst writing concise plain-English verdicts for retail investors.
 
-For each MOVING stock: write exactly 2 sentences — (1) what specific catalyst drove the move (cite the news if given), (2) whether it looks sustained and the one signal to watch.
+For each MOVING stock: write exactly 2 sentences — (1) what specific catalyst drove the move (cite the news if given); use "fell/dropped/declined" for negative moves, "surged/rose/gained" for positive moves. (2) whether it looks sustained and the one signal to watch.
 For each ACCUMULATING stock (marked [LOADING]): write exactly 2 sentences — (1) what might explain the unusual volume despite the flat price, (2) what specific catalyst or announcement to watch for.
 
 Keep each verdict under 55 words total. No jargon. No disclaimers.\
@@ -50,6 +50,7 @@ _MOCK_VERDICTS: dict[str, str] = {}  # filled per-call in mock mode
 
 
 def _default_verdict(ticker: str, change_pct: float, has_catalyst: bool, signal: str = "") -> str:
+    direction = "up" if change_pct >= 0 else "down"
     if signal == "potential":
         return (
             f"{ticker} is showing unusual volume ({change_pct:+.1f}% price move) — "
@@ -57,14 +58,15 @@ def _default_verdict(ticker: str, change_pct: float, has_catalyst: bool, signal:
             "Watch for news, earnings, or insider activity that could trigger the next leg."
         )
     if has_catalyst:
+        move_word = "surging" if change_pct >= 0 else "falling"
         return (
-            f"{ticker} is surging {change_pct:+.1f}% on a specific news catalyst "
+            f"{ticker} is {move_word} {change_pct:+.1f}% on a specific news catalyst "
             f"— confirmed by unusual volume. "
             "Watch whether volume sustains above average in the next 2 sessions; "
             "a volume fade signals the move is exhausting."
         )
     return (
-        f"{ticker} is up {change_pct:+.1f}% with no clear news catalyst identified — "
+        f"{ticker} is {direction} {change_pct:+.1f}% with no clear news catalyst identified — "
         "this may be sector rotation or momentum trading. "
         "Treat this as speculative until a fundamental driver emerges."
     )

@@ -313,8 +313,8 @@ export function CatalystPage({
   return (
     <div className="flex flex-col h-full overflow-y-auto bg-gray-50">
 
-      {/* ── Page header ──────────────────────────────────────────────────────── */}
-      <div className="bg-white border-b border-gray-100 px-4 md:px-5 py-4">
+      {/* ── Page header — sticky so the cards are immediately scrollable below ─ */}
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-100 px-4 md:px-5 py-4">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-0.5">

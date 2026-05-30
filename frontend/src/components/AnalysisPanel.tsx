@@ -14,11 +14,7 @@ const PERIOD_LABEL: Record<string, string> = {
   "1w": "this week",
   "1m": "this month",
 };
-const PERIOD_RETURN_LABEL: Record<string, string> = {
-  "1d": "Today's gain",
-  "1w": "1-week return",
-  "1m": "1-month return",
-};
+// returnLabel is computed dynamically below (gain vs loss depends on change_pct)
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -729,9 +725,13 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
   const ai = analysis;
   const currency = gainer.market === "india" ? "₹" : "$";
   const periodLabel = PERIOD_LABEL[period] ?? "today";
-  const returnLabel = PERIOD_RETURN_LABEL[period] ?? "Today's change";
   const isDown = gainer.change_pct < 0;
   const changeSign = isDown ? "" : "+";  // negative numbers already carry their own "-"
+  const returnLabel = period === "1d"
+    ? (isDown ? "Today's loss" : "Today's gain")
+    : period === "1w"
+      ? "1-week return"
+      : "1-month return";
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("analysis");
 
@@ -1006,8 +1006,14 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
               <section>
                 <div className="flex items-start justify-between gap-2 mb-3">
                   <SectionHeader
-                    icon={<ArrowUp size={14} className="text-green-500" />}
-                    label={period === "1d" ? "Why it gained today" : `Why it moved ${periodLabel}`}
+                    icon={isDown
+                      ? <ArrowDown size={14} className="text-red-500" />
+                      : <ArrowUp size={14} className="text-green-500" />
+                    }
+                    label={period === "1d"
+                      ? (isDown ? "Why it fell today" : "Why it gained today")
+                      : `Why it moved ${periodLabel}`
+                    }
                   />
                   <ConfidencePill value={ai.analysis.confidence} />
                 </div>
@@ -1017,7 +1023,10 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
                 <ul className="mt-3 space-y-1.5">
                   {ai.analysis.key_catalysts.map((c, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm text-gray-600">
-                      <ArrowUp size={12} className="text-green-500 mt-1 shrink-0" />
+                      {isDown
+                        ? <ArrowDown size={12} className="text-red-400 mt-1 shrink-0" />
+                        : <ArrowUp size={12} className="text-green-500 mt-1 shrink-0" />
+                      }
                       {c}
                     </li>
                   ))}
