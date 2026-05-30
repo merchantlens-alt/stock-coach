@@ -1,0 +1,119 @@
+vars: {
+  d2-config: {
+    layout-engine: dagre
+  }
+}
+
+direction: down
+
+# ── App shell ─────────────────────────────────────────────────────────────────
+
+App: "App.tsx\n(root, React Query provider)" {
+  style.fill: "#e3f2fd"
+  style.border-radius: 8
+}
+
+TabBar: "Tab Navigation Bar\n(Scanner | Radar | Gainers | Conviction)" {
+  style.fill: "#f5f5f5"
+  style.border-radius: 8
+}
+
+# ── Tab views ─────────────────────────────────────────────────────────────────
+
+Scanner: "CatalystScanner\n(default tab)" {
+  style.fill: "#e3f2fd"
+  style.border-radius: 8
+
+  sc_hook: "useCatalystScan(market)"
+  sc_card: "CatalystPlayCard\n(signal badge, ai_verdict)"
+  sc_hook -> sc_card
+}
+
+Radar: "RadarView" {
+  style.fill: "#e8f5e9"
+  style.border-radius: 8
+
+  r_hook: "useRadar(market)"
+  r_signal: "RadarSignalCard\n(theme, tickers, conviction bar)"
+  r_hook -> r_signal
+}
+
+GainersDashboard: "GainersDashboard" {
+  style.fill: "#f3e5f5"
+  style.border-radius: 8
+
+  g_hook: "useGainers(market, period)"
+  g_list: "GainersList\n(quality badge, signal tier)"
+  g_sum: "MarketSummaryCard"
+  g_hook -> g_list
+  g_hook -> g_sum
+}
+
+Conviction: "ConvictionView" {
+  style.fill: "#fce4ec"
+  style.border-radius: 8
+
+  cv_input: "BeliefInput\n(free text)"
+  cv_hook: "useConviction(belief)"
+  cv_result: "ConvictionResult\n(score, instruments, confirmers)"
+  cv_input -> cv_hook
+  cv_hook -> cv_result
+}
+
+# ── Analysis panel (overlay on stock click) ───────────────────────────────────
+
+AnalysisPanel: "AnalysisPanel (slide-in overlay)" {
+  style.fill: "#fff8e1"
+  style.border-radius: 8
+
+  ap_header: "StockHeader\n(price, change, quality badge)"
+
+  sub_tabs: "Sub-tab bar\n(Analysis | Growth Triggers)" {
+    style.fill: "#f5f5f5"
+  }
+
+  tab_analysis: "Analysis Tab" {
+    style.fill: "#e3f2fd"
+    style.border-radius: 4
+
+    ta_hook: "useStockAnalysis(market, ticker)"
+    ta_why: "WhyItGained card\n(catalyst, sentiment)"
+    ta_pred: "PredictionCard\n(outlook, signals)"
+    ta_tech: "TechnicalSignals\n(RSI, MACD, SMA)"
+    ta_q: "QuarterlyResultsTable\n(revenue, PAT, YoY)"
+    ta_hook -> ta_why
+    ta_hook -> ta_pred
+    ta_hook -> ta_tech
+    ta_hook -> ta_q
+  }
+
+  tab_growth: "Growth Triggers Tab (lazy)" {
+    style.fill: "#fce4ec"
+    style.border-radius: 4
+
+    tg_hook: "useGrowthTriggers(market, ticker,\n{ enabled: activeTab==growth_triggers })"
+    tg_snap: "CompanySnapshot"
+    tg_triggers: "TriggerCard x3-5\n(HIGH/MEDIUM/OPTIONALITY badge)"
+    tg_risks: "RiskCard x2-3"
+    tg_score: "ScorecardTable (5 rows)"
+    tg_hook -> tg_snap
+    tg_hook -> tg_triggers
+    tg_hook -> tg_risks
+    tg_hook -> tg_score
+  }
+
+  ap_header -> sub_tabs
+  sub_tabs -> tab_analysis
+  sub_tabs -> tab_growth
+}
+
+# ── Wiring ────────────────────────────────────────────────────────────────────
+
+App -> TabBar
+TabBar -> Scanner
+TabBar -> Radar
+TabBar -> GainersDashboard
+TabBar -> Conviction
+GainersDashboard -> AnalysisPanel: "stock click"
+Scanner -> AnalysisPanel: "play click\n(cross-tab nav)"
+Radar -> GainersDashboard: "ticker chip click\n(cross-tab nav)"

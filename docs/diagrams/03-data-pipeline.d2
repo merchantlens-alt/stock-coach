@@ -1,0 +1,119 @@
+vars: {
+  d2-config: {
+    layout-engine: dagre
+  }
+}
+
+direction: right
+
+# ── Analysis pipeline (triggered on stock click) ─────────────────────────────
+
+start: "Stock selected\n(ticker + market)" {
+  shape: oval
+  style.fill: "#e3f2fd"
+}
+
+cache_check: "Redis cache\nhit?" {
+  shape: diamond
+  style.fill: "#fff3e0"
+}
+
+cache_hit: "Return cached\nresponse (from_cache=true)" {
+  shape: rectangle
+  style.fill: "#e8f5e9"
+}
+
+parallel: "Parallel data fetch\n(asyncio.gather)" {
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  style.border-radius: 8
+
+  p1: "yfinance\nfundamentals"
+  p2: "NewsFetcher\nheadlines (3-5)"
+  p3: "QuarterlyFetcher\nSEC EDGAR or screener.in"
+  p4: "TechnicalSignals\nRSI, MACD, SMA"
+}
+
+agent: "GainerAnalystAgent\n(Gemini 2.5 Flash)" {
+  shape: rectangle
+  style.fill: "#e8f5e9"
+  style.border-radius: 8
+}
+
+response: "StockAnalysisResponse\n(analysis + prediction\n+ technicals + quarterly)" {
+  shape: rectangle
+  style.fill: "#e3f2fd"
+  style.border-radius: 8
+}
+
+cache_write: "Write to Redis\n(TTL 5 min)" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+}
+
+ui: "Render in\nAnalysisPanel" {
+  shape: oval
+  style.fill: "#e3f2fd"
+}
+
+start -> cache_check
+cache_check -> cache_hit: "yes"
+cache_check -> parallel: "no"
+cache_hit -> ui
+parallel -> agent: "assembled context"
+agent -> response
+response -> cache_write
+cache_write -> ui
+
+# ── Growth Triggers pipeline ─────────────────────────────────────────────────
+
+gt_start: "Growth Triggers tab\nclicked" {
+  shape: oval
+  style.fill: "#fce4ec"
+}
+
+gt_cache: "Redis cache\nhit?" {
+  shape: diamond
+  style.fill: "#fff3e0"
+}
+
+gt_parallel: "Parallel fetch\n(same as analysis)" {
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  style.border-radius: 8
+}
+
+gt_agent: "GrowthTriggersAgent\n(Gemini + Google Search\nGrounding, 15-25s)" {
+  shape: rectangle
+  style.fill: "#e8f5e9"
+  style.border-radius: 8
+}
+
+gt_ok: "is_error = false?" {
+  shape: diamond
+  style.fill: "#fff3e0"
+}
+
+gt_cache_write: "Write to Redis\n(TTL 24 hours)" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+}
+
+gt_error: "Show amber retry card\n(not cached)" {
+  shape: rectangle
+  style.fill: "#ffebee"
+}
+
+gt_ui: "Render Growth\nTriggers report" {
+  shape: oval
+  style.fill: "#fce4ec"
+}
+
+gt_start -> gt_cache
+gt_cache -> gt_parallel: "miss"
+gt_cache -> gt_ui: "hit"
+gt_parallel -> gt_agent
+gt_agent -> gt_ok
+gt_ok -> gt_cache_write: "yes"
+gt_ok -> gt_error: "no"
+gt_cache_write -> gt_ui

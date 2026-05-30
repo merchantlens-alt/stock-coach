@@ -727,11 +727,12 @@ class QuarterlyFetcher:
         }
 
         # Use revenue as the period anchor (most consistently available).
-        # Take up to 12 periods: 6 for display + 6 to serve as prior-year comparators
-        # for the YoY computation.  Many companies (e.g. Alphabet) don't file a Q4
-        # 10-Q, so the sequence may have only 3 quarters per fiscal year — we can't
-        # rely on "4 slots back" to find the prior-year same quarter.
-        periods = [r["end"] for r in rev_records[:12]]
+        # Take up to 20 periods: 6 for display + up to 14 to serve as prior-year
+        # comparators for the YoY computation.  Many companies (e.g. Alphabet) don't
+        # file a Q4 10-Q so the sequence has only 3 quarters per fiscal year — we
+        # can't rely on "4 slots back" to find the prior-year same quarter.
+        # 20 records ≈ 3–4 years of history which is always enough for YoY on 6 quarters.
+        periods = [r["end"] for r in rev_records[:20]]
 
         results: list[QuarterlyResult] = []
         for end_str in periods:
@@ -790,6 +791,24 @@ class QuarterlyFetcher:
                     r.pat_growth_yoy = round(
                         (r.net_profit - prev.net_profit) / abs(prev.net_profit) * 100, 1
                     )
+
+        # If SEC EDGAR produced fewer than 2 YoY data-points across the
+        # displayable quarters it means prior-year data is missing (e.g. recent
+        # IPO or company that only started XBRL filing recently).  Return None so
+        # _fetch_yfinance_us() can try — Yahoo Finance often has broader history
+        # sourced from multiple vendors including pre-IPO S-1 data.
+        yoy_count = sum(
+            1 for r in results[:min(6, len(results))]
+            if r.revenue_growth_yoy is not None
+        )
+        if yoy_count < 2 and len(results) >= 3:
+            log.info(
+                "sec_edgar.insufficient_yoy_fallback_yfinance",
+                ticker=ticker,
+                quarters=len(results),
+                yoy_count=yoy_count,
+            )
+            return None
 
         rev_trend = _revenue_trend(results)
         mar_trend = _margin_trend(results)
@@ -893,11 +912,21 @@ class QuarterlyFetcher:
             if q_stmt is None or q_stmt.empty:
                 return None
 
-            cols = list(q_stmt.columns)[:8]  # up to 8 quarters, newest first
+            # Fetch as many quarters as yfinance provides — more columns means
+            # more prior-year comparators and therefore more YoY data-points.
+            # We still display only 6 (results[:6]) and compute trends on those.
+            cols = list(q_stmt.columns)[:16]  # cap at 16 (~4 years); newest first
             results: list[QuarterlyResult] = []
+            col_dates: list[Optional[_date]] = []  # parallel list of period end-dates
 
             for col in cols:
-                period = col.strftime("%b '%y") if hasattr(col, "strftime") else str(col)[:7]
+                if hasattr(col, "date"):
+                    col_date: Optional[_date] = col.date()
+                    period = col.strftime("%b '%y") if hasattr(col, "strftime") else str(col)[:7]
+                else:
+                    col_date = None
+                    period = str(col)[:7]
+                col_dates.append(col_date)
 
                 def _yf_val(row: str) -> Optional[float]:
                     if row not in q_stmt.index:
@@ -938,16 +967,38 @@ class QuarterlyFetcher:
                     eps=eps_raw,
                 ))
 
-            # Compute YoY growth (results already newest-first from yfinance)
-            for i, r in enumerate(results):
-                prev_idx = i + 4
-                if prev_idx >= len(results):
+            # Compute YoY by calendar-date matching — same algorithm as SEC EDGAR.
+            # This is correct regardless of Q4 gaps: we look for the same quarter
+            # 1 year earlier by date, with ±3-day tolerance.
+            # Falls back to index-based (i+4) when dates are unavailable.
+            from datetime import timedelta
+            date_to_result: dict[str, QuarterlyResult] = {
+                d.isoformat(): r
+                for d, r in zip(col_dates, results)
+                if d is not None
+            }
+            for col_date, r in zip(col_dates, results):
+                if col_date is None:
                     continue
-                prev = results[prev_idx]
-                if r.revenue is not None and prev.revenue and prev.revenue != 0:
-                    r.revenue_growth_yoy = (r.revenue - prev.revenue) / abs(prev.revenue) * 100
-                if r.net_profit is not None and prev.net_profit and prev.net_profit != 0:
-                    r.pat_growth_yoy = (r.net_profit - prev.net_profit) / abs(prev.net_profit) * 100
+                try:
+                    prior = col_date.replace(year=col_date.year - 1)
+                except ValueError:
+                    prior = _date(col_date.year - 1, col_date.month, 28)
+                prev: Optional[QuarterlyResult] = None
+                for delta in [0, 1, -1, 2, -2, 3, -3]:
+                    candidate = (prior + timedelta(days=delta)).isoformat()
+                    if candidate in date_to_result and date_to_result[candidate] is not r:
+                        prev = date_to_result[candidate]
+                        break
+                if prev:
+                    if r.revenue is not None and prev.revenue and prev.revenue != 0:
+                        r.revenue_growth_yoy = round(
+                            (r.revenue - prev.revenue) / abs(prev.revenue) * 100, 1
+                        )
+                    if r.net_profit is not None and prev.net_profit and prev.net_profit != 0:
+                        r.pat_growth_yoy = round(
+                            (r.net_profit - prev.net_profit) / abs(prev.net_profit) * 100, 1
+                        )
 
             rev_trend = _revenue_trend(results)
             mar_trend = _margin_trend(results)

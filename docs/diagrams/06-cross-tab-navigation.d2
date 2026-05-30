@@ -1,0 +1,62 @@
+vars: {
+  d2-config: {
+    layout-engine: dagre
+  }
+}
+
+direction: right
+
+# ── Four main tabs ────────────────────────────────────────────────────────────
+
+scanner_tab: "Scanner Tab\n(default)" {
+  shape: rectangle
+  style.fill: "#e3f2fd"
+  style.border-radius: 8
+}
+
+radar_tab: "Radar Tab" {
+  shape: rectangle
+  style.fill: "#e8f5e9"
+  style.border-radius: 8
+}
+
+gainers_tab: "Gainers Tab" {
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  style.border-radius: 8
+}
+
+conviction_tab: "Conviction Tab" {
+  shape: rectangle
+  style.fill: "#fce4ec"
+  style.border-radius: 8
+}
+
+analysis_panel: "AnalysisPanel\n(overlay)" {
+  shape: rectangle
+  style.fill: "#fff8e1"
+  style.border-radius: 8
+
+  analysis_tab: "Analysis sub-tab\n(default when panel opens)"
+  growth_tab: "Growth Triggers sub-tab\n(lazy: fires only on click)"
+
+  analysis_tab -> growth_tab: "user clicks tab"
+  growth_tab -> analysis_tab: "user clicks back"
+}
+
+# ── Cross-tab navigation flows ────────────────────────────────────────────────
+
+scanner_tab -> analysis_panel: "click play card\n→ setSelectedGainer(play)\n→ setActiveMainTab(gainers)"
+
+radar_tab -> gainers_tab: "click ticker chip\n→ setActiveMainTab(gainers)"
+
+gainers_tab -> analysis_panel: "click stock row\n→ setSelectedGainer(gainer)"
+
+# ── Panel reset behaviour ─────────────────────────────────────────────────────
+
+new_stock: "Different ticker\nselected" {
+  shape: oval
+  style.fill: "#f5f5f5"
+}
+
+new_stock -> analysis_panel: "useEffect: setActiveTab('analysis')\nresets to Analysis sub-tab\nprevents auto-firing Growth Triggers"

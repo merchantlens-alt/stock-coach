@@ -1,0 +1,108 @@
+vars: {
+  d2-config: {
+    layout-engine: dagre
+  }
+}
+
+direction: down
+
+# ── Scanner tab (default landing page) ───────────────────────────────────────
+
+scanner: "Catalyst Scanner (Default Tab)" {
+  style.fill: "#e3f2fd"
+  style.border-radius: 8
+
+  s1: "User opens app\nor selects market (US / India)"
+  s2: "GET /catalyst-scan/{market}"
+  s3: "Fetch top movers\n(price + volume)"
+  s4: "CatalystScannerAgent\nscores momentum + AI verdict"
+  s5: "Display play cards\n(signal badge, ai_verdict)"
+
+  s1 -> s2
+  s2 -> s3
+  s3 -> s4
+  s4 -> s5
+}
+
+# ── Gainers / Dashboard tab ───────────────────────────────────────────────────
+
+gainers: "Gainers Dashboard (Tab 3)" {
+  style.fill: "#f3e5f5"
+  style.border-radius: 8
+
+  g1: "GET /gainers/{market}/{period}"
+  g2: "yfinance: top gainers list\n+ quality score + signal tier"
+  g3: "GainerAnalystAgent\nmarket summary narrative"
+  g4: "User clicks a stock row"
+  g5: "GET /gainers/{market}/{ticker}/detail\n(price, news, fundamentals)"
+  g6: "Open AnalysisPanel\n(4 sub-tabs)"
+
+  g1 -> g2
+  g2 -> g3
+  g3 -> g4
+  g4 -> g5
+  g5 -> g6
+}
+
+# ── AnalysisPanel sub-tabs ────────────────────────────────────────────────────
+
+analysis_panel: "AnalysisPanel (opens on stock click)" {
+  style.fill: "#fff8e1"
+  style.border-radius: 8
+
+  tab_analysis: "Analysis Tab (default)" {
+    a1: "GET /analyse\n(GainerAnalystAgent)"
+    a2: "why_it_gained, catalysts\nsentiment, sustainability"
+    a3: "StockPrediction\n30-day outlook, signals"
+    a4: "TechnicalSignals\nRSI, MACD, SMA, volume"
+    a5: "QuarterlySnapshot\nrevenue + profit trends"
+    a1 -> a2
+    a2 -> a3
+    a3 -> a4
+    a4 -> a5
+  }
+
+  tab_growth: "Growth Triggers Tab (lazy load)" {
+    gt1: "User clicks tab\n(fires API call)"
+    gt2: "GET /growth-triggers\n(15-25s, Google grounding)"
+    gt3: "GrowthTriggersAgent\n3-5 triggers with conviction"
+    gt4: "company_snapshot\nalready_in_price\nupside_scenario"
+    gt5: "key_risks\ninvestment scorecard"
+    gt1 -> gt2
+    gt2 -> gt3
+    gt3 -> gt4
+    gt4 -> gt5
+  }
+}
+
+# ── Radar tab ─────────────────────────────────────────────────────────────────
+
+radar: "Radar Tab" {
+  style.fill: "#e8f5e9"
+  style.border-radius: 8
+
+  r1: "GET /radar/{market}"
+  r2: "RadarAgent scans news\nfor emerging themes"
+  r3: "Signal cards:\ntheme, tickers, conviction"
+  r4: "Click ticker chip\n→ navigate to Gainers"
+
+  r1 -> r2
+  r2 -> r3
+  r3 -> r4
+}
+
+# ── Conviction tab ────────────────────────────────────────────────────────────
+
+conviction: "Conviction Tab" {
+  style.fill: "#fce4ec"
+  style.border-radius: 8
+
+  c1: "User types belief\ne.g. 'AI chips will keep winning'"
+  c2: "POST /conviction"
+  c3: "ConvictionAgent\nthesis + instruments + entry signal"
+  c4: "Display: score, instruments\nconfirmers, exit triggers"
+
+  c1 -> c2
+  c2 -> c3
+  c3 -> c4
+}

@@ -61,11 +61,13 @@ function formatAge(iso: string): string {
 function SignalCard({
   signal,
   pulseGainers,
+  market,
   onFindMoving,
 }: {
   signal: RadarSignal;
   pulseGainers: Set<string>;
-  onFindMoving: (tickers: string[]) => void;
+  market: Market;
+  onFindMoving: (tickers: string[], market: Market) => void;
 }) {
   const confirming = signal.tickers.filter((t) => pulseGainers.has(t));
 
@@ -151,7 +153,7 @@ function SignalCard({
 
         {/* ── Radar → Scanner CTA ──────────────────────────────────────────── */}
         <button
-          onClick={() => onFindMoving(signal.tickers)}
+          onClick={() => onFindMoving(signal.tickers, market)}
           className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-green-700 bg-green-50 hover:bg-green-100 rounded-xl border border-green-100 transition-colors"
         >
           <Zap size={11} />
@@ -193,7 +195,7 @@ function RadarSkeleton() {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 interface RadarPageProps {
-  onFindMoving: (tickers: string[]) => void;
+  onFindMoving: (tickers: string[], market: Market) => void;
 }
 
 export function RadarPage({ onFindMoving }: RadarPageProps) {
@@ -272,7 +274,7 @@ export function RadarPage({ onFindMoving }: RadarPageProps) {
               {data?.signals.length ?? 0} signal{data?.signals.length !== 1 ? "s" : ""} · cross-referenced against today's PULSE gainers
             </p>
             {data?.signals.map((signal, i) => (
-              <SignalCard key={i} signal={signal} pulseGainers={pulseGainers} onFindMoving={onFindMoving} />
+              <SignalCard key={i} signal={signal} pulseGainers={pulseGainers} market={market} onFindMoving={onFindMoving} />
             ))}
           </>
         )}

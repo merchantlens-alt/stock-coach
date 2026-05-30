@@ -1,0 +1,95 @@
+vars: {
+  d2-config: {
+    layout-engine: dagre
+  }
+}
+
+direction: right
+
+# ── External services ────────────────────────────────────────────────────────
+
+yfinance: "Yahoo Finance API" {
+  shape: cylinder
+  style.fill: "#f0f4ff"
+}
+screener: "Screener.in" {
+  shape: cylinder
+  style.fill: "#f0f4ff"
+}
+sec: "SEC EDGAR XBRL" {
+  shape: cylinder
+  style.fill: "#f0f4ff"
+}
+vertexai: "Vertex AI\n(Gemini 2.5 Flash)" {
+  shape: cylinder
+  style.fill: "#e8f5e9"
+}
+googlesearch: "Google Search\nGrounding" {
+  shape: cylinder
+  style.fill: "#e8f5e9"
+}
+redis: "Redis Cache" {
+  shape: cylinder
+  style.fill: "#fff3e0"
+}
+
+# ── User ─────────────────────────────────────────────────────────────────────
+
+user: "User\n(Browser)" {
+  shape: oval
+  style.fill: "#e3f2fd"
+}
+
+# ── Frontend ─────────────────────────────────────────────────────────────────
+
+frontend: "React Frontend\n(Vite + TypeScript)" {
+  shape: rectangle
+  style.fill: "#e3f2fd"
+  style.border-radius: 8
+}
+
+# ── Backend ───────────────────────────────────────────────────────────────────
+
+backend: "FastAPI Backend\n(Google Cloud Run)" {
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  style.border-radius: 8
+
+  routes: "API Routes" {
+    gainers: "/gainers"
+    analysis: "/analyse"
+    growth: "/growth-triggers"
+    radar: "/radar"
+    conviction: "/conviction"
+    catalyst: "/catalyst-scan"
+  }
+
+  agents: "AI Agents" {
+    analyst: "GainerAnalyst"
+    triggers: "GrowthTriggers"
+    radar_agent: "Radar"
+    conviction_agent: "Conviction"
+    catalyst_agent: "CatalystScanner"
+  }
+
+  services: "Data Services" {
+    market_svc: "MarketData"
+    news_svc: "NewsFetcher"
+    quarterly_svc: "QuarterlyFetcher"
+  }
+}
+
+# ── Flows ─────────────────────────────────────────────────────────────────────
+
+user -> frontend: "clicks / views"
+frontend -> backend: "REST API calls\n(TanStack Query)"
+backend -> redis: "cache read/write\n(TTL 5m – 24h)"
+backend.services.market_svc -> yfinance: "price + fundamentals"
+backend.services.news_svc -> yfinance: "recent headlines"
+backend.services.quarterly_svc -> sec: "US quarterly (XBRL)"
+backend.services.quarterly_svc -> screener: "India quarterly"
+backend.agents -> vertexai: "prompt + context"
+vertexai -> googlesearch: "grounding queries"
+vertexai -> backend.agents: "JSON response"
+backend.routes -> backend.services: "fetch data"
+backend.routes -> backend.agents: "generate AI report"

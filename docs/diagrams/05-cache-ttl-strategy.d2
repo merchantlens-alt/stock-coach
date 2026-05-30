@@ -1,0 +1,101 @@
+vars: {
+  d2-config: {
+    layout-engine: dagre
+  }
+}
+
+direction: right
+
+# ── What gets cached and for how long ────────────────────────────────────────
+
+title: "Cache TTL Strategy" {
+  shape: text
+  style.font-size: 20
+  style.bold: true
+}
+
+gainers_list: "Gainers list\n/gainers/{market}/{period}" {
+  style.fill: "#e3f2fd"
+  style.border-radius: 8
+}
+gainers_ttl: "TTL: 5 min\n(real-time price sensitive)" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+}
+
+detail: "Stock detail\n/gainers/{market}/{ticker}/detail" {
+  style.fill: "#e3f2fd"
+  style.border-radius: 8
+}
+detail_ttl: "TTL: 15 min\n(news + fundamentals)" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+}
+
+analysis: "AI analysis\n/gainers/{market}/{ticker}/analyse" {
+  style.fill: "#f3e5f5"
+  style.border-radius: 8
+}
+analysis_ttl: "TTL: 5 min\n(AI call, expensive)" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+}
+
+growth: "Growth Triggers\n/growth-triggers" {
+  style.fill: "#fce4ec"
+  style.border-radius: 8
+}
+growth_ttl: "TTL: 24 hours\n(research note, stable)" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+}
+growth_err: "is_error=true\n→ NOT cached\n(retry hits AI fresh)" {
+  shape: rectangle
+  style.fill: "#ffebee"
+}
+
+market_summary: "Market summary\n/gainers/{market}/{period}\n(embedded in gainers)" {
+  style.fill: "#e8f5e9"
+  style.border-radius: 8
+}
+summary_ttl: "TTL: 5 min\n(same as gainers list)" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+}
+
+radar: "Radar signals\n/radar/{market}" {
+  style.fill: "#e8f5e9"
+  style.border-radius: 8
+}
+radar_ttl: "TTL: 30 min\n(theme signals, semi-stable)" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+}
+
+catalyst: "Catalyst scan\n/catalyst-scan/{market}" {
+  style.fill: "#e3f2fd"
+  style.border-radius: 8
+}
+catalyst_ttl: "TTL: 10 min\n(momentum, short-lived)" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+}
+
+conviction: "Conviction\n/conviction" {
+  style.fill: "#fce4ec"
+  style.border-radius: 8
+}
+conviction_ttl: "TTL: 1 hour\n(belief-keyed, stable)" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+}
+
+gainers_list -> gainers_ttl
+detail -> detail_ttl
+analysis -> analysis_ttl
+growth -> growth_ttl
+growth -> growth_err: "on error"
+market_summary -> summary_ttl
+radar -> radar_ttl
+catalyst -> catalyst_ttl
+conviction -> conviction_ttl

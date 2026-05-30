@@ -1,5 +1,5 @@
-import { AlertTriangle, RefreshCw, Telescope, TrendingUp, Zap } from "lucide-react";
-import { useState } from "react";
+import { AlertTriangle, RefreshCw, Telescope, TrendingUp, X, Zap } from "lucide-react";
+import { useEffect, useState } from "react";
 import { MarketToggle } from "../components/MarketToggle";
 import { useCatalystScan } from "../hooks/useGainers";
 import type { CatalystPlay, CatalystSignal, CatalystType, Market } from "../types";
@@ -258,19 +258,42 @@ const FILTERS: { key: FilterSignal; label: string }[] = [
 interface Props {
   /** Called when user clicks "Analyse" on a play — switches to Gainers tab */
   onSelectStock: (market: Market, ticker: string) => void;
-  /** Tickers from a Radar signal the user drilled into — highlighted with a badge */
+  /** Tickers from a Radar signal the user drilled into — filter to these only */
   spotlightTickers?: string[];
+  /** The market the Radar signal came from — auto-switches scanner market */
+  spotlightMarket?: Market;
+  /** Called when user dismisses the spotlight filter */
+  onClearSpotlight?: () => void;
 }
 
-export function CatalystPage({ onSelectStock, spotlightTickers = [] }: Props) {
+export function CatalystPage({
+  onSelectStock,
+  spotlightTickers = [],
+  spotlightMarket,
+  onClearSpotlight,
+}: Props) {
   const [market, setMarket] = useState<Market>("us");
   const [filter, setFilter] = useState<FilterSignal>("all");
+
+  const isSpotlighting = spotlightTickers.length > 0;
   const spotlight = new Set(spotlightTickers);
+
+  // ── Sync market when Radar navigation brings a different market ──────────────
+  useEffect(() => {
+    if (isSpotlighting && spotlightMarket) {
+      setMarket(spotlightMarket);
+    }
+  }, [spotlightMarket, isSpotlighting]);
 
   const { data, isLoading, isError, refetch, isFetching } = useCatalystScan(market);
 
   const allPlays = data?.plays ?? [];
-  const filtered = filter === "all" ? allPlays : allPlays.filter(p => p.signal === filter);
+
+  // When spotlight is active: filter to only those tickers (intersection with today's movers).
+  // When not spotlighting: apply the normal signal-type filter.
+  const filtered = isSpotlighting
+    ? allPlays.filter(p => spotlight.has(p.ticker))
+    : (filter === "all" ? allPlays : allPlays.filter(p => p.signal === filter));
 
   const counts: Record<FilterSignal, number> = {
     all:         allPlays.length,
@@ -279,6 +302,13 @@ export function CatalystPage({ onSelectStock, spotlightTickers = [] }: Props) {
     noise:       allPlays.filter(p => p.signal === "noise").length,
     potential:   allPlays.filter(p => p.signal === "potential").length,
   };
+
+  function handleMarketChange(m: Market) {
+    setMarket(m);
+    setFilter("all");
+    // Manually switching market clears the Radar spotlight (different context)
+    if (isSpotlighting) onClearSpotlight?.();
+  }
 
   return (
     <div className="flex flex-col h-full overflow-y-auto bg-gray-50">
@@ -314,7 +344,7 @@ export function CatalystPage({ onSelectStock, spotlightTickers = [] }: Props) {
         </div>
 
         <div className="mt-3">
-          <MarketToggle market={market} onChange={(m) => { setMarket(m); setFilter("all"); }} />
+          <MarketToggle market={market} onChange={handleMarketChange} />
         </div>
       </div>
 
@@ -324,34 +354,56 @@ export function CatalystPage({ onSelectStock, spotlightTickers = [] }: Props) {
         AI verdicts are for educational purposes only. Not investment advice. Always verify with your own research.
       </div>
 
-      {/* ── Filter tabs ──────────────────────────────────────────────────────── */}
-      {!isLoading && allPlays.length > 0 && (
-        <div className="px-5 mt-3 flex items-center gap-1.5 overflow-x-auto pb-1">
-          {FILTERS.map(({ key, label }) => {
-            const active = filter === key;
-            const sigStyle = key === "strong_move"
-              ? (active ? "bg-green-600 text-white" : "text-green-700 hover:bg-green-50")
-              : key === "emerging"
-                ? (active ? "bg-amber-500 text-white" : "text-amber-700 hover:bg-amber-50")
-                : key === "potential"
-                  ? (active ? "bg-blue-600 text-white" : "text-blue-700 hover:bg-blue-50")
-                  : key === "noise"
-                    ? (active ? "bg-gray-500 text-white" : "text-gray-500 hover:bg-gray-100")
-                    : (active ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100");
-            return (
-              <button
-                key={key}
-                onClick={() => setFilter(key)}
-                className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap transition-colors ${sigStyle}`}
-              >
-                {label}
-                <span className={`text-xs rounded-full px-1.5 font-bold ${active ? "bg-white/20" : "bg-gray-100 text-gray-500"}`}>
-                  {counts[key]}
-                </span>
-              </button>
-            );
-          })}
+      {/* ── Radar spotlight filter banner (replaces signal tabs when active) ──── */}
+      {isSpotlighting ? (
+        <div className="mx-5 mt-3 flex items-center gap-2 rounded-xl bg-indigo-50 border border-indigo-200 px-3 py-2">
+          <Telescope size={13} className="text-indigo-500 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <span className="text-xs font-semibold text-indigo-700">
+              Radar filter active — {spotlightTickers.join(", ")}
+            </span>
+            <span className="ml-1.5 text-[10px] text-indigo-400">
+              {filtered.length} of {spotlightTickers.length} moving today
+            </span>
+          </div>
+          <button
+            onClick={onClearSpotlight}
+            className="flex items-center gap-1 text-[10px] font-semibold text-indigo-500 hover:text-indigo-700 bg-indigo-100 hover:bg-indigo-200 rounded-full px-2 py-0.5 transition-colors shrink-0"
+          >
+            <X size={10} />
+            Clear
+          </button>
         </div>
+      ) : (
+        /* ── Normal signal filter tabs ────────────────────────────────────── */
+        !isLoading && allPlays.length > 0 && (
+          <div className="px-5 mt-3 flex items-center gap-1.5 overflow-x-auto pb-1">
+            {FILTERS.map(({ key, label }) => {
+              const active = filter === key;
+              const sigStyle = key === "strong_move"
+                ? (active ? "bg-green-600 text-white" : "text-green-700 hover:bg-green-50")
+                : key === "emerging"
+                  ? (active ? "bg-amber-500 text-white" : "text-amber-700 hover:bg-amber-50")
+                  : key === "potential"
+                    ? (active ? "bg-blue-600 text-white" : "text-blue-700 hover:bg-blue-50")
+                    : key === "noise"
+                      ? (active ? "bg-gray-500 text-white" : "text-gray-500 hover:bg-gray-100")
+                      : (active ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100");
+              return (
+                <button
+                  key={key}
+                  onClick={() => setFilter(key)}
+                  className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap transition-colors ${sigStyle}`}
+                >
+                  {label}
+                  <span className={`text-xs rounded-full px-1.5 font-bold ${active ? "bg-white/20" : "bg-gray-100 text-gray-500"}`}>
+                    {counts[key]}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )
       )}
 
       {/* ── Content ──────────────────────────────────────────────────────────── */}
@@ -370,7 +422,25 @@ export function CatalystPage({ onSelectStock, spotlightTickers = [] }: Props) {
               Markets may be closed or moving within normal ranges.
             </p>
           </div>
+        ) : isSpotlighting && filtered.length === 0 ? (
+          /* ── Spotlight active but none of the tickers are moving today ──── */
+          <div className="rounded-xl bg-indigo-50 border border-indigo-200 px-4 py-6 text-center">
+            <Telescope size={24} className="text-indigo-300 mx-auto mb-2" />
+            <p className="text-sm font-semibold text-indigo-700 mb-1">
+              None of your Radar stocks are moving today
+            </p>
+            <p className="text-xs text-indigo-500 mb-4">
+              {spotlightTickers.join(", ")} {spotlightTickers.length === 1 ? "isn't" : "aren't"} in today's {market.toUpperCase()} catalyst scan.
+            </p>
+            <button
+              onClick={onClearSpotlight}
+              className="text-xs font-semibold text-indigo-600 bg-white border border-indigo-200 rounded-lg px-4 py-2 hover:bg-indigo-50 transition-colors"
+            >
+              Show all movers instead
+            </button>
+          </div>
         ) : filtered.length === 0 ? (
+          /* ── Normal signal filter — no matches ───────────────────────────── */
           <div className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-6 text-center">
             <p className="text-sm text-gray-500">
               {filter === "potential"
@@ -385,23 +455,19 @@ export function CatalystPage({ onSelectStock, spotlightTickers = [] }: Props) {
           </div>
         ) : (
           <>
-            {spotlight.size > 0 && (
-              <div className="flex items-center gap-2 rounded-xl bg-indigo-50 border border-indigo-100 px-3 py-2">
-                <Telescope size={12} className="text-indigo-500 shrink-0" />
-                <span className="text-xs font-semibold text-indigo-700">
-                  Showing stocks from your Radar theme — {[...spotlight].join(", ")}
-                </span>
-              </div>
-            )}
             <p className="text-[11px] text-gray-400 font-medium">
-              {filtered.length} {filter === "all" ? "" : filter.replace("_", " ")} {filtered.length === 1 ? "play" : "plays"} ·{" "}
+              {filtered.length} {
+                isSpotlighting
+                  ? "Radar theme"
+                  : filter === "all" ? "" : filter.replace("_", " ")
+              } {filtered.length === 1 ? "play" : "plays"} ·{" "}
               {filter === "potential" ? "sorted by volume anomaly" : "sorted by momentum score"}
             </p>
             {filtered.map((play) => (
               <CatalystPlayCard
                 key={play.ticker}
                 play={play}
-                isSpotlit={spotlight.has(play.ticker)}
+                isSpotlit={false}
                 onAnalyse={() => onSelectStock(play.market, play.ticker)}
               />
             ))}

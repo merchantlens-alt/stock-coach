@@ -24,8 +24,9 @@ export default function App() {
   // Scanner → Gainers: click "Analyse" on a play → open that stock's detail
   const [jumpTo, setJumpTo] = useState<{ market: Market; ticker: string } | null>(null);
 
-  // Radar → Scanner: click "Find moving stocks" on a signal → highlight those tickers
+  // Radar → Scanner: click "Find moving stocks" on a signal → filter to those tickers
   const [scannerSpotlight, setScannerSpotlight] = useState<string[]>([]);
+  const [scannerSpotlightMarket, setScannerSpotlightMarket] = useState<Market>("us");
 
   // Analysis → Conviction: click "Build Thesis" → pre-fill the belief input
   const [convictionBelief, setConvictionBelief] = useState("");
@@ -35,8 +36,9 @@ export default function App() {
     setTab("gainers");
   }
 
-  function handleFindMoving(tickers: string[]) {
+  function handleFindMoving(tickers: string[], market: Market) {
     setScannerSpotlight(tickers);
+    setScannerSpotlightMarket(market);
     setTab("scanner");
   }
 
@@ -54,6 +56,8 @@ export default function App() {
           <CatalystPage
             onSelectStock={handleSelectFromScanner}
             spotlightTickers={scannerSpotlight}
+            spotlightMarket={scannerSpotlightMarket}
+            onClearSpotlight={() => setScannerSpotlight([])}
           />
         )}
         {tab === "radar" && (
