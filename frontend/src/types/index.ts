@@ -40,6 +40,11 @@ export interface FundamentalsData {
   fifty_two_week_low?: number;
   analyst_target_price?: number;
   analyst_recommendation?: string;
+  // Growth Triggers enrichment
+  ttm_revenue?: number;
+  ebitda_margin?: number;
+  market_cap_value?: number;
+  insider_holding_pct?: number;
 }
 
 export interface NewsItem {
@@ -248,9 +253,48 @@ export interface RadarResponse {
   generated_at: string;
 }
 
+// ── Growth Triggers ───────────────────────────────────────────────────────────
+
+export type TriggerConviction = "HIGH" | "MEDIUM" | "OPTIONALITY";
+
+export interface GrowthTrigger {
+  name: string;
+  what: string;
+  p_and_l_impact: string;
+  timeline: string;
+  conviction: TriggerConviction;
+  watch_for: string;
+}
+
+export interface RiskItem {
+  name: string;
+  what: string;
+  why_it_matters: string;
+}
+
+export interface ScorecardRow {
+  dimension: string;
+  rating: string;
+  note: string;
+}
+
+export interface GrowthTriggersReport {
+  ticker: string;
+  market: Market;
+  company_snapshot: string;
+  triggers: GrowthTrigger[];
+  already_in_price: string;
+  upside_scenario: string;
+  key_risks: RiskItem[];
+  scorecard: ScorecardRow[];
+  from_cache: boolean;
+  generated_at: string;
+  disclaimer: string;
+}
+
 // ── Catalyst Scanner ──────────────────────────────────────────────────────────
 
-export type CatalystSignal = "strong_move" | "emerging" | "noise";
+export type CatalystSignal = "strong_move" | "emerging" | "noise" | "potential";
 
 export interface CatalystPlay {
   ticker: string;

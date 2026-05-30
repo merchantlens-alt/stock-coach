@@ -34,6 +34,7 @@ const SIGNAL_BADGE: Record<CatalystSignal, { cls: string; label: string; dot: st
   strong_move: { cls: "bg-green-100 text-green-700 border-green-200",   label: "Strong Move", dot: "bg-green-500" },
   emerging:    { cls: "bg-amber-100 text-amber-700 border-amber-200",   label: "Emerging",    dot: "bg-amber-400" },
   noise:       { cls: "bg-gray-100 text-gray-500 border-gray-200",      label: "Noise",       dot: "bg-gray-300" },
+  potential:   { cls: "bg-blue-100 text-blue-700 border-blue-200",      label: "Loading",     dot: "bg-blue-500" },
 };
 
 function scoreBarColor(score: number): string {
@@ -102,15 +103,30 @@ function CatalystPlayCard({
   onAnalyse: () => void;
 }) {
   const sig  = SIGNAL_BADGE[play.signal];
+  const isAccumulating = play.signal === "potential";
   const isDown = play.change_pct < 0;
   const sign   = isDown ? "" : "+";
 
   return (
     <div className={`rounded-2xl border bg-white shadow-sm overflow-hidden transition-all ${
-      isSpotlit ? "border-indigo-300 ring-2 ring-indigo-100" : "border-gray-100"
+      isAccumulating
+        ? "border-blue-200 ring-1 ring-blue-100"
+        : isSpotlit
+          ? "border-indigo-300 ring-2 ring-indigo-100"
+          : "border-gray-100"
     }`}>
+      {/* Accumulation phase banner */}
+      {isAccumulating && (
+        <div className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-50 border-b border-blue-100">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse shrink-0" />
+          <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wide">
+            Accumulation phase — high volume, price not yet moved
+          </span>
+        </div>
+      )}
+
       {/* Radar spotlight banner */}
-      {isSpotlit && (
+      {!isAccumulating && isSpotlit && (
         <div className="flex items-center gap-1.5 px-4 py-1.5 bg-indigo-50 border-b border-indigo-100">
           <Telescope size={10} className="text-indigo-500 shrink-0" />
           <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-wide">
@@ -124,7 +140,9 @@ function CatalystPlayCard({
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <span className="text-base font-bold text-gray-900">{play.ticker}</span>
-            <span className="ml-2 text-xs text-gray-400 truncate">{play.name}</span>
+            {play.name !== play.ticker && (
+              <span className="ml-2 text-xs text-gray-400 truncate">{play.name}</span>
+            )}
             {play.sector && (
               <span className="ml-2 text-[10px] text-gray-300">{play.sector}</span>
             )}
@@ -137,16 +155,27 @@ function CatalystPlayCard({
 
         {/* Row 2: Change % + volume ratio + catalyst type */}
         <div className="flex items-center gap-2 flex-wrap">
-          <span className={`text-lg font-bold ${isDown ? "text-red-600" : "text-green-600"}`}>
-            {sign}{play.change_pct.toFixed(1)}%
-          </span>
+          {isAccumulating ? (
+            /* For accumulation stocks: volume anomaly is the hero metric */
+            <span className="text-sm font-semibold text-gray-500">
+              {sign}{play.change_pct.toFixed(1)}%
+              <span className="ml-1 text-[10px] text-gray-400 font-normal">price</span>
+            </span>
+          ) : (
+            <span className={`text-lg font-bold ${isDown ? "text-red-600" : "text-green-600"}`}>
+              {sign}{play.change_pct.toFixed(1)}%
+            </span>
+          )}
+
           {play.volume_ratio != null && (
             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
-              play.volume_ratio >= 3
-                ? "bg-orange-100 text-orange-700 border-orange-200"
-                : play.volume_ratio >= 1.5
-                  ? "bg-amber-100 text-amber-700 border-amber-200"
-                  : "bg-gray-100 text-gray-500 border-gray-200"
+              isAccumulating
+                ? "bg-blue-100 text-blue-700 border-blue-200"
+                : play.volume_ratio >= 3
+                  ? "bg-orange-100 text-orange-700 border-orange-200"
+                  : play.volume_ratio >= 1.5
+                    ? "bg-amber-100 text-amber-700 border-amber-200"
+                    : "bg-gray-100 text-gray-500 border-gray-200"
             }`}>
               {play.volume_ratio.toFixed(1)}× vol
             </span>
@@ -161,11 +190,11 @@ function CatalystPlayCard({
           </span>
         </div>
 
-        {/* Momentum score bar */}
+        {/* Score bar */}
         <div>
           <div className="flex items-center justify-between mb-1">
             <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
-              Momentum score
+              {isAccumulating ? "Volume anomaly" : "Momentum score"}
             </span>
             <span className="text-[10px] font-bold text-gray-600">
               {play.momentum_score.toFixed(0)}/100
@@ -173,7 +202,9 @@ function CatalystPlayCard({
           </div>
           <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all ${scoreBarColor(play.momentum_score)}`}
+              className={`h-full rounded-full transition-all ${
+                isAccumulating ? "bg-blue-500" : scoreBarColor(play.momentum_score)
+              }`}
               style={{ width: `${play.momentum_score}%` }}
             />
           </div>
@@ -196,7 +227,11 @@ function CatalystPlayCard({
         {/* Analyse CTA */}
         <button
           onClick={onAnalyse}
-          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-xl border border-indigo-100 transition-colors"
+          className={`w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border transition-colors ${
+            isAccumulating
+              ? "text-blue-700 bg-blue-50 hover:bg-blue-100 border-blue-100"
+              : "text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border-indigo-100"
+          }`}
         >
           <TrendingUp size={12} />
           Deep dive — analyse {play.ticker}
@@ -214,6 +249,7 @@ const FILTERS: { key: FilterSignal; label: string }[] = [
   { key: "all",         label: "All" },
   { key: "strong_move", label: "Strong Move" },
   { key: "emerging",    label: "Emerging" },
+  { key: "potential",   label: "Potential" },
   { key: "noise",       label: "Noise" },
 ];
 
@@ -241,6 +277,7 @@ export function CatalystPage({ onSelectStock, spotlightTickers = [] }: Props) {
     strong_move: allPlays.filter(p => p.signal === "strong_move").length,
     emerging:    allPlays.filter(p => p.signal === "emerging").length,
     noise:       allPlays.filter(p => p.signal === "noise").length,
+    potential:   allPlays.filter(p => p.signal === "potential").length,
   };
 
   return (
@@ -262,8 +299,8 @@ export function CatalystPage({ onSelectStock, spotlightTickers = [] }: Props) {
               )}
             </div>
             <p className="text-xs text-gray-500">
-              Stocks moving <span className="font-semibold text-gray-700">right now</span> with
-              confirmed catalysts — ranked by volume × price move × news.
+              Stocks moving <span className="font-semibold text-gray-700">right now</span> with confirmed catalysts, plus{" "}
+              <span className="font-semibold text-blue-600">Potential</span> stocks showing unusual volume before they move.
             </p>
           </div>
           <button
@@ -296,9 +333,11 @@ export function CatalystPage({ onSelectStock, spotlightTickers = [] }: Props) {
               ? (active ? "bg-green-600 text-white" : "text-green-700 hover:bg-green-50")
               : key === "emerging"
                 ? (active ? "bg-amber-500 text-white" : "text-amber-700 hover:bg-amber-50")
-                : key === "noise"
-                  ? (active ? "bg-gray-500 text-white" : "text-gray-500 hover:bg-gray-100")
-                  : (active ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100");
+                : key === "potential"
+                  ? (active ? "bg-blue-600 text-white" : "text-blue-700 hover:bg-blue-50")
+                  : key === "noise"
+                    ? (active ? "bg-gray-500 text-white" : "text-gray-500 hover:bg-gray-100")
+                    : (active ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100");
             return (
               <button
                 key={key}
@@ -333,7 +372,16 @@ export function CatalystPage({ onSelectStock, spotlightTickers = [] }: Props) {
           </div>
         ) : filtered.length === 0 ? (
           <div className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-6 text-center">
-            <p className="text-sm text-gray-500">No {filter.replace("_", " ")} plays right now.</p>
+            <p className="text-sm text-gray-500">
+              {filter === "potential"
+                ? "No accumulation-phase stocks detected right now."
+                : `No ${filter.replace("_", " ")} plays right now.`}
+            </p>
+            {filter === "potential" && (
+              <p className="text-xs text-gray-400 mt-1">
+                Potential stocks appear when a ticker has 2× normal volume but price hasn't moved yet.
+              </p>
+            )}
           </div>
         ) : (
           <>
@@ -347,7 +395,7 @@ export function CatalystPage({ onSelectStock, spotlightTickers = [] }: Props) {
             )}
             <p className="text-[11px] text-gray-400 font-medium">
               {filtered.length} {filter === "all" ? "" : filter.replace("_", " ")} {filtered.length === 1 ? "play" : "plays"} ·{" "}
-              sorted by momentum score
+              {filter === "potential" ? "sorted by volume anomaly" : "sorted by momentum score"}
             </p>
             {filtered.map((play) => (
               <CatalystPlayCard

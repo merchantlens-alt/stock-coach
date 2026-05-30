@@ -118,6 +118,11 @@ class FundamentalsData(BaseModel):
     fifty_two_week_low: Optional[float] = None
     analyst_target_price: Optional[float] = None
     analyst_recommendation: Optional[str] = None
+    # Growth Triggers enrichment — from yfinance
+    ttm_revenue: Optional[float] = None           # trailing 12-month revenue ($M or ₹Cr)
+    ebitda_margin: Optional[float] = None         # as a decimal, e.g. 0.32 = 32%
+    market_cap_value: Optional[float] = None      # market cap in raw units
+    insider_holding_pct: Optional[float] = None   # fraction, e.g. 0.15 = 15%
 
 
 class NewsItem(BaseModel):
@@ -338,7 +343,56 @@ class QuarterlySnapshot(BaseModel):
 
 # ── Catalyst Scanner schemas ───────────────────────────────────────────────────
 
-CatalystSignal = Literal["strong_move", "emerging", "noise"]
+# ── Growth Triggers schemas ───────────────────────────────────────────────────
+
+TriggerConviction = Literal["HIGH", "MEDIUM", "OPTIONALITY"]
+
+
+class GrowthTrigger(BaseModel):
+    """One specific business lever that could drive earnings growth."""
+    name: str = Field(description="Short trigger label, e.g. 'Premium Mix Shift'")
+    what: str = Field(description="Plain-English explanation of what this trigger is")
+    p_and_l_impact: str = Field(description="Quantified P&L impact, e.g. 'Adds 200-300 bps to margin'")
+    timeline: str = Field(description="When this shows up in results, e.g. 'Q2 FY26', 'H2 2025'")
+    conviction: TriggerConviction
+    watch_for: str = Field(description="Specific metric or event to monitor, e.g. 'Gross margin >45%'")
+
+
+class RiskItem(BaseModel):
+    """One investment risk with plain-English context."""
+    name: str
+    what: str = Field(description="What this risk is in plain English")
+    why_it_matters: str = Field(description="P&L or stock-price impact if this materialises")
+
+
+class ScorecardRow(BaseModel):
+    """One row of the investment scorecard table."""
+    dimension: str = Field(description="e.g. 'Revenue Growth', 'Margin Expansion'")
+    rating: str = Field(description="e.g. 'Strong', 'Moderate', 'Weak', 'Rich', 'Fair', 'Cheap'")
+    note: str = Field(description="One sentence explanation")
+
+
+class GrowthTriggersReport(BaseModel):
+    """AI-generated institutional-style growth triggers research note."""
+    ticker: str
+    market: Market
+    company_snapshot: str = Field(description="3-4 sentences: what company does, what changed recently, revenue/margin snapshot, market cap context")
+    triggers: list[GrowthTrigger] = Field(description="3-5 specific growth triggers")
+    already_in_price: str = Field(description="What the current valuation implies market already expects")
+    upside_scenario: str = Field(description="Additional upside if all triggers play out")
+    key_risks: list[RiskItem] = Field(description="2-3 key risks with plain-English context")
+    scorecard: list[ScorecardRow] = Field(description="5-row investment scorecard")
+    from_cache: bool = False
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    disclaimer: str = Field(
+        default=(
+            "This is AI-generated analysis for educational purposes only. "
+            "It is not investment advice. Always consult a registered financial advisor."
+        )
+    )
+
+
+CatalystSignal = Literal["strong_move", "emerging", "noise", "potential"]
 
 
 class CatalystPlay(BaseModel):

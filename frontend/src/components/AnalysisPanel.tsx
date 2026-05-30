@@ -1,9 +1,11 @@
+import { useState } from "react";
 import {
-  AlertTriangle, ArrowDown, ArrowUp, GitCompare,
+  AlertTriangle, ArrowDown, ArrowUp, ChevronRight, GitCompare,
   Lightbulb, Loader2, Minus, Newspaper, RefreshCw, Sparkles, TrendingDown, TrendingUp, X, Zap,
 } from "lucide-react";
-import type { FundamentalsData, GainerDetail, Period, QuarterlySnapshot, StockAnalysisResponse, TechnicalSignals } from "../types";
+import type { FundamentalsData, GainerDetail, GrowthTrigger, GrowthTriggersReport, Period, QuarterlySnapshot, RiskItem, ScorecardRow, StockAnalysisResponse, TechnicalSignals, TriggerConviction } from "../types";
 import { CandleChart } from "./CandleChart";
+import { useGrowthTriggers } from "../hooks/useGainers";
 
 // ── Period helpers ────────────────────────────────────────────────────────────
 
@@ -499,6 +501,182 @@ function ChangePill({ pct }: { pct: number }) {
   );
 }
 
+// ── Growth Triggers Panel ─────────────────────────────────────────────────────
+
+const CONVICTION_STYLE: Record<TriggerConviction, { badge: string; bar: string; label: string }> = {
+  HIGH:        { badge: "bg-green-100 text-green-800 border-green-200",  bar: "bg-green-500",  label: "HIGH" },
+  MEDIUM:      { badge: "bg-amber-100 text-amber-800 border-amber-200",  bar: "bg-amber-400",  label: "MEDIUM" },
+  OPTIONALITY: { badge: "bg-blue-100 text-blue-800 border-blue-200",     bar: "bg-blue-400",   label: "OPTIONALITY" },
+};
+
+const SCORECARD_STYLE: Record<string, string> = {
+  Strong: "text-green-700 bg-green-50 border-green-200",
+  Moderate: "text-amber-700 bg-amber-50 border-amber-200",
+  Weak: "text-red-600 bg-red-50 border-red-200",
+  Rich: "text-red-600 bg-red-50 border-red-200",
+  Fair: "text-amber-700 bg-amber-50 border-amber-200",
+  Cheap: "text-green-700 bg-green-50 border-green-200",
+  Unknown: "text-gray-400 bg-gray-50 border-gray-200",
+};
+
+function TriggerCard({ trigger, index }: { trigger: GrowthTrigger; index: number }) {
+  const style = CONVICTION_STYLE[trigger.conviction] ?? CONVICTION_STYLE.MEDIUM;
+  return (
+    <div className="rounded-xl border border-gray-100 bg-white overflow-hidden">
+      {/* Top accent bar */}
+      <div className={`h-0.5 ${style.bar}`} />
+      <div className="px-4 py-3 space-y-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-xs font-bold text-gray-400 shrink-0">#{index + 1}</span>
+            <h4 className="text-sm font-bold text-gray-900 leading-tight">{trigger.name}</h4>
+          </div>
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${style.badge}`}>
+            {style.label}
+          </span>
+        </div>
+        <p className="text-xs text-gray-600 leading-relaxed">{trigger.what}</p>
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          <div className="bg-green-50 rounded-lg px-2.5 py-2">
+            <p className="text-[10px] font-bold text-green-700 uppercase tracking-wide mb-0.5">P&L Impact</p>
+            <p className="text-xs text-green-800 font-medium leading-snug">{trigger.p_and_l_impact}</p>
+          </div>
+          <div className="bg-gray-50 rounded-lg px-2.5 py-2">
+            <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-0.5">Timeline</p>
+            <p className="text-xs text-gray-800 font-medium leading-snug">{trigger.timeline}</p>
+          </div>
+        </div>
+        <div className="flex items-start gap-1.5 pt-0.5">
+          <ChevronRight size={11} className="text-indigo-400 shrink-0 mt-0.5" />
+          <p className="text-[11px] text-indigo-600 leading-snug"><span className="font-bold">Watch:</span> {trigger.watch_for}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RiskCard({ risk }: { risk: RiskItem }) {
+  return (
+    <div className="flex gap-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2.5">
+      <AlertTriangle size={13} className="text-red-400 shrink-0 mt-0.5" />
+      <div>
+        <p className="text-xs font-bold text-red-800">{risk.name}</p>
+        <p className="text-xs text-red-700 mt-0.5 leading-snug">{risk.what}</p>
+        <p className="text-[11px] text-red-500 mt-1 leading-snug">{risk.why_it_matters}</p>
+      </div>
+    </div>
+  );
+}
+
+function ScorecardTable({ rows }: { rows: ScorecardRow[] }) {
+  return (
+    <div className="rounded-xl border border-gray-100 overflow-hidden">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="bg-gray-50 border-b border-gray-100">
+            <th className="text-left px-3 py-2 font-bold text-gray-500 uppercase tracking-wide text-[10px]">Dimension</th>
+            <th className="text-left px-3 py-2 font-bold text-gray-500 uppercase tracking-wide text-[10px]">Rating</th>
+            <th className="text-left px-3 py-2 font-bold text-gray-500 uppercase tracking-wide text-[10px] hidden sm:table-cell">Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => {
+            const style = SCORECARD_STYLE[row.rating] ?? SCORECARD_STYLE.Unknown;
+            return (
+              <tr key={i} className={i % 2 === 0 ? "bg-white" : "bg-gray-50/50"}>
+                <td className="px-3 py-2 font-medium text-gray-700">{row.dimension}</td>
+                <td className="px-3 py-2">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${style}`}>
+                    {row.rating}
+                  </span>
+                </td>
+                <td className="px-3 py-2 text-gray-500 hidden sm:table-cell leading-snug">{row.note}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function GrowthTriggersContent({ report }: { report: GrowthTriggersReport }) {
+  return (
+    <div className="space-y-5">
+      {/* Company snapshot */}
+      <section className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
+        <div className="flex items-center gap-1.5 mb-2">
+          <Sparkles size={13} className="text-indigo-500" />
+          <span className="text-xs font-bold text-indigo-700 uppercase tracking-wide">Company Snapshot</span>
+          {report.from_cache && (
+            <span className="ml-auto text-[10px] text-indigo-400">cached</span>
+          )}
+        </div>
+        <p className="text-xs text-indigo-900 leading-relaxed">{report.company_snapshot}</p>
+      </section>
+
+      {/* Growth Triggers */}
+      <section>
+        <div className="flex items-center gap-1.5 mb-3">
+          <Zap size={13} className="text-amber-500" />
+          <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+            Growth Triggers ({report.triggers.length})
+          </span>
+        </div>
+        <div className="space-y-3">
+          {report.triggers.map((trigger, i) => (
+            <TriggerCard key={i} trigger={trigger} index={i} />
+          ))}
+        </div>
+      </section>
+
+      {/* Already in price + upside */}
+      <section className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">Already in the Price</p>
+          <p className="text-xs text-gray-700 leading-relaxed">{report.already_in_price}</p>
+        </div>
+        <div className="rounded-xl border border-green-100 bg-green-50 px-4 py-3">
+          <p className="text-[10px] font-bold text-green-700 uppercase tracking-wide mb-1.5">Upside Scenario</p>
+          <p className="text-xs text-green-800 leading-relaxed">{report.upside_scenario}</p>
+        </div>
+      </section>
+
+      {/* Key Risks */}
+      {report.key_risks.length > 0 && (
+        <section>
+          <div className="flex items-center gap-1.5 mb-3">
+            <AlertTriangle size={13} className="text-red-400" />
+            <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Key Risks</span>
+          </div>
+          <div className="space-y-2">
+            {report.key_risks.map((risk, i) => (
+              <RiskCard key={i} risk={risk} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Scorecard */}
+      {report.scorecard.length > 0 && (
+        <section>
+          <div className="flex items-center gap-1.5 mb-3">
+            <GitCompare size={13} className="text-gray-400" />
+            <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Investment Scorecard</span>
+          </div>
+          <ScorecardTable rows={report.scorecard} />
+        </section>
+      )}
+
+      {/* Disclaimer */}
+      <div className="flex items-start gap-2 rounded-xl bg-gray-50 border border-gray-200 p-3 text-xs text-gray-400">
+        <AlertTriangle size={12} className="mt-0.5 shrink-0 text-amber-400" />
+        {report.disclaimer}
+      </div>
+    </div>
+  );
+}
+
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 function _formatAge(iso: string): string {
@@ -523,6 +701,8 @@ interface Props {
   onBuildThesis?: (belief: string) => void;
 }
 
+type ActiveTab = "analysis" | "growth_triggers";
+
 export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d", onClose, convictionMatches, onRefresh, isRefreshing, onBuildThesis }: Props) {
   const { gainer, fundamentals, news } = detail;
   const ai = analysis;
@@ -531,6 +711,17 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
   const returnLabel = PERIOD_RETURN_LABEL[period] ?? "Today's change";
   const isDown = gainer.change_pct < 0;
   const changeSign = isDown ? "" : "+";  // negative numbers already carry their own "-"
+
+  const [activeTab, setActiveTab] = useState<ActiveTab>("analysis");
+
+  // Growth Triggers — lazy loaded only when tab is opened
+  const {
+    data: growthData,
+    isLoading: growthLoading,
+    error: growthError,
+  } = useGrowthTriggers(gainer.market, gainer.ticker, {
+    enabled: activeTab === "growth_triggers",
+  });
 
   const hasFundamentals = fundamentals && (
     fundamentals.pe_ratio != null ||
@@ -570,6 +761,56 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
         </button>
       </div>
 
+      {/* ── TAB SWITCHER ──────────────────────────────────────────────────── */}
+      <div className="sticky top-[57px] z-10 bg-white border-b border-gray-100 px-5 flex gap-0">
+        {([
+          { key: "analysis", label: "Today's Analysis", icon: <Sparkles size={12} /> },
+          { key: "growth_triggers", label: "Growth Triggers", icon: <Zap size={12} /> },
+        ] as { key: ActiveTab; label: string; icon: React.ReactNode }[]).map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold border-b-2 transition-colors ${
+              activeTab === tab.key
+                ? "border-indigo-500 text-indigo-700"
+                : "border-transparent text-gray-400 hover:text-gray-600"
+            }`}
+          >
+            {tab.icon}
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── GROWTH TRIGGERS TAB ───────────────────────────────────────────── */}
+      {activeTab === "growth_triggers" && (
+        <div className="flex-1 px-5 py-4 space-y-5">
+          {growthLoading && (
+            <div className="space-y-3 animate-pulse">
+              <div className="h-24 bg-indigo-50 rounded-xl" />
+              <div className="h-32 bg-gray-50 rounded-xl" />
+              <div className="h-32 bg-gray-50 rounded-xl" />
+              <div className="h-32 bg-gray-50 rounded-xl" />
+              <p className="text-center text-xs text-gray-400 pt-2">
+                Running institutional-grade research · 15-25 s…
+              </p>
+            </div>
+          )}
+          {!growthLoading && growthError && (
+            <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-100 px-4 py-3 text-sm text-red-700">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              Could not load growth triggers. Please try again in a moment.
+            </div>
+          )}
+          {!growthLoading && growthData && (
+            <GrowthTriggersContent report={growthData} />
+          )}
+          <div className="h-4" />
+        </div>
+      )}
+
+      {/* ── ANALYSIS TAB (existing content) ──────────────────────────────── */}
+      {activeTab === "analysis" && (
       <div className="flex-1 px-5 py-4 space-y-5">
 
         {/* ── CONVICTION MATCH ──────────────────────────────────────────────── */}
@@ -895,6 +1136,7 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
         {/* bottom padding */}
         <div className="h-4" />
       </div>
+      )}
     </div>
   );
 }

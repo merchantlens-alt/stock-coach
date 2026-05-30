@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import catalyst, conviction, gainers, health, radar
+from api.routes import catalyst, conviction, gainers, growth_triggers, health, radar
 from core.config import get_settings
 from core.logging import configure_logging, get_logger
 
@@ -82,6 +82,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router, prefix="/api")
     app.include_router(gainers.router, prefix="/api")
+    app.include_router(growth_triggers.router, prefix="/api")
     app.include_router(conviction.router, prefix="/api")
     app.include_router(radar.router, prefix="/api")
     app.include_router(catalyst.router, prefix="/api")

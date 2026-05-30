@@ -1083,6 +1083,10 @@ class MarketDataService:
             fifty_two_week_low=_safe_float(info.get("fiftyTwoWeekLow")),
             analyst_target_price=_safe_float(info.get("targetMeanPrice")),
             analyst_recommendation=info.get("recommendationKey"),
+            ttm_revenue=_safe_float(info.get("totalRevenue")),
+            ebitda_margin=_safe_float(info.get("ebitdaMargins")),
+            market_cap_value=_safe_float(info.get("marketCap")),
+            insider_holding_pct=_safe_float(info.get("heldPercentInsiders")),
         )
 
 
@@ -1309,6 +1313,10 @@ def fundamentals_from_info(info: dict[str, Any]) -> FundamentalsData:
         fifty_two_week_low=_safe_float(info.get("fiftyTwoWeekLow")),
         analyst_target_price=_safe_float(info.get("targetMeanPrice")),
         analyst_recommendation=info.get("recommendationKey"),
+        ttm_revenue=_safe_float(info.get("totalRevenue")),
+        ebitda_margin=_safe_float(info.get("ebitdaMargins")),
+        market_cap_value=_safe_float(info.get("marketCap")),
+        insider_holding_pct=_safe_float(info.get("heldPercentInsiders")),
     )
 
 

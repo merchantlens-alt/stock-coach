@@ -111,3 +111,26 @@ export function useCatalystScan(market: Market) {
     retry: 1,
   });
 }
+
+/**
+ * Growth Triggers research note — institutional-style analysis with specific
+ * business levers, P&L timelines, and conviction tags.
+ *
+ * Lazy-loaded: only fires when `enabled` is true (i.e. when the user opens
+ * the Growth Triggers tab). Cold path: grounded Gemini (~15-25 s).
+ * Cached 24 h server-side; 20-min stale client-side.
+ */
+export function useGrowthTriggers(
+  market: Market,
+  ticker: string | null,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["growth-triggers", market, ticker],
+    queryFn: ({ signal }) => api.getGrowthTriggers(market, ticker!, { signal }),
+    enabled: ticker !== null && (options.enabled ?? false),
+    staleTime: 20 * 60 * 1000,   // 20 min client stale (server caches 24 h)
+    gcTime: 24 * 60 * 60 * 1000, // keep in memory all day
+    retry: 1,
+  });
+}

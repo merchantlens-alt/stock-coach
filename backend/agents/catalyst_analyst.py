@@ -27,9 +27,10 @@ log = get_logger(__name__)
 
 _SYSTEM_PROMPT = """\
 You are a catalyst analyst writing concise plain-English verdicts for retail investors.
-For each stock provided, write exactly 2 sentences:
-  1. What specific catalyst is driving the move (cite the actual news if given).
-  2. Whether the move looks sustained or likely to fade, and the one signal to watch.
+
+For each MOVING stock: write exactly 2 sentences — (1) what specific catalyst drove the move (cite the news if given), (2) whether it looks sustained and the one signal to watch.
+For each ACCUMULATING stock (marked [LOADING]): write exactly 2 sentences — (1) what might explain the unusual volume despite the flat price, (2) what specific catalyst or announcement to watch for.
+
 Keep each verdict under 55 words total. No jargon. No disclaimers.\
 """
 
@@ -48,7 +49,13 @@ _VERDICT_SCHEMA: dict[str, Any] = {
 _MOCK_VERDICTS: dict[str, str] = {}  # filled per-call in mock mode
 
 
-def _default_verdict(ticker: str, change_pct: float, has_catalyst: bool) -> str:
+def _default_verdict(ticker: str, change_pct: float, has_catalyst: bool, signal: str = "") -> str:
+    if signal == "potential":
+        return (
+            f"{ticker} is showing unusual volume ({change_pct:+.1f}% price move) — "
+            "a classic accumulation pattern often seen before a catalyst announcement. "
+            "Watch for news, earnings, or insider activity that could trigger the next leg."
+        )
     if has_catalyst:
         return (
             f"{ticker} is surging {change_pct:+.1f}% on a specific news catalyst "
@@ -87,6 +94,7 @@ class CatalystAnalystAgent:
                     m["ticker"],
                     m.get("change_pct", 0.0),
                     bool(m.get("has_catalyst")),
+                    m.get("signal", ""),
                 )
                 for m in movers
             }
@@ -100,6 +108,7 @@ class CatalystAnalystAgent:
                     m["ticker"],
                     m.get("change_pct", 0.0),
                     bool(m.get("has_catalyst")),
+                    m.get("signal", ""),
                 )
                 for m in movers
             }
@@ -122,12 +131,17 @@ class CatalystAnalystAgent:
             sector = m.get("sector") or "unknown sector"
             headline = m.get("headline_catalyst")
             has_catalyst = bool(m.get("has_catalyst"))
+            is_potential = m.get("signal") == "potential"
 
-            line = f"{i}. {ticker} — {name} | {chg:+.1f}% | {vol_str} | {sector}"
-            if headline:
-                line += f'\n   Catalyst: "{headline}"'
-            elif not has_catalyst:
-                line += "\n   No specific news catalyst identified"
+            if is_potential:
+                line = f"{i}. [LOADING] {ticker} — {name} | {chg:+.1f}% price change | {vol_str} | {sector}"
+                line += "\n   Accumulation signal: unusual volume but price hasn't moved yet"
+            else:
+                line = f"{i}. {ticker} — {name} | {chg:+.1f}% | {vol_str} | {sector}"
+                if headline:
+                    line += f'\n   Catalyst: "{headline}"'
+                elif not has_catalyst:
+                    line += "\n   No specific news catalyst identified"
             lines.append(line)
 
         prompt = (
@@ -177,7 +191,10 @@ class CatalystAnalystAgent:
             for m in movers:
                 if m["ticker"] not in verdicts:
                     verdicts[m["ticker"]] = _default_verdict(
-                        m["ticker"], m.get("change_pct", 0.0), bool(m.get("has_catalyst"))
+                        m["ticker"],
+                        m.get("change_pct", 0.0),
+                        bool(m.get("has_catalyst")),
+                        m.get("signal", ""),
                     )
             return verdicts
         except (KeyError, IndexError, json.JSONDecodeError) as exc:

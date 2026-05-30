@@ -1,4 +1,4 @@
-import type { CatalystScanResponse, ConvictionRequest, ConvictionResponse, GainerDetail, GainersListResponse, Market, PriceHistory, RadarResponse, StockAnalysisResponse } from "../types";
+import type { CatalystScanResponse, ConvictionRequest, ConvictionResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, PriceHistory, RadarResponse, StockAnalysisResponse } from "../types";
 
 const BASE_URL = "/api";
 
@@ -58,4 +58,8 @@ export const api = {
   /** Catalyst Scanner — top movers with confirmed catalysts. Cached 30 min. */
   getCatalystScan: (market: Market): Promise<CatalystScanResponse> =>
     fetchJSON(`/catalyst/${market}`),
+
+  /** Growth Triggers research note. Cached 24 h. Cold: ~15-25 s (grounded AI). */
+  getGrowthTriggers: (market: Market, ticker: string, options: FetchOptions = {}): Promise<GrowthTriggersReport> =>
+    fetchJSON(`/gainers/${market}/${ticker}/growth-triggers${options.refresh ? "?refresh=true" : ""}`, options),
 };

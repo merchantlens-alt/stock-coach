@@ -6,6 +6,7 @@ from fastapi import Depends
 
 from agents.catalyst_analyst import CatalystAnalystAgent
 from agents.gainer_analyst import GainerAnalystAgent
+from agents.growth_triggers_agent import GrowthTriggersAgent
 from agents.market_analyst import MarketAnalystAgent
 from agents.radar_analyst import RadarAnalystAgent
 from agents.thesis_analyst import ThesisAnalystAgent
@@ -28,6 +29,7 @@ _radar_analyst: RadarAnalystAgent | None = None
 _quarterly_fetcher: QuarterlyFetcher | None = None
 _catalyst_analyst: CatalystAnalystAgent | None = None
 _catalyst_scanner: CatalystScannerService | None = None
+_growth_triggers_agent: GrowthTriggersAgent | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -117,5 +119,14 @@ def get_catalyst_scanner(
             get_catalyst_analyst(settings),
         )
     return _catalyst_scanner
+
+
+def get_growth_triggers_agent(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> GrowthTriggersAgent:
+    global _growth_triggers_agent
+    if _growth_triggers_agent is None:
+        _growth_triggers_agent = GrowthTriggersAgent(settings)
+    return _growth_triggers_agent
 
 

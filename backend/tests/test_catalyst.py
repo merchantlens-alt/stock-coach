@@ -25,6 +25,7 @@ from services.catalyst_scanner import (
     CatalystScannerService,
     _classify_catalyst_type,
     _compute_momentum_score,
+    _compute_potential_score,
     _extract_catalyst_headline,
     _score_to_signal,
 )
@@ -76,6 +77,29 @@ class TestSignalTier:
 
     def test_score_0_is_noise(self) -> None:
         assert _score_to_signal(0.0) == "noise"
+
+
+class TestPotentialScore:
+    def test_very_high_vol_ratio(self) -> None:
+        score = _compute_potential_score(5.0)
+        assert score == 85.0
+
+    def test_high_vol_ratio(self) -> None:
+        score = _compute_potential_score(4.0)
+        assert score == 70.0
+
+    def test_moderate_vol_ratio(self) -> None:
+        score = _compute_potential_score(3.0)
+        assert score == 55.0
+
+    def test_low_threshold_vol_ratio(self) -> None:
+        score = _compute_potential_score(2.0)
+        assert score == 30.0
+
+    def test_score_in_range(self) -> None:
+        for vol_ratio in [2.0, 2.5, 3.0, 4.0, 5.0, 10.0]:
+            score = _compute_potential_score(vol_ratio)
+            assert 0.0 <= score <= 100.0, f"score {score} out of range for vol_ratio={vol_ratio}"
 
 
 class TestCatalystTypeClassification:
@@ -225,6 +249,8 @@ def _make_scanner(mock_ai: bool = True) -> CatalystScannerService:
     analyst.analyse = AsyncMock(return_value={})
 
     scanner = CatalystScannerService(settings, market_data, news_fetcher, analyst)
+    # Default: no potential candidates — individual tests override as needed
+    scanner._scan_potential_universe = AsyncMock(return_value=[])
     return scanner
 
 
@@ -301,7 +327,7 @@ async def test_scan_all_plays_have_valid_signal() -> None:
 
     response = await scanner.scan("us")
 
-    valid_signals = {"strong_move", "emerging", "noise"}
+    valid_signals = {"strong_move", "emerging", "noise", "potential"}
     for play in response.plays:
         assert play.signal in valid_signals, f"{play.ticker} has invalid signal: {play.signal}"
 
@@ -375,6 +401,94 @@ async def test_scan_volume_ratio_computed_correctly() -> None:
     assert play.ticker == "ASTC"
     assert play.volume_ratio == 5.2
     assert play.avg_volume == 1_000_000
+
+
+@pytest.mark.asyncio
+async def test_scan_includes_potential_plays() -> None:
+    """Potential candidates (high vol, flat price) appear in plays with signal='potential'."""
+    scanner = _make_scanner()
+
+    raw_movers = [
+        {
+            "ticker": "NVDA", "name": "NVIDIA", "price": 900.0,
+            "change_pct": 8.5, "change_abs": 71.0, "volume": 50_000_000,
+            "sector": "Technology", "has_catalyst": False,
+        }
+    ]
+    # AAPL has 2× volume with flat price — should be a potential candidate
+    potential_candidate = {
+        "ticker": "AAPL",
+        "name": "AAPL",
+        "sector": None,
+        "price": 190.0,
+        "change_pct": 0.4,
+        "change_abs": 0.8,
+        "volume": 120_000_000,
+        "avg_volume": 60_000_000,
+        "volume_ratio": 2.0,
+    }
+
+    scanner._market_data.get_raw_movers = AsyncMock(return_value=raw_movers)
+    scanner._scan_potential_universe = AsyncMock(return_value=[potential_candidate])
+    scanner._fetch_avg_volumes = AsyncMock(return_value={"NVDA": 20_000_000.0})
+    scanner._fetch_batch_headlines = AsyncMock(return_value={
+        "NVDA": ["NVIDIA smashes earnings"],
+        "AAPL": [],
+    })
+    scanner._analyst.analyse = AsyncMock(return_value={
+        "NVDA": "NVDA surged on earnings beat.",
+        "AAPL": "AAPL has unusual volume — watch for an announcement.",
+    })
+
+    response = await scanner.scan("us")
+
+    tickers = [p.ticker for p in response.plays]
+    assert "NVDA" in tickers
+    assert "AAPL" in tickers
+
+    aapl_play = next(p for p in response.plays if p.ticker == "AAPL")
+    assert aapl_play.signal == "potential"
+    assert aapl_play.volume_ratio == 2.0
+    assert aapl_play.change_pct == 0.4
+
+
+@pytest.mark.asyncio
+async def test_scan_deduplicates_potential_vs_movers() -> None:
+    """If screener already caught a ticker, it must not appear twice as potential."""
+    scanner = _make_scanner()
+
+    raw_movers = [
+        {
+            "ticker": "TSLA", "name": "Tesla", "price": 250.0,
+            "change_pct": 7.0, "change_abs": 16.0, "volume": 30_000_000,
+            "sector": "Auto", "has_catalyst": False,
+        }
+    ]
+    # Same ticker in potential — must be deduped
+    potential_candidate = {
+        "ticker": "TSLA",
+        "name": "TSLA",
+        "sector": None,
+        "price": 250.0,
+        "change_pct": 7.0,
+        "change_abs": 16.0,
+        "volume": 30_000_000,
+        "avg_volume": 10_000_000,
+        "volume_ratio": 3.0,
+    }
+
+    scanner._market_data.get_raw_movers = AsyncMock(return_value=raw_movers)
+    scanner._scan_potential_universe = AsyncMock(return_value=[potential_candidate])
+    scanner._fetch_avg_volumes = AsyncMock(return_value={"TSLA": 10_000_000.0})
+    scanner._fetch_batch_headlines = AsyncMock(return_value={"TSLA": []})
+    scanner._analyst.analyse = AsyncMock(return_value={"TSLA": "Tesla moved on momentum."})
+
+    response = await scanner.scan("us")
+
+    tsla_plays = [p for p in response.plays if p.ticker == "TSLA"]
+    assert len(tsla_plays) == 1, "TSLA must appear only once (deduped from potential)"
+    # The screener version wins — it should NOT be 'potential'
+    assert tsla_plays[0].signal != "potential"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -519,6 +633,13 @@ class TestConsistency:
     def test_volume_ratio_none_does_not_crash(self) -> None:
         score = _compute_momentum_score(10.0, None, has_catalyst=True)
         assert isinstance(score, float)
+
+    def test_all_catalyst_signals_are_valid_literals(self) -> None:
+        """CatalystSignal literal must include 'potential'."""
+        from models.schemas import CatalystSignal
+        import typing
+        valid_signals = set(typing.get_args(CatalystSignal))
+        assert "potential" in valid_signals
 
     def test_all_catalyst_types_are_valid_literals(self) -> None:
         """Every _classify_catalyst_type result must be a valid CatalystType."""
