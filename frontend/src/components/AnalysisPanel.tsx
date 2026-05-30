@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle, ArrowDown, ArrowUp, ChevronRight, GitCompare,
   Lightbulb, Loader2, Minus, Newspaper, RefreshCw, Sparkles, TrendingDown, TrendingUp, X, Zap,
@@ -713,6 +713,12 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
   const changeSign = isDown ? "" : "+";  // negative numbers already carry their own "-"
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("analysis");
+
+  // Reset to Analysis tab whenever a different stock is selected — prevents
+  // the Growth Triggers tab from auto-firing a 15-25s AI call on every stock switch.
+  useEffect(() => {
+    setActiveTab("analysis");
+  }, [gainer.ticker]);
 
   // Growth Triggers — lazy loaded only when tab is opened
   const {
