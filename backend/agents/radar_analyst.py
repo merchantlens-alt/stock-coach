@@ -254,6 +254,8 @@ class RadarAnalystAgent:
                 "maxOutputTokens": 1800,
                 "responseMimeType": "application/json",
                 "responseSchema": _RADAR_SCHEMA,
+                # Disable thinking — keeps latency low for structured JSON calls.
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
 

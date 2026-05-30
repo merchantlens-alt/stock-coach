@@ -249,6 +249,8 @@ class ThesisAnalystAgent:
                 "maxOutputTokens": 2000,
                 "responseMimeType": "application/json",
                 "responseSchema": _COMBINED_SCHEMA,
+                # Disable thinking — keeps latency low for structured JSON calls.
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
 

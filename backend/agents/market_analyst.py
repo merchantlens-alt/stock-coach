@@ -99,6 +99,8 @@ class MarketAnalystAgent:
                 "maxOutputTokens": 600,
                 "responseMimeType": "application/json",
                 "responseSchema": _RESPONSE_SCHEMA,
+                # Disable thinking — keeps latency low for structured JSON calls.
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
 

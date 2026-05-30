@@ -160,6 +160,8 @@ class CatalystAnalystAgent:
                 "maxOutputTokens": 1200,
                 "responseMimeType": "application/json",
                 "responseSchema": _VERDICT_SCHEMA,
+                # Disable thinking — keeps latency low for structured JSON calls.
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
 
