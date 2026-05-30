@@ -359,7 +359,6 @@ class GrowthTriggersAgent:
             "generationConfig": {
                 "temperature": 0.2,
                 "maxOutputTokens": 2500,
-                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
 
@@ -376,6 +375,12 @@ class GrowthTriggersAgent:
             resp = await client.post(
                 url, json=payload, headers={"Authorization": f"Bearer {token}"}
             )
+            if resp.status_code != 200:
+                log.error(
+                    "growth_triggers.gemini_http_error",
+                    status=resp.status_code,
+                    body=resp.text[:500],
+                )
             resp.raise_for_status()
 
         raw = resp.json()

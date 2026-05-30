@@ -382,7 +382,6 @@ class GainerAnalystAgent:
                 "maxOutputTokens": 2500,   # combined schema needs ~1800-2200 tokens
                 "responseMimeType": "application/json",
                 "responseSchema": _COMBINED_SCHEMA,
-                "thinkingConfig": {"thinkingBudget": 0},  # disable thinking — JSON extraction, not reasoning
             },
         }
 
@@ -397,6 +396,13 @@ class GainerAnalystAgent:
 
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(url, json=payload, headers={"Authorization": f"Bearer {token}"})
+            if resp.status_code != 200:
+                log.error(
+                    "gainer_analyst.gemini_http_error",
+                    ticker=ticker,
+                    status=resp.status_code,
+                    body=resp.text[:500],  # capture first 500 chars of error body
+                )
             resp.raise_for_status()
 
         raw_resp = resp.json()

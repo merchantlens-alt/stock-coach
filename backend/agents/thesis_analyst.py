@@ -249,7 +249,6 @@ class ThesisAnalystAgent:
                 "maxOutputTokens": 2000,
                 "responseMimeType": "application/json",
                 "responseSchema": _COMBINED_SCHEMA,
-                "thinkingConfig": {"thinkingBudget": 0},  # disable thinking — JSON extraction, not reasoning
             },
         }
 

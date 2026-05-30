@@ -160,7 +160,6 @@ class CatalystAnalystAgent:
                 "maxOutputTokens": 1200,
                 "responseMimeType": "application/json",
                 "responseSchema": _VERDICT_SCHEMA,
-                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
 
@@ -177,6 +176,12 @@ class CatalystAnalystAgent:
             resp = await client.post(
                 url, json=payload, headers={"Authorization": f"Bearer {token}"}
             )
+            if resp.status_code != 200:
+                log.error(
+                    "catalyst_analyst.gemini_http_error",
+                    status=resp.status_code,
+                    body=resp.text[:500],
+                )
             resp.raise_for_status()
 
         raw = resp.json()

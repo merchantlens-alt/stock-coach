@@ -254,7 +254,6 @@ class RadarAnalystAgent:
                 "maxOutputTokens": 1800,
                 "responseMimeType": "application/json",
                 "responseSchema": _RADAR_SCHEMA,
-                "thinkingConfig": {"thinkingBudget": 0},  # disable thinking — JSON extraction
             },
         }
 
