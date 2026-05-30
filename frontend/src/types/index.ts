@@ -297,6 +297,59 @@ export interface GrowthTriggersReport {
 
 export type CatalystSignal = "strong_move" | "emerging" | "noise" | "potential";
 
+// ── Portfolio tracker ─────────────────────────────────────────────────────────
+
+export type PortfolioEntryType = "holding" | "watchlist";
+export type PortfolioStatus = "active" | "win" | "loss" | "expired";
+
+export interface PortfolioEntry {
+  id: string;
+  ticker: string;
+  market: Market;
+  type: PortfolioEntryType;
+  entry_price: number;
+  purchase_avg?: number | null;      // holdings only — real cost basis
+  shares?: number | null;
+  stock_name?: string | null;
+  ai_predicted_change_pct?: number | null;
+  ai_confidence?: number | null;
+  catalyst_type?: string | null;
+  ai_outlook?: string | null;
+  entry_date: string;               // YYYY-MM-DD
+  target_date: string;              // YYYY-MM-DD
+  status: PortfolioStatus;
+  actual_price?: number | null;
+  actual_change_pct?: number | null;
+  direction_correct?: boolean | null;
+  resolved_at?: string | null;
+  created_at: string;
+}
+
+export interface AddPortfolioEntryRequest {
+  ticker: string;
+  market: Market;
+  type: PortfolioEntryType;
+  entry_price: number;
+  purchase_avg?: number;
+  shares?: number;
+  stock_name?: string;
+  ai_predicted_change_pct?: number;
+  ai_confidence?: number;
+  catalyst_type?: string;
+  ai_outlook?: string;
+}
+
+export interface PortfolioSummary {
+  entries: PortfolioEntry[];
+  total_active: number;
+  total_resolved: number;
+  wins: number;
+  losses: number;
+  win_rate?: number | null;
+}
+
+// ── Catalyst Scanner ──────────────────────────────────────────────────────────
+
 export interface CatalystPlay {
   ticker: string;
   name: string;

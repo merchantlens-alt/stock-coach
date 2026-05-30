@@ -15,6 +15,7 @@ from services.cache import CacheBackend, build_cache
 from services.catalyst_scanner import CatalystScannerService
 from services.market_data import MarketDataService
 from services.news_fetcher import NewsFetcher
+from services.portfolio_store import PortfolioStore
 from services.quarterly_fetcher import QuarterlyFetcher
 
 # Module-level singletons — lru_cache cannot be used here because
@@ -30,6 +31,7 @@ _quarterly_fetcher: QuarterlyFetcher | None = None
 _catalyst_analyst: CatalystAnalystAgent | None = None
 _catalyst_scanner: CatalystScannerService | None = None
 _growth_triggers_agent: GrowthTriggersAgent | None = None
+_portfolio_store: PortfolioStore | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -128,5 +130,14 @@ def get_growth_triggers_agent(
     if _growth_triggers_agent is None:
         _growth_triggers_agent = GrowthTriggersAgent(settings)
     return _growth_triggers_agent
+
+
+def get_portfolio_store(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> PortfolioStore:
+    global _portfolio_store
+    if _portfolio_store is None:
+        _portfolio_store = PortfolioStore(get_cache(settings))
+    return _portfolio_store
 
 

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle, ArrowDown, ArrowUp, ChevronRight, GitCompare,
+  AlertTriangle, ArrowDown, ArrowUp, BookmarkPlus, ChevronRight, GitCompare,
   Lightbulb, Loader2, Minus, Newspaper, RefreshCw, Sparkles, TrendingDown, TrendingUp, X, Zap,
 } from "lucide-react";
-import type { FundamentalsData, GainerDetail, GrowthTrigger, GrowthTriggersReport, Period, QuarterlySnapshot, RiskItem, ScorecardRow, StockAnalysisResponse, TechnicalSignals, TriggerConviction } from "../types";
+import type { FundamentalsData, GainerDetail, GrowthTrigger, GrowthTriggersReport, Period, PortfolioEntry, QuarterlySnapshot, RiskItem, ScorecardRow, StockAnalysisResponse, TechnicalSignals, TriggerConviction } from "../types";
 import { CandleChart } from "./CandleChart";
 import { useGrowthTriggers } from "../hooks/useGainers";
+import { TrackModal } from "./TrackModal";
 
 // ── Period helpers ────────────────────────────────────────────────────────────
 
@@ -716,6 +717,7 @@ interface Props {
   isRefreshing?: boolean;
   /** Called when user wants to build a conviction thesis — switches to Thesis tab */
   onBuildThesis?: (belief: string) => void;
+  onTrack?: () => void;
 }
 
 type ActiveTab = "analysis" | "growth_triggers";
@@ -734,11 +736,18 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
       : "1-month return";
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("analysis");
+  const [showTrackModal, setShowTrackModal] = useState(false);
+  const [trackedEntry, setTrackedEntry] = useState<PortfolioEntry | null>(null);
 
   // Reset to Analysis tab whenever a different stock is selected — prevents
   // the Growth Triggers tab from auto-firing a 15-25s AI call on every stock switch.
   useEffect(() => {
     setActiveTab("analysis");
+  }, [gainer.ticker]);
+
+  // Reset tracked entry when stock changes
+  useEffect(() => {
+    setTrackedEntry(null);
   }, [gainer.ticker]);
 
   // Growth Triggers — lazy loaded only when tab is opened
@@ -1143,6 +1152,27 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
               </button>
             )}
 
+            {/* ── TRACK THIS PREDICTION CTA ────────────────────────────────── */}
+            {ai?.prediction && (
+              <button
+                onClick={() => setShowTrackModal(true)}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-2xl border border-emerald-200 transition-colors"
+              >
+                <BookmarkPlus size={14} />
+                Track this prediction
+                <span className="text-xs font-normal opacity-60 ml-1">→ My Plays</span>
+              </button>
+            )}
+
+            {/* Tracked confirmation */}
+            {trackedEntry && (
+              <div className="flex items-center gap-2 rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs text-emerald-700">
+                <BookmarkPlus size={12} />
+                <span>Tracking {trackedEntry.ticker} — check <strong>My Plays</strong> tab</span>
+                <button onClick={() => setTrackedEntry(null)} className="ml-auto text-emerald-400 hover:text-emerald-600">×</button>
+              </div>
+            )}
+
             {/* WHO ELSE MAY BENEFIT */}
             {ai?.analysis?.related_beneficiaries && ai.analysis.related_beneficiaries.length > 0 && (
               <section>
@@ -1213,6 +1243,25 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
         {/* bottom padding */}
         <div className="h-4" />
       </div>
+      )}
+
+      {/* ── TRACK MODAL ────────────────────────────────────────────────────── */}
+      {showTrackModal && (
+        <TrackModal
+          ticker={gainer.ticker}
+          stockName={gainer.name}
+          market={gainer.market}
+          currentPrice={gainer.price}
+          aiPredictedChangePct={ai?.prediction?.predicted_change_pct}
+          aiConfidence={ai?.prediction?.confidence}
+          catalystType={ai?.analysis?.catalyst_type}
+          aiOutlook={ai?.prediction?.outlook}
+          onClose={() => setShowTrackModal(false)}
+          onSaved={(entry) => {
+            setTrackedEntry(entry);
+            setShowTrackModal(false);
+          }}
+        />
       )}
     </div>
   );

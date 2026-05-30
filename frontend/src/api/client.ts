@@ -1,4 +1,4 @@
-import type { CatalystScanResponse, ConvictionRequest, ConvictionResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, PriceHistory, RadarResponse, StockAnalysisResponse } from "../types";
+import type { AddPortfolioEntryRequest, CatalystScanResponse, ConvictionRequest, ConvictionResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, PortfolioEntry, PortfolioSummary, PriceHistory, RadarResponse, StockAnalysisResponse } from "../types";
 
 const BASE_URL = "/api";
 
@@ -62,4 +62,27 @@ export const api = {
   /** Growth Triggers research note. Cached 24 h. Cold: ~15-25 s (grounded AI). */
   getGrowthTriggers: (market: Market, ticker: string, options: FetchOptions = {}): Promise<GrowthTriggersReport> =>
     fetchJSON(`/gainers/${market}/${ticker}/growth-triggers${options.refresh ? "?refresh=true" : ""}`, options),
+
+  getPortfolio: (): Promise<PortfolioSummary> =>
+    fetchJSON("/portfolio"),
+
+  addPortfolioEntry: (body: AddPortfolioEntryRequest): Promise<PortfolioEntry> =>
+    fetchJSON("/portfolio", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+    }),
+
+  deletePortfolioEntry: (id: string): Promise<void> =>
+    fetchJSON(`/portfolio/${id}`, { method: "DELETE" }),
+
+  resolvePortfolioEntry: (id: string, actualPrice: number): Promise<PortfolioEntry> =>
+    fetchJSON(`/portfolio/${id}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ actual_price: actualPrice }),
+      headers: { "Content-Type": "application/json" },
+    }),
+
+  markExpiredPortfolio: (): Promise<{ marked_expired: number }> =>
+    fetchJSON("/portfolio/resolve-expired", { method: "POST" }),
 };

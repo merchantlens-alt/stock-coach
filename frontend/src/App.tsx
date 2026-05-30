@@ -4,10 +4,11 @@ import { Header } from "./components/Header";
 import { CatalystPage } from "./pages/CatalystPage";
 import { ConvictionPage } from "./pages/ConvictionPage";
 import { Dashboard } from "./pages/Dashboard";
+import { PortfolioPage } from "./pages/PortfolioPage";
 import { RadarPage } from "./pages/RadarPage";
 import type { Market } from "./types";
 
-export type AppTab = "scanner" | "radar" | "gainers" | "conviction";
+export type AppTab = "scanner" | "radar" | "gainers" | "conviction" | "portfolio";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -73,6 +74,7 @@ export default function App() {
         {tab === "conviction" && (
           <ConvictionPage initialBelief={convictionBelief} onBeliefConsumed={() => setConvictionBelief("")} />
         )}
+        {tab === "portfolio" && <PortfolioPage />}
       </div>
     </QueryClientProvider>
   );
