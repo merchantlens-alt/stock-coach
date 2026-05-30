@@ -121,12 +121,17 @@ async def get_growth_triggers(
         quarterly_summary=quarterly_str,
     )
 
-    # ── Cache for 24 h ────────────────────────────────────────────────────────
-    await cache.set(key, report.model_dump(), _CACHE_TTL)
+    # ── Cache only successful reports — never cache the fallback error stub ──────
+    if not report.is_error:
+        await cache.set(key, report.model_dump(), _CACHE_TTL)
+    else:
+        log.warning("growth_triggers.skipping_cache_on_error", ticker=resolved_ticker)
+
     log.info(
         "growth_triggers.generated",
         ticker=resolved_ticker,
         market=market,
         triggers=len(report.triggers),
+        is_error=report.is_error,
     )
     return report

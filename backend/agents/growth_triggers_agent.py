@@ -171,32 +171,33 @@ Requirements:
 
 
 def _fallback_report(ticker: str, market: Market) -> GrowthTriggersReport:
-    """Minimal fallback when Gemini fails — better than an error page."""
+    """Minimal fallback when Gemini fails — marked is_error=True so the route skips caching."""
     return GrowthTriggersReport(
         ticker=ticker,
         market=market,
+        is_error=True,
         company_snapshot=(
             f"{ticker} is a publicly listed company. "
             "Our AI research engine encountered an issue generating the full growth analysis. "
-            "Please refresh to try again, or check back later."
+            "Please tap 'Retry' to try again."
         ),
         triggers=[
             GrowthTrigger(
                 name="AI Analysis Unavailable",
                 what="The growth triggers analysis could not be generated at this time.",
-                p_and_l_impact="Please refresh to retry",
+                p_and_l_impact="Please retry",
                 timeline="Retry now",
                 conviction="MEDIUM",
-                watch_for="Click refresh to regenerate",
+                watch_for="Tap retry to regenerate",
             )
         ],
         already_in_price="Analysis unavailable — please retry.",
         upside_scenario="Analysis unavailable — please retry.",
         key_risks=[
             RiskItem(
-                name="Data Unavailable",
-                what="The AI analysis service encountered an error.",
-                why_it_matters="Please try refreshing the page.",
+                name="Analysis Unavailable",
+                what="The AI research service encountered an error.",
+                why_it_matters="Tap retry to generate fresh analysis.",
             )
         ],
         scorecard=[
@@ -350,17 +351,21 @@ class GrowthTriggersAgent:
         payload: dict[str, Any] = {
             "system_instruction": {"parts": [{"text": _SYSTEM_PROMPT}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "tools": [{"googleSearch": {}}],   # grounding — conflicts with responseSchema
+            # Google Search grounding — gives the model access to live web data so it
+            # can cite real earnings figures, analyst targets, and recent developments.
+            # Note: grounding is incompatible with responseMimeType=application/json,
+            # so JSON is requested in the prompt text and parsed via _parse_json_from_text.
+            "tools": [{"googleSearch": {}}],
             "generationConfig": {
                 "temperature": 0.2,
                 "maxOutputTokens": 2500,
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
 
         token = await asyncio.to_thread(get_cached_token)
         project = self._settings.google_cloud_project
         region = self._settings.google_cloud_region
-        # Use flash model — cheaper + grounding works well on it
         model = self._settings.vertex_ai_model_flash
         url = (
             f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}"

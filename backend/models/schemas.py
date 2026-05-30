@@ -382,6 +382,7 @@ class GrowthTriggersReport(BaseModel):
     upside_scenario: str = Field(description="Additional upside if all triggers play out")
     key_risks: list[RiskItem] = Field(description="2-3 key risks with plain-English context")
     scorecard: list[ScorecardRow] = Field(description="5-row investment scorecard")
+    is_error: bool = False   # True when AI call failed — route skips cache, UI shows retry
     from_cache: bool = False
     generated_at: datetime = Field(default_factory=datetime.utcnow)
     disclaimer: str = Field(

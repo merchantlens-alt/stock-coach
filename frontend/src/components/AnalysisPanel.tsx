@@ -600,7 +600,15 @@ function ScorecardTable({ rows }: { rows: ScorecardRow[] }) {
   );
 }
 
-function GrowthTriggersContent({ report }: { report: GrowthTriggersReport }) {
+function GrowthTriggersContent({
+  report,
+  onRetry,
+  isRetrying,
+}: {
+  report: GrowthTriggersReport;
+  onRetry?: () => void;
+  isRetrying?: boolean;
+}) {
   return (
     <div className="space-y-5">
       {/* Company snapshot */}
@@ -608,9 +616,22 @@ function GrowthTriggersContent({ report }: { report: GrowthTriggersReport }) {
         <div className="flex items-center gap-1.5 mb-2">
           <Sparkles size={13} className="text-indigo-500" />
           <span className="text-xs font-bold text-indigo-700 uppercase tracking-wide">Company Snapshot</span>
-          {report.from_cache && (
-            <span className="ml-auto text-[10px] text-indigo-400">cached</span>
-          )}
+          <div className="ml-auto flex items-center gap-2">
+            {report.from_cache && (
+              <span className="text-[10px] text-indigo-400">cached</span>
+            )}
+            {onRetry && (
+              <button
+                onClick={onRetry}
+                disabled={isRetrying}
+                title="Regenerate analysis"
+                className="flex items-center gap-1 text-[10px] font-medium text-indigo-400 hover:text-indigo-600 disabled:opacity-40"
+              >
+                <RefreshCw size={10} className={isRetrying ? "animate-spin" : ""} />
+                {isRetrying ? "Running…" : "Refresh"}
+              </button>
+            )}
+          </div>
         </div>
         <p className="text-xs text-indigo-900 leading-relaxed">{report.company_snapshot}</p>
       </section>
@@ -725,6 +746,8 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
     data: growthData,
     isLoading: growthLoading,
     error: growthError,
+    refetch: retryGrowthTriggers,
+    isFetching: growthFetching,
   } = useGrowthTriggers(gainer.market, gainer.ticker, {
     enabled: activeTab === "growth_triggers",
   });
@@ -802,14 +825,53 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
               </p>
             </div>
           )}
-          {!growthLoading && growthError && (
-            <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-100 px-4 py-3 text-sm text-red-700">
-              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-              Could not load growth triggers. Please try again in a moment.
+          {/* Hard HTTP error */}
+          {!growthLoading && !growthFetching && growthError && (
+            <div className="rounded-xl bg-red-50 border border-red-100 px-4 py-4 space-y-3">
+              <div className="flex items-start gap-2 text-sm text-red-700">
+                <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                Could not connect to the research engine. Please try again.
+              </div>
+              <button
+                onClick={() => retryGrowthTriggers()}
+                disabled={growthFetching}
+                className="flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:text-red-800 disabled:opacity-40"
+              >
+                <RefreshCw size={11} className={growthFetching ? "animate-spin" : ""} />
+                Retry
+              </button>
             </div>
           )}
-          {!growthLoading && growthData && (
-            <GrowthTriggersContent report={growthData} />
+
+          {/* Soft error — AI call failed but HTTP 200 returned */}
+          {!growthLoading && !growthFetching && growthData?.is_error && (
+            <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-4 space-y-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle size={14} className="text-amber-500 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-amber-800">AI research engine timed out</p>
+                  <p className="text-xs text-amber-600 mt-0.5">
+                    The analysis could not be generated. This usually resolves on retry.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => retryGrowthTriggers()}
+                disabled={growthFetching}
+                className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-white bg-amber-500 hover:bg-amber-600 rounded-lg disabled:opacity-40 transition-colors"
+              >
+                {growthFetching
+                  ? <Loader2 size={11} className="animate-spin" />
+                  : <RefreshCw size={11} />
+                }
+                {growthFetching ? "Running analysis…" : "Retry analysis"}
+              </button>
+            </div>
+          )}
+
+          {/* Successful report */}
+          {!growthLoading && growthData && !growthData.is_error && (
+            <GrowthTriggersContent report={growthData} onRetry={retryGrowthTriggers} isRetrying={growthFetching} />
           )}
           <div className="h-4" />
         </div>

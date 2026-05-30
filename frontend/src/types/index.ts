@@ -287,6 +287,7 @@ export interface GrowthTriggersReport {
   upside_scenario: string;
   key_risks: RiskItem[];
   scorecard: ScorecardRow[];
+  is_error: boolean;   // true when AI call failed — shows retry button, not cached
   from_cache: boolean;
   generated_at: string;
   disclaimer: string;
