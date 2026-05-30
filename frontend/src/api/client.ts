@@ -17,6 +17,11 @@ async function fetchJSON<T>(path: string, options: FetchOptions = {}): Promise<T
     const errBody = await resp.json().catch(() => ({}));
     throw new Error(errBody.detail ?? `Request failed: ${resp.status}`);
   }
+  // 204 No Content (e.g. DELETE) has no body — return undefined rather than
+  // letting resp.json() throw a SyntaxError on the empty stream.
+  if (resp.status === 204) {
+    return undefined as unknown as T;
+  }
   return resp.json() as Promise<T>;
 }
 

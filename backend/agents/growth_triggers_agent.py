@@ -359,6 +359,10 @@ class GrowthTriggersAgent:
             "generationConfig": {
                 "temperature": 0.2,
                 "maxOutputTokens": 2500,
+                # Cap thinking to ~1 k tokens — grounded calls already have significant
+                # latency from the Google Search round-trip; unbounded thinking pushes
+                # total wall time past the 90 s timeout we allow for this endpoint.
+                "thinkingConfig": {"thinkingBudget": 1024},
             },
         }
 
@@ -371,7 +375,7 @@ class GrowthTriggersAgent:
             f"/locations/{region}/publishers/google/models/{model}:generateContent"
         )
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=90) as client:
             resp = await client.post(
                 url, json=payload, headers={"Authorization": f"Bearer {token}"}
             )
