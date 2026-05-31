@@ -16,7 +16,7 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir poetry==1.8.3
 
-COPY backend/pyproject.toml ./
+COPY backend/pyproject.toml backend/poetry.lock* ./
 RUN poetry config virtualenvs.in-project true && \
     poetry install --only main --no-root --no-interaction
 

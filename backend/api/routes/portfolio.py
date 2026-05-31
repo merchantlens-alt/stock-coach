@@ -87,7 +87,7 @@ async def get_portfolio_entry(
     return entry
 
 
-@router.delete("/portfolio/{entry_id}", status_code=204)
+@router.delete("/portfolio/{entry_id}", status_code=204, response_model=None)
 async def delete_portfolio_entry(
     entry_id: Annotated[str, Path()],
     store: Annotated[PortfolioStore, Depends(get_portfolio_store)],
