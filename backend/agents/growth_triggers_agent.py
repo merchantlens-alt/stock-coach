@@ -22,7 +22,7 @@ from typing import Any, Optional
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from core.auth import get_cached_token
+from core.auth import get_token
 from core.config import Settings
 from core.exceptions import AIAgentError
 from core.logging import get_logger
@@ -365,7 +365,7 @@ class GrowthTriggersAgent:
             },
         }
 
-        token = await asyncio.to_thread(get_cached_token)
+        token = await get_token()
         project = self._settings.google_cloud_project
         region = self._settings.google_cloud_region
         model = self._settings.vertex_ai_model_flash

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -177,7 +177,7 @@ class TestGainerAnalystAgent:
 
         analyst._mock = False
         with (
-            patch("agents.gainer_analyst.get_cached_token", return_value="fake-token"),
+            patch("agents.gainer_analyst.get_token", new_callable=AsyncMock, return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
@@ -284,7 +284,7 @@ class TestPredictorAgent:
 
         predictor._mock = False
         with (
-            patch("agents.predictor.get_cached_token", return_value="fake-token"),
+            patch("agents.predictor.get_token", new_callable=AsyncMock, return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
@@ -369,7 +369,7 @@ class TestMarketAnalystAgent:
 
         market_analyst._mock = False
         with (
-            patch("agents.market_analyst.get_cached_token", return_value="fake-token"),
+            patch("agents.market_analyst.get_token", new_callable=AsyncMock, return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
@@ -399,7 +399,7 @@ class TestMarketAnalystAgent:
 
         market_analyst._mock = False
         with (
-            patch("agents.market_analyst.get_cached_token", return_value="fake-token"),
+            patch("agents.market_analyst.get_token", new_callable=AsyncMock, return_value="fake-token"),
             respx.mock,
         ):
             respx.post(url__regex=r".*aiplatform\.googleapis\.com.*").mock(
