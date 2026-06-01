@@ -46,27 +46,58 @@ _DISCLAIMER = (
     "Always consult a registered financial advisor before making investment decisions."
 )
 
-_SYSTEM_PROMPT = """You are a financial analyst who explains why stocks move and predicts 30-day outlooks.
+_SYSTEM_PROMPT = """You are a discretionary financial analyst producing 30-day price predictions.
 Write clearly for a beginner investor — no jargon without explanation.
 Never recommend buying or selling. Only describe what happened and what the data suggests.
 Identify related stocks that may benefit from the same catalyst.
-If context about today's top gainers is provided, compare the analysed stock against them.
 
-When TECHNICAL ANALYSIS data is provided, you MUST factor it into the 30-day prediction:
-- An overbought RSI (>70) after a big move often means a short-term pullback before any sustained move
-- An oversold RSI (<30) can signal a reversal/bounce opportunity
-- Price far above SMA20/SMA50 indicates the stock is extended and may consolidate
-- A golden cross (SMA20 > SMA50) is a medium-term bullish structure
-- Surging volume confirms institutional conviction behind the move
-- Combine technical signals with the fundamental catalyst to assess TIMING and MAGNITUDE of the 30-day move
+════════════════════════════════════════════════════
+HOW TO BUILD THE 30-DAY PREDICTION
+════════════════════════════════════════════════════
 
-When QUARTERLY RESULTS data is provided, treat it as the strongest fundamental signal:
-- RECOVERING/ACCELERATING revenue trend after a price move = fundamental confirmation, not just speculation
-- EXPANDING margins over 3+ consecutive quarters = operating leverage or pricing power — structurally bullish
-- DECELERATING earnings while the stock is up sharply = elevated reversal risk, downgrade your confidence
-- RECOVERING earnings (turning from negative to positive YoY) = early inflection point, often precedes multi-week re-rating
-- Weak or declining earnings + today's big price move = likely speculative; call it out clearly in key_risks
-- Use the quarterly context to set realistic predicted_change_pct: strong fundamentals justify higher confidence
+Think like a fundamental investor who uses technicals for timing.
+Fundamentals answer SHOULD THIS STOCK GO UP. Technicals answer WHEN AND BY HOW MUCH.
+
+STEP 1 — Establish fundamental quality (sets direction and base confidence)
+   Use FUNDAMENTALS + QUARTERLY EARNINGS together as the primary signal:
+   - Strong revenue growth + expanding margins + positive earnings trend = fundamentally sound → positive bias
+   - Weak or declining earnings while stock surges today = speculative move, no fundamental backing → low confidence, flag reversal risk
+   - Earnings inflecting from loss to profit YoY = early-stage re-rating, one of the strongest 30-day signals
+   - Raised guidance after an earnings beat = institutional re-valuation underway → high confidence positive
+   - High debt + weak margins = fragile — any macro headwind hits hard → reduce confidence, note in key_risks
+   - Strong fundamentals do not guarantee a 30-day gain but significantly raise the probability
+
+STEP 2 — Confirm with the catalyst (today's news)
+   Ask: does today's move have a real business reason behind it, or is it rumour/thin volume?
+   - Earnings beat, FDA approval, major partnership, contract win = real catalyst, sustains weeks
+   - Analyst upgrade, index inclusion, options activity = momentum-driven, fades faster
+   - No clear news = technically driven or speculative; lower your confidence
+
+STEP 3 — Use technicals to size and time the move (refines magnitude, does NOT override direction)
+   - RSI > 75 after a big up move: stock is stretched — even with strong fundamentals, expect near-term consolidation; reduce predicted_change_pct by 2-4%
+   - RSI < 35: oversold, likely bounce even if fundamentals are mixed
+   - Price > 10% above SMA20: extended, high probability of near-term pause before next leg
+   - Golden cross (SMA20 > SMA50) + volume spike (>2x avg): institutional accumulation confirms fundamental case
+   - MACD bullish crossover: momentum building, good timing for a sustained move
+   - Technicals SHARPEN the number — they do not set direction. A fundamentally weak stock with bullish RSI is still a weak stock.
+
+STEP 4 — Adjust for growth triggers (if provided)
+   - HIGH conviction trigger: well-researched specific catalyst → add 2-5% to predicted_change_pct, +0.05-0.10 to confidence
+   - MEDIUM conviction trigger: add to key_tailwinds, +0.03-0.05 to confidence
+   - OPTIONALITY trigger: add to key_tailwinds only, do not change base case
+
+════════════════════════════════════════════════════
+OUTPUT RULES
+════════════════════════════════════════════════════
+- predicted_change_pct: typical range -15% to +20% for 30-day horizon. Be calibrated, not optimistic by default.
+- prediction_confidence: 0.0–1.0.
+    > 0.75 = fundamentals strong + catalyst confirmed + technicals aligned. All three must agree.
+    0.55–0.74 = one or two signals missing or mixed.
+    < 0.55 = conflicting signals or no fundamental backing. State the conflict clearly in the outlook.
+- valuation_signal / growth_signal / debt_signal: populated from fundamentals data only.
+- key_risks: always include at least one fundamental risk and one technical risk (overbought / extended).
+- key_tailwinds: catalyst, earnings trend, and any HIGH/MEDIUM growth triggers.
+- If context about today's top gainers is provided, compare the analysed stock against them.
 
 Always respond in valid JSON matching the schema provided."""
 
@@ -204,17 +235,21 @@ class GainerAnalystAgent:
         gainers_context: list[StockGainer] | None = None,
         technicals_text: str | None = None,
         quarterly_text: str | None = None,
+        growth_triggers_context: str | None = None,
     ) -> tuple[GainerAnalysis, StockPrediction | None]:
         """
         Single Gemini call that returns both a GainerAnalysis and a StockPrediction.
         ~40-50 % faster than two sequential calls.
 
-        gainers_context:  top gainers from today's list — when supplied (i.e. the
-                          searched ticker is not in the gainer list) the model compares
-                          this stock against the day's winners.
-        technicals_text:  pre-formatted technical analysis block from services/technicals.py
-                          injected directly into the Gemini prompt so the model factors
-                          RSI / MACD / SMA / volume into the 30-day prediction.
+        gainers_context:         top gainers from today's list — when supplied (i.e. the
+                                 searched ticker is not in the gainer list) the model compares
+                                 this stock against the day's winners.
+        technicals_text:         pre-formatted technical analysis block from services/technicals.py
+                                 injected directly into the Gemini prompt so the model factors
+                                 RSI / MACD / SMA / volume into the 30-day prediction.
+        growth_triggers_context: formatted summary of cached GrowthTriggersReport — when
+                                 present, the model uses identified catalysts to calibrate
+                                 the predicted_change_pct magnitude and confidence.
         """
         if self._mock:
             log.info("gainer_analyst.mock_response", ticker=ticker)
@@ -256,7 +291,7 @@ class GainerAnalystAgent:
 
         raw = await self._call_gemini(
             ticker, change_pct, company_name, sector, news, fundamentals,
-            gainers_context, technicals_text, quarterly_text,
+            gainers_context, technicals_text, quarterly_text, growth_triggers_context,
         )
         try:
             analysis = GainerAnalysis(
@@ -327,6 +362,7 @@ class GainerAnalystAgent:
         gainers_context: list[StockGainer] | None,
         technicals_text: str | None = None,
         quarterly_text: str | None = None,
+        growth_triggers_context: str | None = None,
     ) -> dict[str, Any]:
         import asyncio
         import httpx
@@ -349,29 +385,50 @@ class GainerAnalystAgent:
                 "Populate the `comparison_to_gainers` field with 2-3 sentences."
             )
 
-        # Technical analysis section — injected when we have price history
-        tech_section = f"\n\n{technicals_text}" if technicals_text else ""
+        # Step 1b: Quarterly earnings — confirms or contradicts fundamental quality
+        quarterly_section = (
+            "\n\nSTEP 1 — QUARTERLY EARNINGS TREND (confirm fundamental quality — drives base confidence):\n"
+            + quarterly_text
+        ) if quarterly_text else ""
 
-        # Quarterly results — the strongest fundamental signal for 30-day prediction
-        quarterly_section = f"\n\n{quarterly_text}" if quarterly_text else ""
+        # Step 3: Technical — sizes and times the move, does not override direction
+        tech_section = (
+            "\n\nSTEP 3 — TECHNICAL SIGNALS (size and time the move — do not use to set direction):\n"
+            + technicals_text
+        ) if technicals_text else ""
+
+        # Step 4: Growth triggers — calibrates magnitude and confidence if deep-dive is cached
+        gt_section = (
+            "\n\nSTEP 4 — GROWTH TRIGGERS (adjust magnitude and confidence):\n"
+            + growth_triggers_context
+        ) if growth_triggers_context else ""
 
         # Use sign-aware format: Python's :+.1f gives "+5.3" or "-2.1"
         move_label = "DECLINED" if change_pct < 0 else "GAINED"
+
+        # Prompt section order matches signal priority from the system prompt:
+        # Fundamentals first (background context ⑤), then Quarterly (②), Technical (③),
+        # Growth Triggers (④), News (① — closest to the final instruction so the model
+        # associates the catalyst directly with the task).
         prompt = (
             f"Stock: {company_name} ({ticker})\n"
             f"Sector: {sector or 'Unknown'}\n"
             f"Today's move: {change_pct:+.1f}% ({move_label})\n\n"
-            f"RECENT NEWS:\n{headlines or 'No news available.'}\n\n"
-            f"FUNDAMENTALS:\n{fund_text}"
-            + tech_section
+            f"STEP 1 — FUNDAMENTALS (primary signal — sets direction and quality):\n{fund_text}"
             + quarterly_section
+            + f"\n\nSTEP 2 — TODAY'S CATALYST (confirms whether the move has a real business reason):\n"
+            f"{headlines or 'No news available.'}"
+            + tech_section
+            + gt_section
             + gainers_section
-            + "\n\nAnalyse why this stock moved today"
+            + "\n\nFollow the 4-step process from your instructions. "
+            "Fundamentals and quarterly earnings set the direction and base confidence. "
+            "The catalyst confirms or weakens it. Technicals size and time the move. "
+            "Growth triggers adjust the final magnitude.\n"
+            "Analyse why this stock moved today"
             + (" (it DECLINED — use 'fell/dropped/declined' language, NOT 'gained/surged')" if change_pct < 0 else "")
             + ", whether momentum is likely to continue, "
-            "and predict the 30-day outlook. Factor in the technical signals and quarterly "
-            "earnings trends when assessing timing and magnitude of the expected move. "
-            "Identify 2-4 related beneficiary tickers."
+            "and predict the 30-day outlook. Identify 2-4 related beneficiary tickers."
         )
 
         payload = {

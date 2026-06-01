@@ -26,6 +26,9 @@ export interface StockGainer {
   quality_score?: number;
   quality_label?: QualityLabel;
   signal_tier?: SignalTier;
+  /** Enriched at serve time from the analysis cache — null if no AI analysis run yet */
+  ai_prediction_pct?: number;
+  ai_prediction_confidence?: number;
 }
 
 export interface FundamentalsData {

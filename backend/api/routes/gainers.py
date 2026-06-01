@@ -45,6 +45,75 @@ router = APIRouter(prefix="/gainers", tags=["gainers"])
 log = get_logger(__name__)
 
 
+# ── Prediction enrichment ─────────────────────────────────────────────────────
+
+async def _enrich_with_predictions(
+    gainers: list[StockGainer],
+    market: Market,
+    cache: CacheBackend,
+) -> list[StockGainer]:
+    """
+    Batch-read the analysis cache for every gainer and inject cached
+    prediction data (predicted_change_pct, confidence) into each StockGainer.
+
+    This is a read-only enrichment — prediction data is never written to the
+    gainers list cache, so the two caches stay independent.
+    """
+    if not gainers:
+        return gainers
+
+    keys = [f"analysis:{market}:{g.ticker}" for g in gainers]
+    results = await asyncio.gather(*[cache.get(k) for k in keys], return_exceptions=True)
+
+    enriched: list[StockGainer] = []
+    for gainer, result in zip(gainers, results):
+        if isinstance(result, dict):
+            prediction = result.get("prediction") or {}
+            pct = prediction.get("predicted_change_pct")
+            conf = prediction.get("confidence")
+            if pct is not None:
+                gainer = gainer.model_copy(update={
+                    "ai_prediction_pct": round(pct, 1),
+                    "ai_prediction_confidence": round(conf, 2) if conf is not None else None,
+                })
+        enriched.append(gainer)
+    return enriched
+
+
+# ── Growth triggers context helper ────────────────────────────────────────────
+
+def _format_gt_context(gt_data: dict) -> str | None:
+    """
+    Convert cached GrowthTriggersReport dict into a compact prompt section.
+    Returns None if data is missing or malformed.
+    Called just before the gainer_analyst AI call — zero extra latency
+    because we only read from the cache that may already exist.
+    """
+    try:
+        triggers = gt_data.get("triggers") or []
+        if not triggers:
+            return None
+        lines = ["GROWTH TRIGGERS RESEARCH (from prior deep-dive analysis):"]
+        for t in triggers[:4]:
+            conviction = t.get("conviction", "MEDIUM")
+            name = t.get("name", "")
+            pl = t.get("p_and_l_impact", "")
+            timeline = t.get("timeline", "")
+            lines.append(f"  [{conviction}] {name}: {pl} · {timeline}")
+        upside = gt_data.get("upside_scenario") or ""
+        if upside:
+            # Trim to keep the prompt tight
+            lines.append(f"Upside scenario: {upside[:250]}")
+        lines.append(
+            "Use these catalysts to calibrate the 30-day prediction: "
+            "HIGH conviction triggers warrant higher predicted_change_pct magnitude "
+            "and confidence; OPTIONALITY triggers add upside but should not inflate base case."
+        )
+        return "\n".join(lines)
+    except Exception:
+        return None
+
+
 # ── Cache key helpers ─────────────────────────────────────────────────────────
 # No date in keys — expiry is controlled purely by TTL.
 # This means the cache survives midnight and doesn't cold-start every morning.
@@ -137,6 +206,7 @@ async def list_gainers(
         if cached:
             log.info("gainers.list_cache_hit", market=market, period=period)
             gainers = [StockGainer(**g) for g in cached["gainers"]]
+            gainers = await _enrich_with_predictions(gainers, market, cache)
             cached_summary = await cache.get(summary_key)
             summary = MarketSummary(**cached_summary) if cached_summary else None
             return GainersListResponse(
@@ -154,6 +224,7 @@ async def list_gainers(
             if stale:
                 log.warning("gainers.serving_stale_on_error", market=market, period=period, key=key)
                 gainers = [StockGainer(**g) for g in stale["gainers"]]
+                gainers = await _enrich_with_predictions(gainers, market, cache)
                 cached_summary = await cache.get(summary_key)
                 summary = MarketSummary(**cached_summary) if cached_summary else None
                 return GainersListResponse(
@@ -170,6 +241,7 @@ async def list_gainers(
         if lkg:
             log.info("gainers.serving_lkg_on_empty", market=market, period=period)
             gainers_lkg = [StockGainer(**g) for g in lkg["gainers"]]
+            gainers_lkg = await _enrich_with_predictions(gainers_lkg, market, cache)
             cached_summary = await cache.get(summary_key)
             summary = MarketSummary(**cached_summary) if cached_summary else None
             return GainersListResponse(
@@ -205,6 +277,7 @@ async def list_gainers(
             _prewarm_top_analysis(gainers[:5], market, cache, market_data, news_fetcher, gainer_analyst, settings)
         )
 
+    gainers = await _enrich_with_predictions(gainers, market, cache)
     return GainersListResponse(
         market=market, period=period, date=today_str(),
         gainers=gainers, summary=summary, from_cache=False,
@@ -504,6 +577,14 @@ async def get_gainer_analysis(
         except Exception as exc:
             log.warning("gainers.technicals_failed", ticker=resolved_ticker, error=str(exc))
 
+    # If Growth Triggers results are already cached for this ticker, inject them
+    # as context so the 30-day prediction magnitude/confidence reflects real catalysts.
+    # Zero latency cost — we only read from cache; GT is never triggered here.
+    gt_raw = await cache.get(f"growth-triggers:{market}:{resolved_ticker}")
+    gt_context: str | None = _format_gt_context(gt_raw) if gt_raw else None
+    if gt_context:
+        log.info("gainers.gt_context_injected", ticker=resolved_ticker)
+
     # Single combined Gemini call — analysis + 30-day prediction (now includes technical signals)
     analysis = None
     prediction = None
@@ -519,6 +600,7 @@ async def get_gainer_analysis(
             gainers_context=gainers_context,
             technicals_text=technicals_text,
             quarterly_text=quarterly_text,
+            growth_triggers_context=gt_context,
         )
     except Exception as exc:
         log.error("gainers.ai_failed", ticker=resolved_ticker, error=str(exc))
@@ -534,6 +616,7 @@ async def get_gainer_analysis(
                 gainers_context=gainers_context,
                 technicals_text=technicals_text,
                 quarterly_text=quarterly_text,
+                growth_triggers_context=gt_context,
             )
             is_mock_fallback = True
             log.info("gainers.ai_fallback_mock_used", ticker=resolved_ticker)

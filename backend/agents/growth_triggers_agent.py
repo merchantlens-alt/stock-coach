@@ -359,10 +359,9 @@ class GrowthTriggersAgent:
             "generationConfig": {
                 "temperature": 0.2,
                 "maxOutputTokens": 2500,
-                # Cap thinking to ~1 k tokens — grounded calls already have significant
-                # latency from the Google Search round-trip; unbounded thinking pushes
-                # total wall time past the 90 s timeout we allow for this endpoint.
-                "thinkingConfig": {"thinkingBudget": 1024},
+                # Disable thinking — the Google Search round-trip already adds
+                # significant latency; thinking on top pushes past the timeout.
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
 

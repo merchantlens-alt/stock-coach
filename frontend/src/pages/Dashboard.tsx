@@ -49,7 +49,7 @@ export function Dashboard({ jumpTo, onJumpConsumed, onBuildThesis }: DashboardPr
   const [period, setPeriod] = useState<Period>("1d");
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [searchedTicker, setSearchedTicker] = useState<string | null>(null);
-  const [tierFilter, setTierFilter] = useState<SignalTier | "all">("all");
+  const [tierFilter, setTierFilter] = useState<SignalTier | "all" | "bullish">("all");
   const queryClient = useQueryClient();
 
   // Read saved conviction theses from localStorage so we can cross-reference with gainers
@@ -88,11 +88,14 @@ export function Dashboard({ jumpTo, onJumpConsumed, onBuildThesis }: DashboardPr
   const allGainers = gainersData?.gainers ?? [];
   const filteredGainers = tierFilter === "all"
     ? allGainers
+    : tierFilter === "bullish"
+    ? allGainers.filter(g => g.ai_prediction_pct != null && g.ai_prediction_pct > 0)
     : allGainers.filter(g => (g.signal_tier ?? "mover") === tierFilter);
   const tierCounts = {
     confirmed: allGainers.filter(g => (g.signal_tier ?? "mover") === "confirmed").length,
     catalyst:  allGainers.filter(g => (g.signal_tier ?? "mover") === "catalyst").length,
     mover:     allGainers.filter(g => (g.signal_tier ?? "mover") === "mover").length,
+    bullish:   allGainers.filter(g => g.ai_prediction_pct != null && g.ai_prediction_pct > 0).length,
   };
 
   // Two parallel hooks: fast data (~3-5 s) + slow AI (~10-15 s).
@@ -214,10 +217,11 @@ export function Dashboard({ jumpTo, onJumpConsumed, onBuildThesis }: DashboardPr
           <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-1.5 overflow-x-auto">
             {(
               [
-                { key: "all",       label: "All",       count: allGainers.length, style: "bg-gray-900 text-white", inactive: "text-gray-600 hover:bg-gray-100" },
-                { key: "confirmed", label: "Confirmed", count: tierCounts.confirmed, style: "bg-green-600 text-white", inactive: "text-green-700 hover:bg-green-50" },
-                { key: "catalyst",  label: "Catalyst",  count: tierCounts.catalyst, style: "bg-indigo-600 text-white", inactive: "text-indigo-700 hover:bg-indigo-50" },
-                { key: "mover",     label: "Mover",     count: tierCounts.mover, style: "bg-gray-500 text-white", inactive: "text-gray-500 hover:bg-gray-100" },
+                { key: "all",       label: "All",            count: allGainers.length,    style: "bg-gray-900 text-white",    inactive: "text-gray-600 hover:bg-gray-100" },
+                { key: "bullish",   label: "🟢 Bullish Picks", count: tierCounts.bullish,   style: "bg-emerald-600 text-white", inactive: "text-emerald-700 hover:bg-emerald-50" },
+                { key: "confirmed", label: "Confirmed",       count: tierCounts.confirmed, style: "bg-green-600 text-white",   inactive: "text-green-700 hover:bg-green-50" },
+                { key: "catalyst",  label: "Catalyst",        count: tierCounts.catalyst,  style: "bg-indigo-600 text-white",  inactive: "text-indigo-700 hover:bg-indigo-50" },
+                { key: "mover",     label: "Mover",           count: tierCounts.mover,     style: "bg-gray-500 text-white",    inactive: "text-gray-500 hover:bg-gray-100" },
               ] as const
             ).map(({ key, label, count, style, inactive }) => (
               <button

@@ -63,9 +63,10 @@ async def analyse_conviction(
 
     try:
         conviction = await analyst.analyse(body.belief, body.market)
-    except AIAgentError as exc:
-        log.error("conviction.ai_failed", error=str(exc))
-        # Fallback to mock so users always see something
+    except Exception as exc:
+        # Catches AIAgentError, httpx.HTTPStatusError, timeouts, and any other failure.
+        # Always fall back to mock so the user sees something rather than a 500.
+        log.error("conviction.ai_failed", error=str(exc), error_type=type(exc).__name__)
         from core.config import get_settings
         from agents.thesis_analyst import ThesisAnalystAgent as _Agent
         settings = get_settings()

@@ -124,6 +124,13 @@ async def get_growth_triggers(
     # ── Cache only successful reports — never cache the fallback error stub ──────
     if not report.is_error:
         await cache.set(key, report.model_dump(), _CACHE_TTL)
+        # Invalidate the analysis cache so the next Today's Analysis request
+        # regenerates with GT catalysts injected into the prediction prompt.
+        # This makes the 30-day prediction smarter on the very next tab switch
+        # rather than waiting for the 6h analysis TTL to expire naturally.
+        analysis_key = f"analysis:{market}:{resolved_ticker}"
+        await cache.delete(analysis_key)
+        log.info("growth_triggers.analysis_cache_invalidated", ticker=resolved_ticker)
     else:
         log.warning("growth_triggers.skipping_cache_on_error", ticker=resolved_ticker)
 

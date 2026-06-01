@@ -96,6 +96,10 @@ class StockGainer(BaseModel):
     quality_score: Optional[float] = None
     quality_label: Optional[QualityLabel] = None
     signal_tier: SignalTier = "mover"
+    # Enriched at serve time from the analysis cache — never stored in the gainers list cache.
+    # None = no cached prediction yet; present = AI has analysed this stock before.
+    ai_prediction_pct: Optional[float] = None
+    ai_prediction_confidence: Optional[float] = None
 
     @field_validator("change_pct")
     @classmethod

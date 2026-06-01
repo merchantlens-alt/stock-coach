@@ -265,7 +265,13 @@ class ThesisAnalystAgent:
 
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(url, json=payload, headers={"Authorization": f"Bearer {token}"})
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                log.error(
+                    "thesis_analyst.gemini_http_error",
+                    status=resp.status_code,
+                    body=resp.text[:500],
+                )
+                raise AIAgentError(f"Gemini HTTP {resp.status_code}: {resp.text[:200]}")
 
         raw_resp = resp.json()
 

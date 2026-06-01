@@ -1,4 +1,4 @@
-import { Flame, Lightbulb, TrendingUp, Zap } from "lucide-react";
+import { ArrowDown, ArrowUp, Flame, Lightbulb, TrendingUp, Zap } from "lucide-react";
 import type { Period, QualityLabel, SignalTier, StockGainer } from "../types";
 
 const PERIOD_SUFFIX: Record<string, string> = { "1d": "", "1w": " 1W", "1m": " 1M" };
@@ -102,6 +102,28 @@ export function GainerCard({ gainer, isSelected, isLoading, period = "1d", onCli
         </span>
         <span>Vol {formatVolume(gainer.volume)}</span>
       </div>
+
+      {/* AI 30-day prediction badge — shown when analysis has been run for this stock */}
+      {gainer.ai_prediction_pct != null && (
+        <div className={`mt-2 flex items-center gap-1.5 text-xs font-semibold rounded-lg px-2 py-1 ${
+          gainer.ai_prediction_pct >= 0
+            ? "bg-emerald-50 text-emerald-700"
+            : "bg-red-50 text-red-600"
+        }`}>
+          {gainer.ai_prediction_pct >= 0
+            ? <ArrowUp size={11} className="shrink-0" />
+            : <ArrowDown size={11} className="shrink-0" />
+          }
+          <span>
+            AI 30d: {gainer.ai_prediction_pct >= 0 ? "+" : ""}{gainer.ai_prediction_pct.toFixed(1)}%
+          </span>
+          {gainer.ai_prediction_confidence != null && (
+            <span className="font-normal opacity-60 ml-0.5">
+              · {Math.round(gainer.ai_prediction_confidence * 100)}% conf
+            </span>
+          )}
+        </div>
+      )}
 
       {convictionThemes && convictionThemes.length > 0 && (
         <div className="mt-2 flex items-center gap-1.5 text-xs text-indigo-600 bg-indigo-50 rounded-lg px-2 py-1">
