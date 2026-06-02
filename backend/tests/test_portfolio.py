@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -356,6 +356,63 @@ class TestSummary:
         assert summary["wins"] == 1
         assert summary["losses"] == 0
         assert summary["win_rate"] == 1.0
+
+
+# ── TestPortfolioPrices ────────────────────────────────────────────────────────
+
+def _make_yf_batch(prices: dict[str, float]):
+    """Build a fake yf.Tickers()-style object with fast_info prices."""
+    batch = MagicMock()
+    tickers_dict = {}
+    for ticker, price in prices.items():
+        fi = MagicMock()
+        fi.last_price = price
+        fi.regular_market_price = price
+        ticker_obj = MagicMock()
+        ticker_obj.fast_info = fi
+        tickers_dict[ticker] = ticker_obj
+    batch.tickers = tickers_dict
+    return batch
+
+
+class TestPortfolioPrices:
+    def test_empty_tickers_returns_empty(self, client: TestClient) -> None:
+        resp = client.get("/api/portfolio/prices?tickers=&market=us")
+        assert resp.status_code == 200
+        assert resp.json()["prices"] == {}
+
+    def test_valid_tickers_returns_price_map(self, client: TestClient) -> None:
+        fake_batch = _make_yf_batch({"NVDA": 487.25, "AAPL": 212.50})
+        with patch("api.routes.portfolio.asyncio.to_thread", return_value={"NVDA": 487.25, "AAPL": 212.50}):
+            resp = client.get("/api/portfolio/prices?tickers=NVDA,AAPL&market=us")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "prices" in data
+        assert data["prices"]["NVDA"] == pytest.approx(487.25)
+        assert data["prices"]["AAPL"] == pytest.approx(212.50)
+
+    def test_tickers_capped_at_20(self, client: TestClient) -> None:
+        """More than 20 tickers should be silently truncated — no error."""
+        many = ",".join([f"STK{i}" for i in range(25)])
+        with patch("api.routes.portfolio.asyncio.to_thread", return_value={}):
+            resp = client.get(f"/api/portfolio/prices?tickers={many}&market=us")
+        assert resp.status_code == 200
+        assert "prices" in resp.json()
+
+    def test_failed_ticker_omitted_gracefully(self, client: TestClient) -> None:
+        """If yfinance fails for a ticker, it should be omitted, not crash."""
+        with patch("api.routes.portfolio.asyncio.to_thread", return_value={"AAPL": 212.50}):
+            resp = client.get("/api/portfolio/prices?tickers=FAKEXXX,AAPL&market=us")
+        assert resp.status_code == 200
+        prices = resp.json()["prices"]
+        assert "AAPL" in prices
+        assert "FAKEXXX" not in prices
+
+    def test_india_market_returns_200(self, client: TestClient) -> None:
+        with patch("api.routes.portfolio.asyncio.to_thread", return_value={"RELIANCE": 2950.0}):
+            resp = client.get("/api/portfolio/prices?tickers=RELIANCE&market=india")
+        assert resp.status_code == 200
+        assert "prices" in resp.json()
 
 
 # ── TestRouteConflict ──────────────────────────────────────────────────────────

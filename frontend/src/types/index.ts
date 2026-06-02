@@ -351,6 +351,11 @@ export interface PortfolioSummary {
   win_rate?: number | null;
 }
 
+/** Returned by GET /portfolio/prices */
+export interface PortfolioPricesResponse {
+  prices: Record<string, number>;
+}
+
 // ── Catalyst Scanner ──────────────────────────────────────────────────────────
 
 export interface CatalystPlay {

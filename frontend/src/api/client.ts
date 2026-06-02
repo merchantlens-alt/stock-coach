@@ -1,4 +1,4 @@
-import type { AddPortfolioEntryRequest, CatalystScanResponse, ConvictionRequest, ConvictionResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, PortfolioEntry, PortfolioSummary, PriceHistory, RadarResponse, StockAnalysisResponse } from "../types";
+import type { AddPortfolioEntryRequest, CatalystScanResponse, ConvictionRequest, ConvictionResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PriceHistory, RadarResponse, StockAnalysisResponse } from "../types";
 
 const BASE_URL = "/api";
 
@@ -90,4 +90,11 @@ export const api = {
 
   markExpiredPortfolio: (): Promise<{ marked_expired: number }> =>
     fetchJSON("/portfolio/resolve-expired", { method: "POST" }),
+
+  /**
+   * Batch-fetch current market prices for a list of portfolio tickers.
+   * Tickers missing from the response simply have no live price available.
+   */
+  getPortfolioPrices: (tickers: string[], market: Market): Promise<PortfolioPricesResponse> =>
+    fetchJSON(`/portfolio/prices?tickers=${tickers.join(",")}&market=${market}`),
 };

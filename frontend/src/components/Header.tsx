@@ -1,4 +1,4 @@
-import { Lightbulb, Radio, Target, TrendingUp, Zap } from "lucide-react";
+import { Lightbulb, Radio, Target, TrendingUp } from "lucide-react";
 import type { AppTab } from "../App";
 
 interface HeaderProps {
@@ -8,22 +8,16 @@ interface HeaderProps {
 
 const TABS: { key: AppTab; label: string; icon: React.ReactNode; sub: string }[] = [
   {
-    key:   "scanner",
-    label: "SCANNER",
-    icon:  <Zap size={12} />,
-    sub:   "Moving now",
+    key:   "gainers",
+    label: "MARKET",
+    icon:  <TrendingUp size={12} />,
+    sub:   "Movers & Catalysts",
   },
   {
     key:   "radar",
-    label: "THEMES",
+    label: "RADAR",
     icon:  <Radio size={12} />,
     sub:   "What's building",
-  },
-  {
-    key:   "gainers",
-    label: "GAINERS",
-    icon:  <TrendingUp size={12} />,
-    sub:   "Top movers",
   },
   {
     key:   "conviction",
@@ -72,7 +66,7 @@ export function Header({ activeTab, onTabChange }: HeaderProps) {
         ))}
       </nav>
 
-      {/* Spacer to balance layout */}
+      {/* Spacer */}
       <div className="w-8 sm:w-32" />
     </header>
   );

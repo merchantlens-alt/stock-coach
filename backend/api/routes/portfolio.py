@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from models.portfolio import (
     AddPortfolioEntryRequest,
@@ -19,6 +20,46 @@ from core.logging import get_logger
 
 router = APIRouter(tags=["portfolio"])
 log = get_logger(__name__)
+
+
+def _fetch_prices_sync(tickers: list[str], market: str) -> dict[str, float]:
+    """Blocking yfinance batch price fetch — run inside asyncio.to_thread."""
+    import yfinance as yf
+
+    suffix = ".NS" if market == "india" else ""
+    yf_tickers = [f"{t}{suffix}" for t in tickers]
+    prices: dict[str, float] = {}
+    try:
+        # yf.Tickers handles multi-ticker fast_info efficiently
+        batch = yf.Tickers(" ".join(yf_tickers))
+        for ticker, yf_ticker in zip(tickers, yf_tickers):
+            try:
+                fi = batch.tickers[yf_ticker].fast_info
+                price = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
+                if price and float(price) > 0:
+                    prices[ticker] = round(float(price), 2)
+            except Exception:
+                pass
+    except Exception as exc:
+        log.warning("portfolio.prices_batch_failed", error=str(exc))
+    return prices
+
+
+@router.get("/portfolio/prices")
+async def get_portfolio_prices(
+    tickers: Annotated[str, Query(description="Comma-separated ticker symbols, max 20")],
+    market: Annotated[str, Query()] = "us",
+) -> dict:
+    """
+    Batch-fetch current market prices for portfolio tickers.
+    Returns {prices: {TICKER: price}} — missing tickers are silently omitted.
+    """
+    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()][:20]
+    if not ticker_list:
+        return {"prices": {}}
+    prices = await asyncio.to_thread(_fetch_prices_sync, ticker_list, market)
+    log.info("portfolio.prices_fetched", market=market, requested=len(ticker_list), returned=len(prices))
+    return {"prices": prices}
 
 
 @router.get("/portfolio", response_model=PortfolioSummary)

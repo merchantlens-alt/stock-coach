@@ -1,14 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { Header } from "./components/Header";
-import { CatalystPage } from "./pages/CatalystPage";
 import { ConvictionPage } from "./pages/ConvictionPage";
 import { Dashboard } from "./pages/Dashboard";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { RadarPage } from "./pages/RadarPage";
 import type { Market } from "./types";
 
-export type AppTab = "scanner" | "radar" | "gainers" | "conviction" | "portfolio";
+// "scanner" tab has been merged into "gainers" as a catalyst view mode.
+export type AppTab = "gainers" | "radar" | "conviction" | "portfolio";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -19,28 +19,32 @@ const queryClient = new QueryClient({
 });
 
 export default function App() {
-  const [tab, setTab] = useState<AppTab>("scanner");
+  const [tab, setTab] = useState<AppTab>("gainers");
 
   // ── Cross-tab navigation state ──────────────────────────────────────────────
-  // Scanner → Gainers: click "Analyse" on a play → open that stock's detail
+
+  // Gainers panel jump: click "Analyse" anywhere → open stock detail in Market tab
   const [jumpTo, setJumpTo] = useState<{ market: Market; ticker: string } | null>(null);
 
-  // Radar → Scanner: click "Find moving stocks" on a signal → filter to those tickers
-  const [scannerSpotlight, setScannerSpotlight] = useState<string[]>([]);
+  // Scanner view inside the Market/Gainers tab — controlled by Dashboard internally,
+  // but Radar can push "spotlight" tickers and switch the view to catalyst mode.
+  const [scannerSpotlight, setScannerSpotlight]           = useState<string[]>([]);
   const [scannerSpotlightMarket, setScannerSpotlightMarket] = useState<Market>("us");
 
-  // Analysis → Conviction: click "Build Thesis" → pre-fill the belief input
+  // Analysis → Conviction: "Build Thesis" pre-fills the belief input
   const [convictionBelief, setConvictionBelief] = useState("");
 
   function handleSelectFromScanner(market: Market, ticker: string) {
+    // Open in the Market tab's analysis panel (no extra tab switch needed now)
     setJumpTo({ market, ticker });
     setTab("gainers");
   }
 
   function handleFindMoving(tickers: string[], market: Market) {
+    // Radar → Market tab, catalyst view with spotlight
     setScannerSpotlight(tickers);
     setScannerSpotlightMarket(market);
-    setTab("scanner");
+    setTab("gainers");
   }
 
   function handleBuildThesis(belief: string) {
@@ -53,23 +57,19 @@ export default function App() {
       <div className="flex flex-col h-screen bg-gray-50">
         <Header activeTab={tab} onTabChange={setTab} />
 
-        {tab === "scanner" && (
-          <CatalystPage
-            onSelectStock={handleSelectFromScanner}
-            spotlightTickers={scannerSpotlight}
-            spotlightMarket={scannerSpotlightMarket}
-            onClearSpotlight={() => setScannerSpotlight([])}
-          />
-        )}
-        {tab === "radar" && (
-          <RadarPage onFindMoving={handleFindMoving} />
-        )}
         {tab === "gainers" && (
           <Dashboard
             jumpTo={jumpTo}
             onJumpConsumed={() => setJumpTo(null)}
             onBuildThesis={handleBuildThesis}
+            scannerSpotlight={scannerSpotlight}
+            scannerSpotlightMarket={scannerSpotlightMarket}
+            onClearSpotlight={() => setScannerSpotlight([])}
+            onSelectFromScanner={handleSelectFromScanner}
           />
+        )}
+        {tab === "radar" && (
+          <RadarPage onFindMoving={handleFindMoving} />
         )}
         {tab === "conviction" && (
           <ConvictionPage initialBelief={convictionBelief} onBeliefConsumed={() => setConvictionBelief("")} />
