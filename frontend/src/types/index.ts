@@ -60,7 +60,10 @@ export interface NewsItem {
 
 export interface GainerAnalysis {
   ticker: string;
-  why_it_gained: string;
+  /** New field — direction-neutral explanation of today's move */
+  why_it_moved?: string;
+  /** Legacy field kept for backward-compat with cached responses */
+  why_it_gained?: string;
   key_catalysts: string[];
   catalyst_type: CatalystType;
   sentiment: Sentiment;

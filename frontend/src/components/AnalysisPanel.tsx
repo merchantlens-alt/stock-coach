@@ -1027,7 +1027,10 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
                   <ConfidencePill value={ai.analysis.confidence} />
                 </div>
 
-                <p className="text-sm text-gray-700 leading-relaxed">{ai.analysis.why_it_gained}</p>
+                <p className="text-sm text-gray-700 leading-relaxed">
+                  {/* why_it_moved is the new field; why_it_gained kept for cached responses */}
+                  {ai.analysis.why_it_moved || ai.analysis.why_it_gained}
+                </p>
 
                 <ul className="mt-3 space-y-1.5">
                   {ai.analysis.key_catalysts.map((c, i) => (

@@ -139,8 +139,14 @@ class NewsItem(BaseModel):
 
 class GainerAnalysis(BaseModel):
     ticker: str
-    why_it_gained: str
+    why_it_moved: str = ""     # direction-neutral: "fell" for declines, "surged" for gains
+    why_it_gained: str = ""    # legacy alias — kept for backward-compat with cached responses
     key_catalysts: list[str]
+
+    @property
+    def move_explanation(self) -> str:
+        """Return whichever field is populated — new cache uses why_it_moved."""
+        return self.why_it_moved or self.why_it_gained
     catalyst_type: CatalystType
     sentiment: Sentiment
     is_sustained: bool

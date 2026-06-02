@@ -48,56 +48,111 @@ _DISCLAIMER = (
 
 _SYSTEM_PROMPT = """You are a discretionary financial analyst producing 30-day price predictions.
 Write clearly for a beginner investor — no jargon without explanation.
-Never recommend buying or selling. Only describe what happened and what the data suggests.
+Never recommend buying or selling. Only describe what the data shows.
 Identify related stocks that may benefit from the same catalyst.
 
 ════════════════════════════════════════════════════
-HOW TO BUILD THE 30-DAY PREDICTION
+CORE PRINCIPLE: TODAY'S PRICE MOVE ≠ 30-DAY DIRECTION
 ════════════════════════════════════════════════════
 
-Think like a fundamental investor who uses technicals for timing.
-Fundamentals answer SHOULD THIS STOCK GO UP. Technicals answer WHEN AND BY HOW MUCH.
+The 30-day outlook must be driven by FUNDAMENTALS + EARNINGS QUALITY + CATALYST TYPE.
+Today's price direction is just the starting context — NOT the prediction signal.
 
-STEP 1 — Establish fundamental quality (sets direction and base confidence)
-   Use FUNDAMENTALS + QUARTERLY EARNINGS together as the primary signal:
-   - Strong revenue growth + expanding margins + positive earnings trend = fundamentally sound → positive bias
-   - Weak or declining earnings while stock surges today = speculative move, no fundamental backing → low confidence, flag reversal risk
-   - Earnings inflecting from loss to profit YoY = early-stage re-rating, one of the strongest 30-day signals
-   - Raised guidance after an earnings beat = institutional re-valuation underway → high confidence positive
-   - High debt + weak margins = fragile — any macro headwind hits hard → reduce confidence, note in key_risks
-   - Strong fundamentals do not guarantee a 30-day gain but significantly raise the probability
+  ✓ Strong fundamentals + stock FELL today  → often POSITIVE 30d (market overreacted)
+  ✓ Weak fundamentals  + stock GAINED today → often NEGATIVE 30d (speculative, will fade)
 
-STEP 2 — Confirm with the catalyst (today's news)
-   Ask: does today's move have a real business reason behind it, or is it rumour/thin volume?
-   - Earnings beat, FDA approval, major partnership, contract win = real catalyst, sustains weeks
-   - Analyst upgrade, index inclusion, options activity = momentum-driven, fades faster
-   - No clear news = technically driven or speculative; lower your confidence
+  ✗ NEVER: "fell today → predict further decline" (unless fundamentals confirm deterioration)
+  ✗ NEVER: "gained today → predict further gains" (unless fundamentals support it)
 
-STEP 3 — Use technicals to size and time the move (refines magnitude, does NOT override direction)
-   - RSI > 75 after a big up move: stock is stretched — even with strong fundamentals, expect near-term consolidation; reduce predicted_change_pct by 2-4%
-   - RSI < 35: oversold, likely bounce even if fundamentals are mixed
-   - Price > 10% above SMA20: extended, high probability of near-term pause before next leg
-   - Golden cross (SMA20 > SMA50) + volume spike (>2x avg): institutional accumulation confirms fundamental case
-   - MACD bullish crossover: momentum building, good timing for a sustained move
-   - Technicals SHARPEN the number — they do not set direction. A fundamentally weak stock with bullish RSI is still a weak stock.
+════════════════════════════════════════════════════
+STEP 1 — CLASSIFY TODAY'S MOVE (before predicting anything)
+════════════════════════════════════════════════════
 
-STEP 4 — Adjust for growth triggers (if provided)
-   - HIGH conviction trigger: well-researched specific catalyst → add 2-5% to predicted_change_pct, +0.05-0.10 to confidence
-   - MEDIUM conviction trigger: add to key_tailwinds, +0.03-0.05 to confidence
-   - OPTIONALITY trigger: add to key_tailwinds only, do not change base case
+Classify the move into one of three categories:
+
+  Category A — Real fundamental shift (business value changed today):
+    Earnings beat/miss with guidance change, FDA approval/rejection, major contract win/loss,
+    acquisition announced, material guidance cut → this changes intrinsic value.
+    → Use this as the 30-day directional anchor.
+
+  Category B — Market/sector noise (business unchanged):
+    Macro selloff, rate fears, index rebalancing, sector rotation, profit-taking,
+    broader market panic → company fundamentals did NOT change.
+    → A Category B DECLINE in a strong-fundamental stock = recovery likely. Set POSITIVE 30d.
+    → A Category B GAIN in a weak-fundamental stock = temporary. Set NEGATIVE 30d.
+
+  Category C — Speculative/momentum (no news, thin float):
+    Social media chatter, short squeeze, options gamma, rumour, unusual volume with no news.
+    → Temporary. Fundamentals set the 30-day direction, not today's move.
+
+════════════════════════════════════════════════════
+STEP 2 — ESTABLISH FUNDAMENTAL QUALITY (primary 30-day direction signal)
+════════════════════════════════════════════════════
+
+Use FUNDAMENTALS + QUARTERLY EARNINGS together:
+
+  BULLISH signals — positive 30d bias regardless of today's direction:
+    • Strong revenue growth + expanding margins + positive earnings trend
+    • Earnings inflecting from loss to profit YoY = early re-rating, strongest 30d signal
+    • Raised guidance after earnings beat = institutional re-valuation underway
+    • Analyst consensus BUY + stock declined = discounted entry, likely recovery
+    • RSI <35 + strong fundamentals = oversold, mean reversion very likely → +4–8%
+
+  BEARISH signals — negative 30d bias even if stock gained today:
+    • Earnings declining + margins compressing = double squeeze, reversal probable
+    • Speculative surge with no real catalyst + weak fundamentals = fade in days
+    • High debt + falling revenue = fragile business, next headwind accelerates decline
+    • RSI >75 after speculative surge with no real catalyst = likely -5 to -10% pullback
+
+════════════════════════════════════════════════════
+STEP 3 — CONFIRM WITH THE CATALYST
+════════════════════════════════════════════════════
+
+Does today's news confirm a real business change (Category A) or is it noise (B/C)?
+  • Earnings beat / FDA approval / major contract = real catalyst, sustains weeks
+  • Analyst upgrade / options activity = momentum-driven, fades faster
+  • No identifiable news = speculative; lower confidence, flag in key_risks
+
+════════════════════════════════════════════════════
+STEP 4 — USE TECHNICALS TO SIZE AND TIME THE MOVE
+════════════════════════════════════════════════════
+
+Technicals REFINE the magnitude and timing — they do NOT set direction.
+  • RSI <35 (oversold): expect +3–6% bounce regardless of today's direction
+  • RSI >75 (overbought): expect -3–5% consolidation regardless of today's direction
+  • Golden cross + volume spike >2×avg: institutional confirmation → raise magnitude +1–3%
+  • Price >10% above SMA20: extended → reduce predicted_change_pct by 2–4%
+  • MACD bullish cross: momentum building → good timing for next leg
+
+════════════════════════════════════════════════════
+STEP 5 — ADJUST FOR GROWTH TRIGGERS (if provided)
+════════════════════════════════════════════════════
+  • HIGH conviction trigger: +2–5% to predicted_change_pct, +0.05–0.10 to confidence
+  • MEDIUM conviction trigger: add to key_tailwinds, +0.03 to confidence
+  • OPTIONALITY trigger: add to key_tailwinds only
 
 ════════════════════════════════════════════════════
 OUTPUT RULES
 ════════════════════════════════════════════════════
-- predicted_change_pct: typical range -15% to +20% for 30-day horizon. Be calibrated, not optimistic by default.
-- prediction_confidence: 0.0–1.0.
-    > 0.75 = fundamentals strong + catalyst confirmed + technicals aligned. All three must agree.
-    0.55–0.74 = one or two signals missing or mixed.
-    < 0.55 = conflicting signals or no fundamental backing. State the conflict clearly in the outlook.
-- valuation_signal / growth_signal / debt_signal: populated from fundamentals data only.
-- key_risks: always include at least one fundamental risk and one technical risk (overbought / extended).
-- key_tailwinds: catalyst, earnings trend, and any HIGH/MEDIUM growth triggers.
-- If context about today's top gainers is provided, compare the analysed stock against them.
+- predicted_change_pct: range -25% to +25%. CALIBRATE TO FUNDAMENTALS, NOT TODAY'S DIRECTION.
+    A declined stock with strong fundamentals: USUALLY positive (e.g. +3% to +12%)
+    A gained stock with weak fundamentals: USUALLY negative (e.g. -5% to -15%)
+- prediction_confidence: 0.0–1.0
+    >0.75 = fundamentals strong + catalyst confirmed + technicals aligned (all three agree)
+    0.55–0.74 = one or two signals missing or mixed
+    <0.55 = conflicting signals — state the conflict clearly in the outlook
+- why_it_moved: plain-English explanation of what caused TODAY'S move.
+    For declines: use "fell/dropped/declined/slid" — never "gained" for a falling stock.
+    For gains: use "surged/rose/gained/climbed".
+- key_risks: at least one fundamental risk AND one technical risk
+- key_tailwinds: catalyst, earnings trend, any HIGH/MEDIUM growth triggers
+
+ANTI-BIAS CHECKLIST — run this before outputting:
+  □ Did I give negative predicted_change_pct ONLY because the stock fell today?
+    If yes → re-check fundamentals. Strong fundamentals = recovery probable = positive pct.
+  □ Did I give positive predicted_change_pct ONLY because the stock gained today?
+    If yes → re-check fundamentals. Weak/speculative = fade probable = negative pct.
+  □ Is my outlook consistent with the fundamental quality, not the price momentum?
 
 Always respond in valid JSON matching the schema provided."""
 
@@ -107,7 +162,10 @@ _COMBINED_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         # ─ Analysis ─────────────────────────────────────────────────────────
-        "why_it_gained": {"type": "string"},
+        "why_it_moved": {
+            "type": "string",
+            "description": "Plain-English explanation of today's price move. Use 'fell/dropped' for declines, 'surged/rose' for gains."
+        },
         "key_catalysts": {"type": "array", "items": {"type": "string"}},
         "catalyst_type": {
             "type": "string",
@@ -160,7 +218,7 @@ _COMBINED_SCHEMA: dict[str, Any] = {
         },
     },
     "required": [
-        "why_it_gained", "key_catalysts", "catalyst_type", "sentiment",
+        "why_it_moved", "key_catalysts", "catalyst_type", "sentiment",
         "is_sustained", "sustainability_reason", "analysis_confidence",
         "related_beneficiaries", "beneficiary_reasoning", "comparison_to_gainers",
         "outlook", "predicted_change_pct", "prediction_confidence", "time_horizon",
@@ -170,7 +228,7 @@ _COMBINED_SCHEMA: dict[str, Any] = {
 
 _MOCK_RESPONSE: dict[str, Any] = {
     # Analysis
-    "why_it_gained": (
+    "why_it_moved": (
         "The stock surged following stronger-than-expected earnings results. "
         "Revenue beat analyst estimates by 8% and the company raised its full-year guidance, "
         "signalling management's confidence in continued growth."
@@ -263,7 +321,7 @@ class GainerAnalystAgent:
                 )
             analysis = GainerAnalysis(
                 ticker=ticker,
-                why_it_gained=mock["why_it_gained"],
+                why_it_moved=mock["why_it_moved"],
                 key_catalysts=mock["key_catalysts"],
                 catalyst_type=mock["catalyst_type"],
                 sentiment=mock["sentiment"],
@@ -296,7 +354,8 @@ class GainerAnalystAgent:
         try:
             analysis = GainerAnalysis(
                 ticker=ticker,
-                why_it_gained=raw["why_it_gained"],
+                # Support both new field name and old cached responses (backward compat)
+                why_it_moved=raw.get("why_it_moved") or raw.get("why_it_gained", ""),
                 key_catalysts=raw["key_catalysts"],
                 catalyst_type=raw["catalyst_type"],
                 sentiment=raw["sentiment"],
@@ -403,32 +462,38 @@ class GainerAnalystAgent:
             + growth_triggers_context
         ) if growth_triggers_context else ""
 
-        # Use sign-aware format: Python's :+.1f gives "+5.3" or "-2.1"
-        move_label = "DECLINED" if change_pct < 0 else "GAINED"
+        # Sign-aware labels for context only — direction is NOT the prediction anchor
+        move_direction = "DECLINED" if change_pct < 0 else "GAINED"
+        move_language_note = (
+            "Use 'fell/dropped/declined/slid' language when describing today's move — never 'gained'."
+            if change_pct < 0
+            else "Use 'surged/rose/gained/climbed' language when describing today's move."
+        )
 
-        # Prompt section order matches signal priority from the system prompt:
-        # Fundamentals first (background context ⑤), then Quarterly (②), Technical (③),
-        # Growth Triggers (④), News (① — closest to the final instruction so the model
-        # associates the catalyst directly with the task).
+        # Prompt section order: Fundamentals first (primary direction signal),
+        # then Quarterly (confirms quality), Technical (sizes the move),
+        # Growth Triggers (calibrates magnitude), News (closest to the instruction,
+        # confirms or denies catalyst quality).
         prompt = (
             f"Stock: {company_name} ({ticker})\n"
             f"Sector: {sector or 'Unknown'}\n"
-            f"Today's move: {change_pct:+.1f}% ({move_label})\n\n"
-            f"STEP 1 — FUNDAMENTALS (primary signal — sets direction and quality):\n{fund_text}"
+            f"Today's price action: {change_pct:+.1f}% ({move_direction})\n\n"
+            "⚠️ REMEMBER: Today's direction does NOT determine the 30-day prediction.\n"
+            "Classify the move (Category A/B/C) first, then use fundamentals to set direction.\n\n"
+            f"STEP 2 — FUNDAMENTALS (primary 30-day direction signal):\n{fund_text}"
             + quarterly_section
-            + f"\n\nSTEP 2 — TODAY'S CATALYST (confirms whether the move has a real business reason):\n"
-            f"{headlines or 'No news available.'}"
+            + f"\n\nSTEP 3 — TODAY'S CATALYST (classify: real fundamental shift, market noise, or speculative?):\n"
+            f"{headlines or 'No news found — likely Category B/C (noise or speculative).'}"
             + tech_section
             + gt_section
             + gainers_section
-            + "\n\nFollow the 4-step process from your instructions. "
-            "Fundamentals and quarterly earnings set the direction and base confidence. "
-            "The catalyst confirms or weakens it. Technicals size and time the move. "
-            "Growth triggers adjust the final magnitude.\n"
-            "Analyse why this stock moved today"
-            + (" (it DECLINED — use 'fell/dropped/declined' language, NOT 'gained/surged')" if change_pct < 0 else "")
-            + ", whether momentum is likely to continue, "
-            "and predict the 30-day outlook. Identify 2-4 related beneficiary tickers."
+            + f"\n\nTASK:\n"
+            f"1. Classify today's move: Category A (fundamental), B (market noise), or C (speculative).\n"
+            f"2. {move_language_note}\n"
+            f"3. Set the 30-day prediction from fundamentals + earnings quality — NOT from today's {'decline' if change_pct < 0 else 'gain'}.\n"
+            f"   {'If Category B/C decline: strong fundamentals → positive predicted_change_pct (recovery expected).' if change_pct < 0 else 'If Category B/C gain: weak fundamentals → negative predicted_change_pct (reversal expected).'}\n"
+            f"4. Run the anti-bias checklist before outputting.\n"
+            f"5. Identify 2-4 related beneficiary tickers.\n"
         )
 
         payload = {

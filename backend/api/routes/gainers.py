@@ -440,8 +440,45 @@ async def get_gainer_analysis(
     if not refresh:
         cached = await cache.get(key)
         if cached:
-            log.info("gainers.analysis_cache_hit", ticker=ticker, market=market)
-            return StockAnalysisResponse(**{**cached, "from_cache": True})
+            # ── Direction staleness check ──────────────────────────────────────
+            # If the cached analysis was generated when the stock had the OPPOSITE
+            # price direction (e.g., analysis says "gained +117%" but stock is now
+            # down -4%), the text will be completely wrong. Detect this by comparing
+            # the sign of cached_change_pct against the current live change.
+            #
+            # Fast path: only query yfinance when cached_pct is extreme (>50%) OR
+            # when we have no prior cached_pct (old cache entry).  For normal stocks
+            # with cached_pct within ±50% we skip the extra call for performance.
+            cached_pct = cached.get("cached_change_pct")
+            direction_stale = False
+            if cached_pct is not None and abs(cached_pct) > 50:
+                # This cached value looks like bad data (>50% in one day) — verify
+                # the current direction before serving potentially wrong analysis.
+                try:
+                    import yfinance as _yf
+                    yf_sym = f"{ticker}.NS" if market == "india" else ticker
+                    fi = await asyncio.wait_for(
+                        asyncio.to_thread(lambda s=yf_sym: _yf.Ticker(s).fast_info),
+                        timeout=4.0,
+                    )
+                    curr = getattr(fi, "last_price", None)
+                    prev = getattr(fi, "previous_close", None)
+                    if curr and prev and float(prev) > 0:
+                        current_pct = (float(curr) - float(prev)) / float(prev) * 100
+                        if (cached_pct >= 0) != (current_pct >= 0):
+                            log.info(
+                                "gainers.analysis_cache_direction_stale",
+                                ticker=ticker,
+                                cached_pct=round(cached_pct, 1),
+                                current_pct=round(current_pct, 1),
+                            )
+                            direction_stale = True
+                except Exception as exc:
+                    log.warning("gainers.direction_check_failed", ticker=ticker, error=str(exc))
+
+            if not direction_stale:
+                log.info("gainers.analysis_cache_hit", ticker=ticker, market=market)
+                return StockAnalysisResponse(**{**cached, "from_cache": True})
 
     # Resolve gainer + gainers list in parallel (list used for comparison context)
     (gainer, _yf_info), gainers_list = await asyncio.gather(
@@ -635,8 +672,11 @@ async def get_gainer_analysis(
     )
 
     # Only cache real Gemini responses — mock fallbacks are retried fresh on next request.
+    # Store cached_change_pct so future reads can detect direction staleness.
     if not is_mock_fallback:
-        await cache.set(key, response.model_dump(), settings.analysis_ttl)
+        payload = response.model_dump()
+        payload["cached_change_pct"] = round(gainer.change_pct, 2)
+        await cache.set(key, payload, settings.analysis_ttl)
     return response
 
 

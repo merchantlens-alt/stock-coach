@@ -47,7 +47,7 @@ class TestGainerAnalystAgent:
         assert result.ticker == "NVDA"
         assert 0.0 <= result.confidence <= 1.0
         assert len(result.key_catalysts) > 0
-        assert result.why_it_gained != ""
+        assert result.move_explanation != ""  # why_it_moved (new) or why_it_gained (legacy cache)
 
     # ── analyse_full() — combined call ────────────────────────────────────────
 
@@ -150,7 +150,7 @@ class TestGainerAnalystAgent:
                 "content": {
                     "parts": [{
                         "text": json.dumps({
-                            "why_it_gained": "Strong earnings beat.",
+                            "why_it_moved": "Strong earnings beat.",
                             "key_catalysts": ["Beat by 15%", "Raised guidance"],
                             "catalyst_type": "earnings",
                             "sentiment": "very_positive",
