@@ -513,7 +513,8 @@ export function PortfolioPage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto px-4 md:px-5 py-4 space-y-3">
+      <div className="flex-1 overflow-y-auto px-4 md:px-5 py-4">
+      <div className="max-w-2xl mx-auto space-y-3">
         {isLoading && (
           <div className="space-y-3">
             {[1, 2, 3].map(i => (
@@ -561,6 +562,7 @@ export function PortfolioPage() {
           );
         })}
         <div className="h-4" />
+      </div>{/* max-w-2xl */}
       </div>
     </div>
   );
