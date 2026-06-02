@@ -766,16 +766,19 @@ async def _resolve_gainer(
             log.info("gainers.ticker_res_cache_hit", resolved=ticker, market=market)
 
     # ── Step 1b: cached gainers lists (instant — reads from cache, no Gemini) ─
+    # IMPORTANT: Only check the 1d list. The 1d list has regularMarketChangePercent
+    # (real-time today's change from the screener). The 1w/1m lists have period
+    # change_pct (e.g. +117% monthly gain for DELL) which would be misleadingly
+    # displayed as "today's gain" on the analysis detail page.
     if cache is not None:
-        for period in ("1d", "1w", "1m"):
-            cached_list = await cache.get(_list_cache_key(market, period))
-            if cached_list:
-                match = next(
-                    (StockGainer(**g) for g in cached_list["gainers"] if g["ticker"] == ticker),
-                    None,
-                )
-                if match:
-                    return match, {}
+        cached_1d = await cache.get(_list_cache_key(market, "1d"))
+        if cached_1d:
+            match = next(
+                (StockGainer(**g) for g in cached_1d["gainers"] if g["ticker"] == ticker),
+                None,
+            )
+            if match:
+                return match, {}
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     async def _yf_lookup(sym: str) -> dict:

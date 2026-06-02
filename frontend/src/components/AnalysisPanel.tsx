@@ -437,7 +437,7 @@ function QuarterlyPanel({ q, currency }: { q: QuarterlySnapshot; currency: strin
 
       {/* Attribution */}
       <p className="text-[9px] text-gray-300 mt-1.5 text-right">
-        {q.market === "india" ? "Source: screener.in" : "Source: yfinance"}
+        {q.market === "india" ? "Source: screener.in" : "Source: SEC EDGAR / yfinance"}
       </p>
     </section>
   );

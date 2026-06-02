@@ -497,6 +497,7 @@ class MarketDataService:
             if price < 1 or change_pct <= 0 or volume < 50_000:
                 continue
             seen.add(ticker)
+            avg_vol = q.get("averageDailyVolume3Month") or q.get("averageDailyVolume10Day")
             results.append({
                 "ticker": ticker,
                 "name": q.get("shortName") or q.get("longName") or ticker,
@@ -504,6 +505,7 @@ class MarketDataService:
                 "change_pct": round(change_pct, 2),
                 "change_abs": round(float(q.get("regularMarketChange") or 0), 2),
                 "volume": volume,
+                "avg_volume": int(avg_vol) if avg_vol else None,
                 "sector": q.get("sector"),
                 "has_catalyst": False,
             })
@@ -550,6 +552,7 @@ class MarketDataService:
             volume = int(q.get("regularMarketVolume") or 0)
             if price < 50 or change_pct <= 0 or volume < 100_000:
                 continue
+            avg_vol = q.get("averageDailyVolume3Month") or q.get("averageDailyVolume10Day")
             results.append({
                 "ticker": ticker,
                 "name": q.get("shortName") or q.get("longName") or ticker,
@@ -557,6 +560,7 @@ class MarketDataService:
                 "change_pct": round(change_pct, 2),
                 "change_abs": round(float(q.get("regularMarketChange") or 0), 2),
                 "volume": volume,
+                "avg_volume": int(avg_vol) if avg_vol else None,
                 "sector": q.get("sector"),
                 "has_catalyst": False,
             })
@@ -1012,6 +1016,7 @@ class MarketDataService:
                     tier: SignalTier = "confirmed" if score >= 5.5 else "catalyst"
                 else:
                     tier = "mover"
+                raw_avg_vol = q.get("avg_volume")
                 gainers.append(
                     StockGainer(
                         ticker=ticker,
@@ -1021,6 +1026,7 @@ class MarketDataService:
                         change_pct=round(change_pct, 2),
                         change_abs=float(q.get("change_abs", 0)),
                         volume=volume,
+                        avg_volume=int(raw_avg_vol) if raw_avg_vol else None,
                         sector=q.get("sector"),
                         quality_score=score,
                         quality_label=label,
