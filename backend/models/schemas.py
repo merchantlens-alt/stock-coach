@@ -417,6 +417,9 @@ class CatalystPlay(BaseModel):
     signal: CatalystSignal                # strong_move | emerging | noise
     headline_catalyst: Optional[str] = None  # top catalyst headline
     ai_verdict: str = ""                  # 2-sentence plain English explanation
+    # Enriched from analysis cache — None if stock hasn't been analysed yet
+    ai_prediction_pct: Optional[float] = None
+    ai_prediction_confidence: Optional[float] = None
 
 
 class CatalystScanResponse(BaseModel):

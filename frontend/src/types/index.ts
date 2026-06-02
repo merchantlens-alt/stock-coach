@@ -374,6 +374,9 @@ export interface CatalystPlay {
   signal: CatalystSignal;
   headline_catalyst?: string;
   ai_verdict: string;
+  /** Enriched from analysis cache — undefined if stock hasn't been analysed yet */
+  ai_prediction_pct?: number;
+  ai_prediction_confidence?: number;
 }
 
 export interface CatalystScanResponse {

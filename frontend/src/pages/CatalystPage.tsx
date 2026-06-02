@@ -61,13 +61,19 @@ function PlayCard({
   const isDown = play.change_pct < 0;
   const sign   = play.change_pct >= 0 ? "+" : "";
 
+  // Contradiction detection: high technical momentum but AI predicts reversal.
+  // A stock with strong_move/high score + negative AI prediction is a "one-time pop"
+  // — show a clear warning so users don't mistake technical momentum for a buy signal.
+  const hasPrediction = play.ai_prediction_pct != null;
+  const aiPredNegative = hasPrediction && play.ai_prediction_pct! < 0;
+
   return (
     <div className={`rounded-xl border bg-white overflow-hidden transition-all ${
       isAccumulating ? "border-blue-200 ring-1 ring-blue-100" :
       isSpotlit ? "border-indigo-300 ring-1 ring-indigo-100" :
       "border-gray-100"
     }`}>
-      {/* ── Accumulation / Spotlight banners ────────────────────────── */}
+      {/* ── Top banners ─────────────────────────────────────────────── */}
       {isAccumulating && (
         <div className="flex items-center gap-1.5 px-3 py-1 bg-blue-50 border-b border-blue-100">
           <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse shrink-0" />
@@ -144,6 +150,25 @@ function PlayCard({
             </div>
           </div>
         </div>
+
+        {/* ── AI prediction badge ─────────────────────────────────────── */}
+        {hasPrediction && (
+          <div className={`flex items-center gap-1.5 mt-2 rounded-lg px-2 py-1 text-[10px] font-semibold w-fit ${
+            aiPredNegative
+              ? "bg-red-50 text-red-600 border border-red-100"
+              : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+          }`}>
+            <span>{aiPredNegative ? "↓" : "↑"}</span>
+            <span>
+              AI 30d: {play.ai_prediction_pct! >= 0 ? "+" : ""}{play.ai_prediction_pct!.toFixed(1)}%
+            </span>
+            {play.ai_prediction_confidence != null && (
+              <span className="font-normal opacity-60">
+                · {Math.round(play.ai_prediction_confidence * 100)}% conf
+              </span>
+            )}
+          </div>
+        )}
 
         {/* ── Action row ──────────────────────────────────────────────── */}
         <div className="flex items-center gap-2 mt-2.5">
@@ -259,7 +284,7 @@ interface Props {
   onClearSpotlight?: () => void;
 }
 
-type SectionKey = "strong_move" | "emerging" | "potential" | "noise";
+type SectionKey = "strong_move" | "emerging" | "potential" | "noise" | "reversal";
 
 const SECTIONS: {
   key: SectionKey;
@@ -267,14 +292,36 @@ const SECTIONS: {
   description: string;
   icon: React.ReactNode;
 }[] = [
-  { key: "strong_move", label: "Strong Moves", description: "confirmed catalyst + high volume",
-    icon: <span className="text-sm">🔥</span> },
-  { key: "emerging",    label: "Emerging",     description: "building momentum, watch closely",
-    icon: <span className="text-sm">⚡</span> },
-  { key: "potential",   label: "Loading",      description: "unusual volume — price hasn't moved yet",
-    icon: <span className="text-sm">🔵</span> },
-  { key: "noise",       label: "Noise",        description: "low conviction",
-    icon: <span className="text-sm">○</span>  },
+  {
+    key: "strong_move",
+    label: "Strong Moves",
+    description: "confirmed catalyst · AI outlook positive or unanalysed",
+    icon: <span className="text-sm">🔥</span>,
+  },
+  {
+    key: "emerging",
+    label: "Emerging",
+    description: "building momentum, watch closely",
+    icon: <span className="text-sm">⚡</span>,
+  },
+  {
+    key: "potential",
+    label: "Loading",
+    description: "unusual volume — price hasn't moved yet",
+    icon: <span className="text-sm">🔵</span>,
+  },
+  {
+    key: "reversal",
+    label: "Likely Reversals",
+    description: "moved today but AI predicts pullback — likely speculative",
+    icon: <span className="text-sm">🚨</span>,
+  },
+  {
+    key: "noise",
+    label: "Noise",
+    description: "low conviction",
+    icon: <span className="text-sm">○</span>,
+  },
 ];
 
 export function CatalystPage({
@@ -284,7 +331,8 @@ export function CatalystPage({
   onClearSpotlight,
 }: Props) {
   const [market, setMarket] = useState<Market>("us");
-  const [collapsed, setCollapsed] = useState<Set<SectionKey>>(new Set(["noise"]));
+  // "reversal" and "noise" start collapsed — user sees only actionable signals by default
+  const [collapsed, setCollapsed] = useState<Set<SectionKey>>(new Set(["noise", "reversal"]));
 
   const isSpotlighting = spotlightTickers.length > 0;
   const spotlight = new Set(spotlightTickers);
@@ -301,11 +349,20 @@ export function CatalystPage({
     ? allPlays.filter(p => spotlight.has(p.ticker))
     : allPlays;
 
-  // Group by signal
+  // Classify plays: strong_move stocks with a negative AI prediction are split off
+  // into "reversal" so they don't pollute the Strong Moves section.
+  // A negative prediction + high momentum = "moved today on speculation, AI expects pullback."
+  // Stocks without a prediction stay in strong_move (benefit of the doubt).
+  const isLikelyReversal = (p: CatalystPlay) =>
+    p.signal === "strong_move" &&
+    p.ai_prediction_pct != null &&
+    p.ai_prediction_pct < 0;
+
   const grouped: Record<SectionKey, CatalystPlay[]> = {
-    strong_move: displayPlays.filter(p => p.signal === "strong_move"),
+    strong_move: displayPlays.filter(p => p.signal === "strong_move" && !isLikelyReversal(p)),
     emerging:    displayPlays.filter(p => p.signal === "emerging"),
     potential:   displayPlays.filter(p => p.signal === "potential"),
+    reversal:    displayPlays.filter(p => isLikelyReversal(p)),
     noise:       displayPlays.filter(p => p.signal === "noise"),
   };
 
@@ -352,9 +409,16 @@ export function CatalystPage({
       </div>
 
       {/* ── Disclaimer ─────────────────────────────────────────────────── */}
-      <div className="mx-4 md:mx-5 mt-3 flex items-center gap-2 rounded-xl bg-gray-50 border border-gray-200 px-3 py-1.5 text-[10px] text-gray-400">
-        <AlertTriangle size={10} className="shrink-0 text-amber-400" />
-        AI verdicts are educational only · Not investment advice · Always do your own research
+      <div className="mx-4 md:mx-5 mt-3 rounded-xl bg-gray-50 border border-gray-200 px-3 py-2 space-y-1">
+        <div className="flex items-center gap-2 text-[10px] text-gray-400">
+          <AlertTriangle size={10} className="shrink-0 text-amber-400" />
+          <span>AI verdicts are educational only · Not investment advice · Always do your own research</span>
+        </div>
+        <div className="text-[10px] text-gray-400 leading-relaxed">
+          <span className="font-semibold text-gray-500">How it works:</span>
+          {" "}🔥 <span className="text-gray-500">Strong Moves</span> = high momentum AND AI 30-day outlook agrees (or no analysis yet).
+          {" "}🚨 <span className="text-gray-500">Likely Reversals</span> = moved big today but AI predicts a pullback — speculative plays, collapsed by default.
+        </div>
       </div>
 
       {/* ── Radar spotlight banner ─────────────────────────────────────── */}

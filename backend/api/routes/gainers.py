@@ -753,34 +753,6 @@ async def _resolve_gainer(
             or 0.0
         )
 
-    # ── Step 1a: ticker-resolution cache (instant) ────────────────────────────
-    # Both the detail and analyse endpoints fire in parallel for a new search.
-    # Without this cache each would independently call Gemini (~15 s) + yfinance
-    # (~8 s) to resolve "NVIDIA" → "NVDA".  After the first resolution the
-    # mapping is cached for 24 h, making every subsequent lookup instant.
-    _res_cache_key = f"ticker_res:{market}:{ticker.lower()}"
-    if cache is not None:
-        res_cached = await cache.get(_res_cache_key)
-        if res_cached:
-            ticker = res_cached["resolved"]
-            log.info("gainers.ticker_res_cache_hit", resolved=ticker, market=market)
-
-    # ── Step 1b: cached gainers lists (instant — reads from cache, no Gemini) ─
-    # IMPORTANT: Only check the 1d list. The 1d list has regularMarketChangePercent
-    # (real-time today's change from the screener). The 1w/1m lists have period
-    # change_pct (e.g. +117% monthly gain for DELL) which would be misleadingly
-    # displayed as "today's gain" on the analysis detail page.
-    if cache is not None:
-        cached_1d = await cache.get(_list_cache_key(market, "1d"))
-        if cached_1d:
-            match = next(
-                (StockGainer(**g) for g in cached_1d["gainers"] if g["ticker"] == ticker),
-                None,
-            )
-            if match:
-                return match, {}
-
-    # ── Helpers ───────────────────────────────────────────────────────────────
     async def _yf_lookup(sym: str) -> dict:
         """yfinance lookup with a hard 8-second timeout.
         For India, tries NSE (.NS) first then BSE (.BO) as fallback —
@@ -819,6 +791,62 @@ async def _resolve_gainer(
         threshold = 10 if market == "india" else 5
         return len(s) > threshold and s.isalpha()
 
+    # ── Step 1a: ticker-resolution cache (instant) ────────────────────────────
+    # Both the detail and analyse endpoints fire in parallel for a new search.
+    # Without this cache each would independently call Gemini (~15 s) + yfinance
+    # (~8 s) to resolve "NVIDIA" → "NVDA".  After the first resolution the
+    # mapping is cached for 24 h, making every subsequent lookup instant.
+    _res_cache_key = f"ticker_res:{market}:{ticker.lower()}"
+    if cache is not None:
+        res_cached = await cache.get(_res_cache_key)
+        if res_cached:
+            ticker = res_cached["resolved"]
+            log.info("gainers.ticker_res_cache_hit", resolved=ticker, market=market)
+
+    # ── Step 1b: cached gainers lists (instant — reads from cache, no Gemini) ─
+    # IMPORTANT: Only check the 1d list. The 1d list has regularMarketChangePercent
+    # (real-time today's change from the screener). The 1w/1m lists have period
+    # change_pct (e.g. +117% monthly gain for DELL) which would be misleadingly
+    # displayed as "today's gain" on the analysis detail page.
+    if cache is not None:
+        cached_1d = await cache.get(_list_cache_key(market, "1d"))
+        if cached_1d:
+            match = next(
+                (StockGainer(**g) for g in cached_1d["gainers"] if g["ticker"] == ticker),
+                None,
+            )
+            if match:
+                # Sanity check: screener data can have bad regularMarketChangePercent
+                # (e.g., Yahoo Finance comparing today's price against a stale reference
+                # after a corporate restructuring — DELL showed +117.1% while actually -4%).
+                # If the cached change_pct is implausible for a non-penny stock, do a
+                # quick live lookup before returning to the detail page.
+                if abs(match.change_pct) > 50 and match.price > 5:
+                    try:
+                        live_info = await _yf_lookup(ticker)
+                        if live_info and _best_price(live_info):
+                            live_price = float(_best_price(live_info))
+                            prev_close = (
+                                _safe_float(live_info.get("previousClose"))
+                                or _safe_float(live_info.get("regularMarketPreviousClose"))
+                            )
+                            if prev_close and prev_close > 0:
+                                corrected_pct = round((live_price - prev_close) / prev_close * 100, 2)
+                                log.info(
+                                    "gainers.cached_change_pct_corrected",
+                                    ticker=ticker,
+                                    raw_pct=round(match.change_pct, 1),
+                                    corrected_pct=corrected_pct,
+                                )
+                                match = match.model_copy(update={
+                                    "price": live_price,
+                                    "change_pct": corrected_pct,
+                                    "change_abs": round(live_price - prev_close, 2),
+                                })
+                    except Exception as exc:
+                        log.warning("gainers.cached_correction_failed", ticker=ticker, error=str(exc))
+                return match, {}
+
     info: dict = {}
 
     # ── Step 2: direct yfinance (only for plausible tickers, ≤5 chars) ───────
@@ -852,17 +880,56 @@ async def _resolve_gainer(
     if not price:
         return None, {}
 
-    change_pct = info.get("regularMarketChangePercent") or 0.0
-    # Pass the real value through — can be negative for searched non-gainers.
-    # The validator no longer enforces positive-only; the UI handles sign/colour.
+    change_pct = float(info.get("regularMarketChangePercent") or 0.0)
+    change_abs = float(info.get("regularMarketChange", 0))
+
+    # ── Change_pct sanity check ───────────────────────────────────────────────
+    # Yahoo Finance's regularMarketChangePercent can be wildly wrong when a stock
+    # has had a corporate restructuring, reverse-merger, or split that confuses
+    # their adjustment baseline (e.g., DELL comparing today's ~$456 against an
+    # old ~$210 reference → spurious +117.1% "day gain").
+    #
+    # For stocks above $5, a single-day move > 50% is almost always bad data.
+    # Recompute from previousClose which uses the actual prior session's close.
+    if abs(change_pct) > 50 and float(price) > 5:
+        prev_close = (
+            _safe_float(info.get("previousClose"))
+            or _safe_float(info.get("regularMarketPreviousClose"))
+        )
+        if prev_close and prev_close > 0:
+            recomputed = round((float(price) - prev_close) / prev_close * 100, 2)
+            log.info(
+                "gainers.change_pct_corrected",
+                ticker=ticker,
+                raw_pct=round(change_pct, 1),
+                corrected_pct=recomputed,
+                prev_close=prev_close,
+            )
+            change_pct = recomputed
+            change_abs = round(float(price) - prev_close, 2)
+        else:
+            # previousClose also missing — try fast_info as a last resort
+            try:
+                yf_sym_fi = f"{ticker}.NS" if market == "india" else ticker
+                fi = await asyncio.wait_for(
+                    asyncio.to_thread(lambda s=yf_sym_fi: yf.Ticker(s).fast_info),
+                    timeout=5.0,
+                )
+                fi_prev = getattr(fi, "previous_close", None)
+                if fi_prev and float(fi_prev) > 0:
+                    recomputed = round((float(price) - float(fi_prev)) / float(fi_prev) * 100, 2)
+                    change_pct = recomputed
+                    change_abs = round(float(price) - float(fi_prev), 2)
+            except Exception:
+                pass  # keep the raw value if all else fails
 
     gainer = StockGainer(
         ticker=ticker,
         name=info.get("shortName") or info.get("longName") or ticker,
         market=market,
         price=float(price),
-        change_pct=float(change_pct),
-        change_abs=float(info.get("regularMarketChange", 0)),
+        change_pct=change_pct,
+        change_abs=change_abs,
         volume=int(info.get("regularMarketVolume", 0)),
         avg_volume=_safe_int(info.get("averageDailyVolume3Month")),
         market_cap=_safe_float(info.get("marketCap")),
