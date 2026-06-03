@@ -684,15 +684,46 @@ class QuarterlyFetcher:
             log.warning("sec_edgar.no_cik", ticker=ticker)
             return None
 
-        # Try revenue tags in order — fetch the first one that returns data
+        # Try ALL revenue tags in parallel — use the one with the most recent data.
+        #
+        # Why: companies frequently switch XBRL revenue concept tags over time
+        # (e.g. BBGI used "Revenues" until 2018, then switched to
+        # "RevenueFromContractWithCustomerExcludingAssessedTax").  Stopping at the
+        # first tag with *any* data causes BBGI to return 2017-2018 records when
+        # 2022-2026 data exists under a different tag.
+        #
+        # Fetching all in parallel is the same number of EDGAR calls, just concurrent.
+        tag_results = await asyncio.gather(
+            *[self._sec_concept_quarterly(cik, tag) for tag in _REVENUE_TAGS],
+            return_exceptions=True,
+        )
+
+        # Pick the tag whose most-recent record end-date is the latest.
         rev_records: list[dict] = []
-        for tag in _REVENUE_TAGS:
-            rev_records = await self._sec_concept_quarterly(cik, tag)
-            if rev_records:
-                break
+        for result in tag_results:
+            if isinstance(result, list) and result:
+                # result[0] is the most recent record (sorted newest first)
+                if not rev_records or result[0]["end"] > rev_records[0]["end"]:
+                    rev_records = result
+
         if not rev_records:
             log.warning("sec_edgar.no_revenue_data", ticker=ticker, cik=cik)
             return None
+
+        # ── Staleness check ────────────────────────────────────────────────────
+        # If the most recent EDGAR filing is more than 2 years old the company
+        # likely changed reporting structure or was de-listed.  Fall through to
+        # yfinance which pulls from multiple data vendors and is more resilient.
+        from datetime import date as _today_cls, timedelta as _td
+        _two_years_ago = (_today_cls.today() - _td(days=730)).isoformat()
+        if rev_records[0]["end"] < _two_years_ago:
+            log.info(
+                "sec_edgar.stale_data_fallback_yfinance",
+                ticker=ticker,
+                most_recent_period=rev_records[0]["end"],
+                threshold=_two_years_ago,
+            )
+            return None  # triggers _fetch_yfinance_us() fallback
 
         # Fetch operating income, net income, and EPS in parallel
         op_task = self._sec_concept_quarterly(cik, _OP_INCOME_TAGS[0])
