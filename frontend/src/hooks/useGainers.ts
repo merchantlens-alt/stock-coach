@@ -6,6 +6,17 @@ import type { Market, Period } from "../types";
 const RADAR_STALE = 10 * 60 * 1000;
 const RADAR_GC = 2 * 60 * 60 * 1000;
 
+// Dip scan: 30-min client stale (backend caches 60 min)
+export function useDips(market: Market) {
+  return useQuery({
+    queryKey: ["dips", market],
+    queryFn: () => api.getDips(market),
+    staleTime: 30 * 60 * 1000,
+    gcTime: 2 * 60 * 60 * 1000,
+    retry: 2,
+  });
+}
+
 // Note: DETAIL_STALE / DETAIL_GC are reused for the analysis hook too.
 
 // Gainers list: 5-min stale (backend cache is 30 min), keep in memory 2 hours

@@ -3,7 +3,7 @@ import {
   AlertTriangle, ArrowDown, ArrowUp, BookmarkPlus, ChevronRight, GitCompare,
   Lightbulb, Loader2, Minus, Newspaper, RefreshCw, Sparkles, TrendingDown, TrendingUp, X, Zap,
 } from "lucide-react";
-import type { FundamentalsData, GainerDetail, GrowthTrigger, GrowthTriggersReport, Period, PortfolioEntry, QuarterlySnapshot, RiskItem, ScorecardRow, StockAnalysisResponse, TechnicalSignals, TriggerConviction } from "../types";
+import type { FundamentalsData, GainerDetail, GrowthTrigger, GrowthTriggersReport, Period, PeerComparison, PortfolioEntry, QuarterlySnapshot, RiskItem, ScorecardRow, StockAnalysisResponse, TechnicalSignals, TriggerConviction, ValuationBand, ValuationClassification } from "../types";
 import { CandleChart } from "./CandleChart";
 import { useGrowthTriggers } from "../hooks/useGainers";
 import { TrackModal } from "./TrackModal";
@@ -439,6 +439,340 @@ function QuarterlyPanel({ q, currency }: { q: QuarterlySnapshot; currency: strin
       <p className="text-[9px] text-gray-300 mt-1.5 text-right">
         {q.market === "india" ? "Source: screener.in" : "Source: SEC EDGAR / yfinance"}
       </p>
+    </section>
+  );
+}
+
+// ── Deep Fundamentals panel ───────────────────────────────────────────────────
+
+const BAND_STYLE: Record<ValuationBand, string> = {
+  cheap:     "bg-green-50 text-green-700 border-green-200",
+  fair:      "bg-amber-50 text-amber-700 border-amber-200",
+  expensive: "bg-red-50 text-red-600 border-red-200",
+};
+const BAND_LABEL: Record<ValuationBand, string> = {
+  cheap:     "Cheap",
+  fair:      "Fair",
+  expensive: "Expensive",
+};
+const CLASS_STYLE: Record<ValuationClassification, { bg: string; text: string; label: string }> = {
+  undervalued:   { bg: "bg-green-50 border-green-200",  text: "text-green-700",  label: "Undervalued" },
+  fairly_valued: { bg: "bg-amber-50 border-amber-100",  text: "text-amber-700",  label: "Fairly valued" },
+  overvalued:    { bg: "bg-red-50 border-red-200",      text: "text-red-700",    label: "Overvalued" },
+  mixed:         { bg: "bg-gray-50 border-gray-200",    text: "text-gray-600",   label: "Mixed signals" },
+};
+
+function ValuationRow({
+  metric, current, sectorAvg, histAvg, signal, plain,
+}: {
+  metric: string;
+  current?: number | null;
+  sectorAvg?: number | null;
+  histAvg?: number | null;
+  signal?: ValuationBand | null;
+  plain: string;
+}) {
+  if (current == null) return null;
+  return (
+    <tr className="border-b border-gray-50 last:border-0">
+      <td className="py-2.5 px-3 text-xs font-semibold text-gray-700">{metric}</td>
+      <td className="py-2.5 px-3 text-xs font-bold text-gray-900 text-right">{current.toFixed(1)}×</td>
+      <td className="py-2.5 px-3 text-xs text-gray-400 text-right">
+        {sectorAvg != null ? `${sectorAvg.toFixed(1)}×` : "—"}
+      </td>
+      <td className="py-2.5 px-3 text-xs text-gray-400 text-right">
+        {histAvg != null ? `${histAvg.toFixed(1)}×` : "—"}
+      </td>
+      <td className="py-2.5 px-3">
+        {signal && (
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${BAND_STYLE[signal]}`}>
+            {BAND_LABEL[signal]}
+          </span>
+        )}
+      </td>
+      <td className="py-2.5 px-3 text-[10px] text-gray-400 hidden sm:table-cell">{plain}</td>
+    </tr>
+  );
+}
+
+function CagrCell({ value }: { value?: number | null }) {
+  if (value == null) return <td className="py-2 px-3 text-right text-gray-300 text-[11px]">—</td>;
+  const pct = value * 100;
+  const pos = pct >= 0;
+  return (
+    <td className={`py-2 px-3 text-right text-[11px] font-semibold ${pos ? "text-green-600" : "text-red-500"}`}>
+      {pos ? "+" : ""}{pct.toFixed(1)}%
+    </td>
+  );
+}
+
+function PeerRow({ peer }: { peer: PeerComparison }) {
+  return (
+    <tr className="border-b border-gray-50 last:border-0">
+      <td className="py-2 px-3 text-xs font-bold text-gray-800">{peer.ticker}</td>
+      <td className="py-2 px-3 text-[11px] text-gray-500 hidden sm:table-cell truncate max-w-[120px]">{peer.name}</td>
+      <td className="py-2 px-3 text-right text-[11px] text-gray-700">
+        {peer.pe != null ? `${peer.pe.toFixed(1)}×` : "—"}
+      </td>
+      <td className="py-2 px-3 text-right text-[11px] text-gray-700">
+        {peer.pb != null ? `${peer.pb.toFixed(1)}×` : "—"}
+      </td>
+      <td className={`py-2 px-3 text-right text-[11px] font-medium ${
+        peer.roe != null && peer.roe >= 0.15 ? "text-green-600" : "text-gray-500"
+      }`}>
+        {peer.roe != null ? `${(peer.roe * 100).toFixed(0)}%` : "—"}
+      </td>
+      <td className={`py-2 px-3 text-right text-[11px] font-medium ${
+        peer.revenue_growth != null && peer.revenue_growth >= 0 ? "text-green-600" : "text-red-500"
+      }`}>
+        {peer.revenue_growth != null
+          ? `${peer.revenue_growth >= 0 ? "+" : ""}${(peer.revenue_growth * 100).toFixed(0)}%`
+          : "—"}
+      </td>
+      <td className={`py-2 px-3 text-right text-[11px] ${
+        peer.de_ratio != null && peer.de_ratio > 2 ? "text-red-500" : "text-gray-500"
+      }`}>
+        {peer.de_ratio != null ? peer.de_ratio.toFixed(2) : "—"}
+      </td>
+    </tr>
+  );
+}
+
+function DeepFundamentals({ f, currency, ticker }: { f: FundamentalsData; currency: string; ticker: string }) {
+  const hasValuation = f.pe_ratio != null || f.forward_pe != null;
+  const hasGrowth = f.revenue_cagr_3y != null || f.net_profit_cagr_3y != null || f.eps_cagr_3y != null;
+  const hasHealth = f.interest_coverage != null || f.current_ratio != null || f.free_cash_flow != null;
+  const hasReturns = f.roe_3y_avg != null || f.roce_current != null;
+  const hasPeers = f.peers && f.peers.length > 0;
+
+  if (!hasValuation && !hasGrowth && !hasHealth && !hasReturns && !hasPeers) return null;
+
+  const cls = f.valuation_classification
+    ? CLASS_STYLE[f.valuation_classification]
+    : null;
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs">📊</span>
+        <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Deep Fundamentals</span>
+        <span className="text-[10px] text-gray-400 ml-1">— valuation · growth · health · peers</span>
+      </div>
+
+      {/* ── Overall valuation classification ── */}
+      {cls && (
+        <div className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 ${cls.bg}`}>
+          <span className={`text-sm font-bold ${cls.text}`}>{cls.label}</span>
+          <span className="text-[10px] text-gray-400">vs peer avg and own 5-year history</span>
+        </div>
+      )}
+
+      {/* ── Valuation table ── */}
+      {hasValuation && (
+        <div className="rounded-xl border border-gray-100 overflow-hidden overflow-x-auto">
+          <table className="w-full text-xs min-w-[380px]">
+            <thead className="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className="py-2 px-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wide">Metric</th>
+                <th className="py-2 px-3 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">Current</th>
+                <th className="py-2 px-3 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">Sector avg</th>
+                <th className="py-2 px-3 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">Own 5Y avg</th>
+                <th className="py-2 px-3 text-[10px] font-bold text-gray-400 uppercase tracking-wide">Signal</th>
+                <th className="py-2 px-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wide hidden sm:table-cell">What it means</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white">
+              <ValuationRow
+                metric="P/E"
+                current={f.pe_ratio}
+                sectorAvg={f.pe_sector_avg}
+                histAvg={f.pe_5y_avg}
+                signal={f.pe_signal}
+                plain="You pay per ₹1/$1 of profit"
+              />
+              <ValuationRow
+                metric="P/B"
+                current={f.forward_pe != null ? undefined : undefined}
+                sectorAvg={f.pb_sector_avg}
+                histAvg={null}
+                signal={f.pb_signal}
+                plain="Price vs net assets"
+              />
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── Growth CAGRs ── */}
+      {hasGrowth && (
+        <div className="rounded-xl border border-gray-100 overflow-hidden overflow-x-auto">
+          <div className="flex items-center gap-2 bg-gray-50 border-b border-gray-100 px-3 py-2">
+            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Growth track record</span>
+          </div>
+          <table className="w-full text-xs min-w-[300px]">
+            <thead className="border-b border-gray-50">
+              <tr>
+                <th className="py-2 px-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wide">Metric</th>
+                <th className="py-2 px-3 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">3Y CAGR</th>
+                <th className="py-2 px-3 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">5Y CAGR</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-50">
+              {(f.revenue_cagr_3y != null || f.revenue_cagr_5y != null) && (
+                <tr>
+                  <td className="py-2 px-3 text-xs text-gray-700">Revenue</td>
+                  <CagrCell value={f.revenue_cagr_3y} />
+                  <CagrCell value={f.revenue_cagr_5y} />
+                </tr>
+              )}
+              {(f.net_profit_cagr_3y != null || f.net_profit_cagr_5y != null) && (
+                <tr>
+                  <td className="py-2 px-3 text-xs text-gray-700">Net profit</td>
+                  <CagrCell value={f.net_profit_cagr_3y} />
+                  <CagrCell value={f.net_profit_cagr_5y} />
+                </tr>
+              )}
+              {f.eps_cagr_3y != null && (
+                <tr>
+                  <td className="py-2 px-3 text-xs text-gray-700">EPS</td>
+                  <CagrCell value={f.eps_cagr_3y} />
+                  <td className="py-2 px-3 text-right text-gray-300 text-[11px]">—</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── Return quality + Health ── */}
+      {(hasReturns || hasHealth) && (
+        <div className="grid grid-cols-2 gap-2">
+          {hasReturns && (
+            <div className="rounded-xl border border-gray-100 bg-white p-3 space-y-2">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Return quality</p>
+              {f.roe_3y_avg != null && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">ROE 3Y avg</span>
+                  <span className={`font-bold ${f.roe_3y_avg >= 0.15 ? "text-green-600" : f.roe_3y_avg >= 0.05 ? "text-amber-600" : "text-red-500"}`}>
+                    {(f.roe_3y_avg * 100).toFixed(1)}%
+                  </span>
+                </div>
+              )}
+              {f.roe_5y_avg != null && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">ROE 5Y avg</span>
+                  <span className={`font-bold ${f.roe_5y_avg >= 0.15 ? "text-green-600" : f.roe_5y_avg >= 0.05 ? "text-amber-600" : "text-red-500"}`}>
+                    {(f.roe_5y_avg * 100).toFixed(1)}%
+                  </span>
+                </div>
+              )}
+              {f.roce_current != null && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">ROCE</span>
+                  <span className={`font-bold ${f.roce_current >= 0.15 ? "text-green-600" : "text-amber-600"}`}>
+                    {(f.roce_current * 100).toFixed(1)}%
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+          {hasHealth && (
+            <div className="rounded-xl border border-gray-100 bg-white p-3 space-y-2">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Financial health</p>
+              {f.interest_coverage != null && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">Int. coverage</span>
+                  <span className={`font-bold ${f.interest_coverage >= 3 ? "text-green-600" : f.interest_coverage >= 1.5 ? "text-amber-600" : "text-red-500"}`}>
+                    {f.interest_coverage.toFixed(1)}×
+                  </span>
+                </div>
+              )}
+              {f.current_ratio != null && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">Current ratio</span>
+                  <span className={`font-bold ${f.current_ratio >= 1.5 ? "text-green-600" : f.current_ratio >= 1 ? "text-amber-600" : "text-red-500"}`}>
+                    {f.current_ratio.toFixed(1)}
+                  </span>
+                </div>
+              )}
+              {f.free_cash_flow != null && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">FCF</span>
+                  <span className={`font-bold ${f.free_cash_flow >= 0 ? "text-green-600" : "text-red-500"}`}>
+                    {currency}{Math.abs(f.free_cash_flow).toFixed(0)}M
+                    {f.fcf_trend && (
+                      <span className="ml-1 text-gray-400 font-normal">
+                        {f.fcf_trend === "growing" ? "↑" : f.fcf_trend === "declining" ? "↓" : "→"}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              )}
+              {f.de_5y_trend && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">D/E trend</span>
+                  <span className={`font-bold capitalize ${
+                    f.de_5y_trend === "falling" ? "text-green-600"
+                    : f.de_5y_trend === "rising" ? "text-red-500"
+                    : "text-amber-600"
+                  }`}>
+                    {f.de_5y_trend === "falling" ? "↓ Falling" : f.de_5y_trend === "rising" ? "↑ Rising" : "→ Stable"}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Peer comparison ── */}
+      {hasPeers && (
+        <div className="rounded-xl border border-gray-100 overflow-hidden overflow-x-auto">
+          <div className="flex items-center gap-2 bg-gray-50 border-b border-gray-100 px-3 py-2">
+            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">vs Closest peers</span>
+          </div>
+          <table className="w-full text-xs min-w-[420px]">
+            <thead className="border-b border-gray-50">
+              <tr>
+                <th className="py-2 px-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wide">Ticker</th>
+                <th className="py-2 px-3 text-left text-[10px] font-bold text-gray-400 uppercase tracking-wide hidden sm:table-cell">Name</th>
+                <th className="py-2 px-3 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">P/E</th>
+                <th className="py-2 px-3 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">P/B</th>
+                <th className="py-2 px-3 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">ROE</th>
+                <th className="py-2 px-3 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">Rev ↑</th>
+                <th className="py-2 px-3 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wide">D/E</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white">
+              {/* You row */}
+              <tr className="bg-indigo-50/60 border-b border-indigo-100">
+                <td className="py-2 px-3 text-xs font-bold text-indigo-700">{ticker} ◀</td>
+                <td className="py-2 px-3 text-[11px] text-indigo-500 hidden sm:table-cell">you</td>
+                <td className="py-2 px-3 text-right text-[11px] font-bold text-indigo-700">
+                  {f.pe_ratio != null ? `${f.pe_ratio.toFixed(1)}×` : "—"}
+                </td>
+                <td className="py-2 px-3 text-right text-[11px] font-bold text-indigo-700">—</td>
+                <td className="py-2 px-3 text-right text-[11px] font-bold text-indigo-700">
+                  {f.roe != null ? `${(f.roe * 100).toFixed(0)}%` : "—"}
+                </td>
+                <td className="py-2 px-3 text-right text-[11px] font-bold text-indigo-700">
+                  {f.revenue_growth_yoy != null
+                    ? `${f.revenue_growth_yoy >= 0 ? "+" : ""}${(f.revenue_growth_yoy * 100).toFixed(0)}%`
+                    : "—"}
+                </td>
+                <td className="py-2 px-3 text-right text-[11px] font-bold text-indigo-700">
+                  {f.debt_equity != null ? f.debt_equity.toFixed(2) : "—"}
+                </td>
+              </tr>
+              {f.peers!.map((peer) => (
+                <PeerRow key={peer.ticker} peer={peer} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <p className="text-[9px] text-gray-300 text-right">Source: yfinance · sector avg = peer group average</p>
     </section>
   );
 }
@@ -957,6 +1291,15 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
         {/* ── QUARTERLY RESULTS (fed to AI for the 30-day prediction) ──────── */}
         {ai?.quarterly && (
           <QuarterlyPanel q={ai.quarterly} currency={currency} />
+        )}
+
+        {/* ── DEEP FUNDAMENTALS — valuation context, growth CAGRs, peers ───── */}
+        {ai?.enriched_fundamentals && (
+          <DeepFundamentals
+            f={ai.enriched_fundamentals}
+            currency={currency}
+            ticker={gainer.ticker}
+          />
         )}
 
         {/* ── AI ANALYSIS ──────────────────────────────────────────────────── */}

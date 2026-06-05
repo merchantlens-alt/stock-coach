@@ -9,8 +9,10 @@ from fastapi import APIRouter, Depends, Path, Query
 
 from agents.gainer_analyst import GainerAnalystAgent
 from agents.market_analyst import MarketAnalystAgent
+from services.fundamental_enricher import FundamentalEnricher
 from api.deps import (
     get_cache,
+    get_fundamental_enricher,
     get_gainer_analyst,
     get_market_analyst,
     get_market_data,
@@ -424,6 +426,7 @@ async def get_gainer_analysis(
     news_fetcher: Annotated[NewsFetcher, Depends(get_news_fetcher)],
     analyst: Annotated[GainerAnalystAgent, Depends(get_gainer_analyst)],
     quarterly_fetcher: Annotated[QuarterlyFetcher, Depends(get_quarterly_fetcher)],
+    fundamental_enricher: Annotated[FundamentalEnricher, Depends(get_fundamental_enricher)],
     refresh: Annotated[bool, Query(description="Force bypass cache")] = False,
 ) -> StockAnalysisResponse:
     """
@@ -622,6 +625,16 @@ async def get_gainer_analysis(
     if gt_context:
         log.info("gainers.gt_context_injected", ticker=resolved_ticker)
 
+    # Start fundamental enricher in parallel with the AI call.
+    # Hard cap at 12 s — enricher should be done before Gemini finishes (~10-15 s).
+    # If it times out or fails the rest of the response is still returned correctly.
+    enricher_task: asyncio.Task[FundamentalsData | None] = asyncio.create_task(
+        asyncio.wait_for(
+            fundamental_enricher.enrich(resolved_ticker, market, fundamentals),
+            timeout=12.0,
+        )
+    )
+
     # Single combined Gemini call — analysis + 30-day prediction (now includes technical signals)
     analysis = None
     prediction = None
@@ -660,6 +673,15 @@ async def get_gainer_analysis(
         except Exception as fallback_exc:
             log.error("gainers.ai_fallback_failed", ticker=resolved_ticker, error=str(fallback_exc))
 
+    # Collect enricher result — should be ready since AI call takes longer.
+    enriched_fundamentals: FundamentalsData | None = None
+    try:
+        enriched_fundamentals = await enricher_task
+        log.info("gainers.enricher_done", ticker=resolved_ticker,
+                 has_peers=bool(enriched_fundamentals and enriched_fundamentals.peers))
+    except Exception as exc:
+        log.warning("gainers.enricher_failed", ticker=resolved_ticker, error=str(exc))
+
     response = StockAnalysisResponse(
         ticker=resolved_ticker,
         market=market,
@@ -667,6 +689,7 @@ async def get_gainer_analysis(
         prediction=prediction,
         technicals=technicals,
         quarterly=quarterly_snap,
+        enriched_fundamentals=enriched_fundamentals,
         from_cache=False,
         analysed_at=datetime.utcnow(),
     )

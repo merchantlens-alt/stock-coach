@@ -16,6 +16,10 @@ CatalystType = Literal[
 OutlookHorizon = Literal["days", "weeks", "months"]
 FundamentalSignal = Literal["strong", "moderate", "weak", "unknown"]
 ValuationSignal = Literal["undervalued", "fairly_valued", "overvalued", "unknown"]
+# Per-metric valuation band: how current value compares to sector avg and own history
+ValuationBand = Literal["cheap", "fair", "expensive"]
+# Overall valuation roll-up across P/E, P/B, EV/EBITDA
+ValuationClassification = Literal["undervalued", "fairly_valued", "overvalued", "mixed"]
 QualityLabel = Literal["Strong", "Moderate", "Watch", "Risky"]
 SignalTier = Literal["confirmed", "catalyst", "mover"]
 Period = Literal["1d", "1w", "1m"]
@@ -110,7 +114,19 @@ class StockGainer(BaseModel):
         return round(v, 2)
 
 
+class PeerComparison(BaseModel):
+    """One peer company row for the valuation comparison table."""
+    ticker: str
+    name: str
+    pe: Optional[float] = None
+    pb: Optional[float] = None
+    roe: Optional[float] = None          # decimal, 0.18 = 18%
+    revenue_growth: Optional[float] = None  # decimal, 0.12 = 12%
+    de_ratio: Optional[float] = None
+
+
 class FundamentalsData(BaseModel):
+    # ── Basic metrics (existing) ──────────────────────────────────────────────
     pe_ratio: Optional[float] = None
     forward_pe: Optional[float] = None
     roe: Optional[float] = None
@@ -127,6 +143,37 @@ class FundamentalsData(BaseModel):
     ebitda_margin: Optional[float] = None         # as a decimal, e.g. 0.32 = 32%
     market_cap_value: Optional[float] = None      # market cap in raw units
     insider_holding_pct: Optional[float] = None   # fraction, e.g. 0.15 = 15%
+
+    # ── Deep valuation context (FundamentalEnricher) ──────────────────────────
+    pe_sector_avg: Optional[float] = None         # peer-group average P/E (sector proxy)
+    pe_5y_avg: Optional[float] = None             # stock's own 5-year historical P/E
+    pb_sector_avg: Optional[float] = None         # peer-group average P/B
+    pe_signal: Optional[ValuationBand] = None     # cheap | fair | expensive vs both benchmarks
+    pb_signal: Optional[ValuationBand] = None
+    ev_ebitda_signal: Optional[ValuationBand] = None
+    valuation_classification: Optional[ValuationClassification] = None  # overall roll-up
+
+    # ── Growth CAGRs (FundamentalEnricher) ───────────────────────────────────
+    revenue_cagr_3y: Optional[float] = None       # decimal, 0.15 = 15%
+    revenue_cagr_5y: Optional[float] = None
+    net_profit_cagr_3y: Optional[float] = None
+    net_profit_cagr_5y: Optional[float] = None
+    eps_cagr_3y: Optional[float] = None
+
+    # ── Historical return quality (FundamentalEnricher) ──────────────────────
+    roe_3y_avg: Optional[float] = None            # decimal average over 3 years
+    roe_5y_avg: Optional[float] = None
+    roce_current: Optional[float] = None          # EBIT / Capital Employed
+
+    # ── Financial health (FundamentalEnricher) ───────────────────────────────
+    interest_coverage: Optional[float] = None     # EBIT / interest expense
+    current_ratio: Optional[float] = None         # current assets / current liabilities
+    free_cash_flow: Optional[float] = None        # latest FCF ($M or ₹Cr)
+    fcf_trend: Optional[str] = None              # growing | stable | declining
+    de_5y_trend: Optional[str] = None            # falling | stable | rising
+
+    # ── Peer comparison (FundamentalEnricher) ────────────────────────────────
+    peers: Optional[list[PeerComparison]] = None
 
 
 class NewsItem(BaseModel):
@@ -228,6 +275,9 @@ class StockAnalysisResponse(BaseModel):
     prediction: Optional[StockPrediction] = None
     technicals: Optional[TechnicalSignals] = None
     quarterly: Optional[QuarterlySnapshot] = None  # last 6 quarters — fed to AI + shown in UI
+    # Deep fundamental enrichment — runs in parallel with AI call, never blocks it.
+    # None = enricher timed out or yfinance unavailable; present = full valuation context.
+    enriched_fundamentals: Optional[FundamentalsData] = None
     from_cache: bool = False
     analysed_at: Optional[datetime] = None
 
@@ -404,6 +454,40 @@ class GrowthTriggersReport(BaseModel):
 
 
 CatalystSignal = Literal["strong_move", "emerging", "noise", "potential"]
+
+
+DipQuality = Literal["prime", "watch"]
+
+
+class DipStock(BaseModel):
+    """A stock that has pulled back significantly but whose fundamentals suggest recovery."""
+    ticker: str
+    name: str
+    market: Market
+    sector: Optional[str] = None
+    price: float
+    change_pct_1d: float                    # today's move
+    change_pct_from_high: float             # % below 3-month high (negative number, e.g. -18.4)
+    three_month_high: float                 # 3-month price high
+    fifty_two_week_high: Optional[float] = None
+    fifty_two_week_low: Optional[float] = None
+    pct_of_52w_range: Optional[float] = None  # 0 = at 52w low, 100 = at 52w high
+    rsi_14: Optional[float] = None          # RSI oversold < 35 is strong buy signal
+    analyst_consensus: Optional[str] = None  # buy / hold / sell
+    analyst_target: Optional[float] = None  # analyst mean price target
+    upside_to_target: Optional[float] = None  # % upside from current to analyst target
+    revenue_growth_yoy: Optional[float] = None  # YoY revenue growth (decimal, 0.15 = 15%)
+    dip_quality: DipQuality = "watch"       # prime (score>=60) or watch (35-59)
+    dip_score: float = 0.0                  # 0-100 composite score
+    dip_reason: str = ""                    # why it dipped (macro/sector/technical/unknown)
+    avg_volume: Optional[int] = None
+
+
+class DipScanResponse(BaseModel):
+    market: Market
+    dips: list[DipStock] = Field(default_factory=list)
+    from_cache: bool = False
+    scanned_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class CatalystPlay(BaseModel):

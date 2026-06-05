@@ -4,12 +4,13 @@ import type { Market } from "../types";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { AnalysisPanel } from "../components/AnalysisPanel";
+import { DipCard } from "../components/DipCard";
 import { GainerCard } from "../components/GainerCard";
 import { MarketNarrative } from "../components/MarketNarrative";
 import { MarketToggle } from "../components/MarketToggle";
 import { SearchBar } from "../components/SearchBar";
 import { CatalystPage } from "./CatalystPage";
-import { useGainerAnalysis, useGainerDetail, useGainers, useRefreshAnalysis } from "../hooks/useGainers";
+import { useDips, useGainerAnalysis, useGainerDetail, useGainers, useRefreshAnalysis } from "../hooks/useGainers";
 import type { Period } from "../types";
 
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
@@ -37,7 +38,7 @@ function loadConvictionTickerMap(): Record<string, string[]> {
 }
 
 // ── View modes for the left panel ─────────────────────────────────────────────
-type ViewMode = "movers" | "catalyst" | "bullish" | "potential";
+type ViewMode = "movers" | "catalyst" | "bullish" | "dips";
 
 interface DashboardProps {
   jumpTo?: { market: Market; ticker: string } | null;
@@ -108,16 +109,17 @@ export function Dashboard({
   const allGainers = gainersData?.gainers ?? [];
 
   const filteredGainers = (() => {
-    if (viewMode === "bullish")   return allGainers.filter(g => (g.ai_prediction_pct ?? -1) > 0);
-    if (viewMode === "potential") return allGainers.filter(g => (g.signal_tier ?? "mover") === "mover");
+    if (viewMode === "bullish") return allGainers.filter(g => (g.ai_prediction_pct ?? -1) > 0);
     return allGainers;
   })();
 
   const modeCounts = {
-    movers:   allGainers.length,
-    bullish:  allGainers.filter(g => (g.ai_prediction_pct ?? -1) > 0).length,
-    potential: allGainers.filter(g => (g.signal_tier ?? "mover") === "confirmed" || (g.signal_tier ?? "mover") === "catalyst").length,
+    movers:  allGainers.length,
+    bullish: allGainers.filter(g => (g.ai_prediction_pct ?? -1) > 0).length,
   };
+
+  // Dip scan data
+  const { data: dipData, isLoading: dipsLoading } = useDips(market);
 
   const { data: detail, isLoading: detailLoading, error: detailError } = useGainerDetail(market, activeTicker);
   const { data: analysisData, isLoading: analysisLoading } = useGainerAnalysis(market, activeTicker);
@@ -186,7 +188,10 @@ export function Dashboard({
   }
 
   // ── VIEW MODE TABS ──────────────────────────────────────────────────────────
-  const VIEW_TABS: { key: ViewMode; label: string; icon?: React.ReactNode; count?: number; color: string; inactive: string }[] = [
+  const dipCount = dipData?.dips.length ?? 0;
+  const primeDipCount = dipData?.dips.filter(d => d.dip_quality === "prime").length ?? 0;
+
+  const VIEW_TABS: { key: ViewMode; label: string; count?: number; color: string; inactive: string }[] = [
     {
       key: "movers",
       label: "Top Movers",
@@ -197,7 +202,6 @@ export function Dashboard({
     {
       key: "catalyst",
       label: "⚡ Catalyst",
-      icon: <Zap size={10} />,
       color: "bg-green-600 text-white",
       inactive: "text-green-700 hover:bg-green-50",
     },
@@ -207,6 +211,13 @@ export function Dashboard({
       count: modeCounts.bullish,
       color: "bg-emerald-600 text-white",
       inactive: "text-emerald-700 hover:bg-emerald-50",
+    },
+    {
+      key: "dips",
+      label: "🎯 Buy Dips",
+      count: dipCount || undefined,
+      color: "bg-indigo-600 text-white",
+      inactive: "text-indigo-700 hover:bg-indigo-50",
     },
   ];
 
@@ -283,6 +294,58 @@ export function Dashboard({
               spotlightMarket={scannerSpotlightMarket}
               onClearSpotlight={onClearSpotlight}
             />
+          </div>
+        ) : viewMode === "dips" ? (
+          /* ── DIPS mode: quality pullback opportunities ─────────────────── */
+          <div className="flex-1 overflow-y-auto pb-3">
+            <div className="px-4 py-3 border-b border-indigo-100 bg-indigo-50">
+              <p className="text-[10px] text-indigo-700 font-semibold leading-relaxed">
+                🎯 Stocks down 8–45% from their 3-month high with strong analyst consensus and oversold RSI.
+                These are <span className="font-bold">technical dips in fundamentally sound companies</span> — not falling knives.
+              </p>
+            </div>
+            <div className="p-3 space-y-2 mt-1">
+              {dipsLoading && !dipData && (
+                <>
+                  {[1, 2, 3, 4].map(i => (
+                    <div key={i} className="h-44 rounded-xl bg-gray-100 animate-pulse" />
+                  ))}
+                  <div className="flex items-center gap-2 text-xs text-indigo-600 bg-indigo-50 rounded-lg px-3 py-2">
+                    <div className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin shrink-0" />
+                    Scanning universe for quality dips — fetching RSI, analyst targets… 12-18 sec
+                  </div>
+                </>
+              )}
+              {dipData?.dips.length === 0 && !dipsLoading && (
+                <div className="text-center py-12 text-sm text-gray-400">
+                  <p className="text-2xl mb-2">🎯</p>
+                  <p className="font-medium text-gray-600">No quality dips right now</p>
+                  <p className="text-xs mt-1">
+                    Markets are elevated — most stocks are near their highs.
+                    Check back during market corrections.
+                  </p>
+                </div>
+              )}
+              {/* Prime dips first */}
+              {primeDipCount > 0 && (
+                <p className="text-[10px] font-bold text-green-700 uppercase tracking-wide px-1">
+                  🎯 Prime Dips — {primeDipCount} high-confidence opportunities
+                </p>
+              )}
+              {dipData?.dips.map(dip => (
+                <DipCard
+                  key={dip.ticker}
+                  dip={dip}
+                  isSelected={activeTicker === dip.ticker}
+                  isLoading={activeTicker === dip.ticker && detailLoading}
+                  onClick={() => {
+                    setSearchedTicker(null);
+                    setSelectedTicker(selectedTicker === dip.ticker ? null : dip.ticker);
+                  }}
+                  onPrefetch={() => handlePrefetch(dip.ticker)}
+                />
+              ))}
+            </div>
           </div>
         ) : (
           /* ── MOVERS / BULLISH mode: gainer list ────────────────────── */

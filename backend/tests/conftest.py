@@ -45,6 +45,8 @@ def reset_singletons() -> None:
     deps._radar_analyst = None
     deps._quarterly_fetcher = None
     deps._portfolio_store = None
+    deps._dip_scanner = None
+    deps._fundamental_enricher = None
     get_settings.cache_clear()
 
 

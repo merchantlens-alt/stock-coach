@@ -2,6 +2,10 @@ export type Market = "us" | "india";
 export type Period = "1d" | "1w" | "1m";
 export type Sentiment = "very_positive" | "positive" | "neutral" | "negative" | "very_negative";
 export type MarketSentiment = "very_bullish" | "bullish" | "mixed" | "bearish" | "very_bearish";
+/** Per-metric valuation band vs sector average and own 5-year history */
+export type ValuationBand = "cheap" | "fair" | "expensive";
+/** Overall valuation roll-up across P/E, P/B, EV/EBITDA */
+export type ValuationClassification = "undervalued" | "fairly_valued" | "overvalued" | "mixed";
 export type CatalystType =
   | "earnings" | "fda_approval" | "acquisition" | "partnership"
   | "analyst_upgrade" | "macro" | "technical" | "regulatory" | "unknown";
@@ -31,7 +35,18 @@ export interface StockGainer {
   ai_prediction_confidence?: number;
 }
 
+export interface PeerComparison {
+  ticker: string;
+  name: string;
+  pe?: number;
+  pb?: number;
+  roe?: number;            // decimal, 0.18 = 18%
+  revenue_growth?: number; // decimal, 0.12 = 12%
+  de_ratio?: number;
+}
+
 export interface FundamentalsData {
+  // ── Basic metrics ──────────────────────────────────────────────────────────
   pe_ratio?: number;
   forward_pe?: number;
   roe?: number;
@@ -48,6 +63,37 @@ export interface FundamentalsData {
   ebitda_margin?: number;
   market_cap_value?: number;
   insider_holding_pct?: number;
+
+  // ── Deep valuation context (FundamentalEnricher) ──────────────────────────
+  pe_sector_avg?: number;
+  pe_5y_avg?: number;
+  pb_sector_avg?: number;
+  pe_signal?: ValuationBand;
+  pb_signal?: ValuationBand;
+  ev_ebitda_signal?: ValuationBand;
+  valuation_classification?: ValuationClassification;
+
+  // ── Growth CAGRs ──────────────────────────────────────────────────────────
+  revenue_cagr_3y?: number;
+  revenue_cagr_5y?: number;
+  net_profit_cagr_3y?: number;
+  net_profit_cagr_5y?: number;
+  eps_cagr_3y?: number;
+
+  // ── Historical return quality ─────────────────────────────────────────────
+  roe_3y_avg?: number;
+  roe_5y_avg?: number;
+  roce_current?: number;
+
+  // ── Financial health ──────────────────────────────────────────────────────
+  interest_coverage?: number;
+  current_ratio?: number;
+  free_cash_flow?: number;     // in $M or ₹Cr
+  fcf_trend?: "growing" | "stable" | "declining";
+  de_5y_trend?: "falling" | "stable" | "rising";
+
+  // ── Peer comparison ───────────────────────────────────────────────────────
+  peers?: PeerComparison[];
 }
 
 export interface NewsItem {
@@ -163,6 +209,8 @@ export interface StockAnalysisResponse {
   prediction?: StockPrediction;
   technicals?: TechnicalSignals;
   quarterly?: QuarterlySnapshot | null;
+  /** Deep fundamentals — null if enricher timed out or yfinance unavailable */
+  enriched_fundamentals?: FundamentalsData | null;
   from_cache: boolean;
   analysed_at?: string;
 }
@@ -357,6 +405,40 @@ export interface PortfolioSummary {
 /** Returned by GET /portfolio/prices */
 export interface PortfolioPricesResponse {
   prices: Record<string, number>;
+}
+
+// ── Dip Scanner ───────────────────────────────────────────────────────────────
+
+export type DipQuality = "prime" | "watch";
+
+export interface DipStock {
+  ticker: string;
+  name: string;
+  market: Market;
+  sector?: string;
+  price: number;
+  change_pct_1d: number;
+  change_pct_from_high: number;   // negative, e.g. -18.4 means 18.4% below recent high
+  three_month_high: number;
+  fifty_two_week_high?: number;
+  fifty_two_week_low?: number;
+  pct_of_52w_range?: number;      // 0 = at 52w low, 100 = at 52w high
+  rsi_14?: number;
+  analyst_consensus?: string;
+  analyst_target?: number;
+  upside_to_target?: number;      // % upside from current to analyst target
+  revenue_growth_yoy?: number;    // decimal, 0.15 = 15% growth
+  dip_quality: DipQuality;
+  dip_score: number;              // 0-100
+  dip_reason: string;
+  avg_volume?: number;
+}
+
+export interface DipScanResponse {
+  market: Market;
+  dips: DipStock[];
+  from_cache: boolean;
+  scanned_at: string;
 }
 
 // ── Catalyst Scanner ──────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import catalyst, conviction, gainers, growth_triggers, health, portfolio, radar
+from api.routes import catalyst, conviction, dips, gainers, growth_triggers, health, portfolio, radar
 from core.config import get_settings
 from core.logging import configure_logging, get_logger
 
@@ -87,6 +87,7 @@ def create_app() -> FastAPI:
     app.include_router(radar.router, prefix="/api")
     app.include_router(catalyst.router, prefix="/api")
     app.include_router(portfolio.router, prefix="/api")
+    app.include_router(dips.router, prefix="/api")
 
     # Serve React frontend — only if the built static directory exists (production)
     static_dir = Path(__file__).parent / "static"

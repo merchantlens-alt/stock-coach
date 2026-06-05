@@ -13,8 +13,10 @@ from agents.thesis_analyst import ThesisAnalystAgent
 from core.config import Settings, get_settings
 from services.cache import CacheBackend, build_cache
 from services.catalyst_scanner import CatalystScannerService
+from services.fundamental_enricher import FundamentalEnricher
 from services.market_data import MarketDataService
 from services.news_fetcher import NewsFetcher
+from services.dip_scanner import DipScannerService
 from services.portfolio_store import PortfolioStore
 from services.quarterly_fetcher import QuarterlyFetcher
 
@@ -32,6 +34,8 @@ _catalyst_analyst: CatalystAnalystAgent | None = None
 _catalyst_scanner: CatalystScannerService | None = None
 _growth_triggers_agent: GrowthTriggersAgent | None = None
 _portfolio_store: PortfolioStore | None = None
+_dip_scanner: DipScannerService | None = None
+_fundamental_enricher: FundamentalEnricher | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -132,6 +136,15 @@ def get_growth_triggers_agent(
     return _growth_triggers_agent
 
 
+def get_dip_scanner(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> DipScannerService:
+    global _dip_scanner
+    if _dip_scanner is None:
+        _dip_scanner = DipScannerService(settings)
+    return _dip_scanner
+
+
 def get_portfolio_store(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> PortfolioStore:
@@ -139,5 +152,16 @@ def get_portfolio_store(
     if _portfolio_store is None:
         _portfolio_store = PortfolioStore(get_cache(settings))
     return _portfolio_store
+
+
+def get_fundamental_enricher() -> FundamentalEnricher:
+    """
+    FundamentalEnricher is stateless (no Settings needed).
+    Returns the shared singleton so yfinance connection overhead is amortised.
+    """
+    global _fundamental_enricher
+    if _fundamental_enricher is None:
+        _fundamental_enricher = FundamentalEnricher()
+    return _fundamental_enricher
 
 
