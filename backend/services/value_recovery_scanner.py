@@ -71,6 +71,13 @@ _PE_PATH_A: dict[str, float]           = {"us": 22.0, "india": 18.0}
 _PE_PATH_B_CAP: dict[str, float]       = {"us": 35.0, "india": 22.0}
 _PE_PATH_B_CONTRACTION: dict[str, float] = {"us": 0.90, "india": 0.85}
 
+# When trailing PE is unavailable and we fall back to forward PE as the anchor,
+# apply an additional discount: forward PE is always optimistic (prices in earnings
+# growth that hasn't happened yet), so require the stock to be even cheaper.
+# e.g. India Path A of 18× becomes 18 × 0.85 ≈ 15× when anchoring on forward PE —
+# which correctly excludes INFY (fwd ~17×) and TCS (fwd ~20×).
+_PE_FORWARD_ANCHOR_DISCOUNT = 0.85
+
 # ── Pure helpers (fully testable without I/O) ─────────────────────────────────
 
 def _safe_float(v: Any) -> Optional[float]:
@@ -441,24 +448,30 @@ class ValueRecoveryScannerService:
                 continue
 
             # ── Entry gate: need a real P/E anchor ────────────────────────────
-            # If trailing P/E is absent or extreme, fall back to forward P/E
+            # If trailing P/E is absent or extreme, fall back to forward P/E.
+            # Forward PE is always optimistic (prices in future growth), so apply
+            # _PE_FORWARD_ANCHOR_DISCOUNT to tighten the threshold — this prevents
+            # Indian IT stocks (INFY fwd ~17×, TCS fwd ~20×) from slipping through
+            # the 18× India gate just because trailing PE wasn't returned by yfinance.
+            pe_a        = _PE_PATH_A.get(market, 22.0)
+            pe_b        = _PE_PATH_B_CAP.get(market, 35.0)
+            pe_b_factor = _PE_PATH_B_CONTRACTION.get(market, 0.90)
+
             if pe is None or pe <= 0 or pe > 50:
                 if forward_pe is None or forward_pe <= 0 or forward_pe > 40:
                     continue
                 pe = forward_pe  # anchor on forward P/E; mark trailing as unavailable
                 forward_pe = None
+                # Tighten thresholds — forward PE is already the "best case" number
+                pe_a = pe_a * _PE_FORWARD_ANCHOR_DISCOUNT
+                pe_b = pe_b * _PE_FORWARD_ANCHOR_DISCOUNT
 
             # ── Entry gate: at least one valuation compression signal ──────────
             # Path A: trailing P/E is genuinely cheap (market-specific threshold).
-            #   US: < 22×  (S&P 500 median ~18-20×)
-            #   India: < 18×  (large-cap Indian IT trades 22-28× at fair value;
-            #           18× or below signals genuine compression in the Indian context)
+            #   US: < 22× | India: < 18× (IT majors trade 20-28× at fair value)
+            # When anchoring on forward PE, thresholds tighten by 15%.
             # Path B: forward P/E contracting meaningfully AND trailing P/E isn't
-            #   an outright growth premium. A 42× trailing P/E with 48% forward
-            #   contraction is a fast-growth story, not a value recovery.
-            pe_a        = _PE_PATH_A.get(market, 22.0)
-            pe_b        = _PE_PATH_B_CAP.get(market, 35.0)
-            pe_b_factor = _PE_PATH_B_CONTRACTION.get(market, 0.90)
+            #   an outright growth premium.
             passes_valuation = (
                 pe < pe_a  # Path A — cheap on trailing multiple
                 or (
