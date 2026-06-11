@@ -49,11 +49,27 @@ _CONSENSUS_SKIP    = {"underperform", "underweight", "sell", "strong_sell"}
 _CONSENSUS_BULLISH = {"strong_buy", "buy", "outperform", "overweight"}
 
 # Market-specific P/E thresholds for the valuation entry gate.
-# Indian large-cap IT (TCS, Infy) trade at 20-28× as their NORMAL multiple — that's
-# not a compressed valuation, it's fair value. Using the same 22× US threshold would
-# incorrectly classify them as "cheap". India Path A requires genuinely cheap (< 18×).
-_PE_PATH_A: dict[str, float] = {"us": 22.0, "india": 18.0}
-_PE_PATH_B_CAP: dict[str, float] = {"us": 35.0, "india": 28.0}
+#
+# Indian large-cap IT (TCS, Infy, HCL) trade at 20-28× as their NORMAL multiple.
+# That is fair value, not a compressed valuation.  Two fixes are needed:
+#
+#   Path A cap (cheap absolute):
+#     US 22× → India 18×   (genuinely cheap in Indian context)
+#
+#   Path B cap (forward contraction):
+#     US 35× → India 22×   (TCS at 23× fails the cap → excluded)
+#     Contraction required:
+#     US 10% → India 15%   (Indian IT always has mild forward contraction from
+#                            normal earnings growth; require a sharper 15% drop
+#                            so routine 8-12% growth doesn't trigger the signal)
+#
+# Net result:
+#   TCS  (pe≈23): Path A: 23 ≥ 18 FAIL  |  Path B: 23 ≥ 22 FAIL  → excluded ✓
+#   Infy (pe≈20): Path A: 20 ≥ 18 FAIL  |  Path B: fwd must be < 20×0.85=17  → excluded unless genuinely cheap ✓
+#   SBIN (pe≈10): Path A: 10 < 18 PASS  → included ✓
+_PE_PATH_A: dict[str, float]           = {"us": 22.0, "india": 18.0}
+_PE_PATH_B_CAP: dict[str, float]       = {"us": 35.0, "india": 22.0}
+_PE_PATH_B_CONTRACTION: dict[str, float] = {"us": 0.90, "india": 0.85}
 
 # ── Pure helpers (fully testable without I/O) ─────────────────────────────────
 
@@ -440,15 +456,16 @@ class ValueRecoveryScannerService:
             # Path B: forward P/E contracting meaningfully AND trailing P/E isn't
             #   an outright growth premium. A 42× trailing P/E with 48% forward
             #   contraction is a fast-growth story, not a value recovery.
-            pe_a = _PE_PATH_A.get(market, 22.0)
-            pe_b = _PE_PATH_B_CAP.get(market, 35.0)
+            pe_a        = _PE_PATH_A.get(market, 22.0)
+            pe_b        = _PE_PATH_B_CAP.get(market, 35.0)
+            pe_b_factor = _PE_PATH_B_CONTRACTION.get(market, 0.90)
             passes_valuation = (
                 pe < pe_a  # Path A — cheap on trailing multiple
                 or (
                     pe < pe_b  # Path B — not a premium growth multiple
                     and forward_pe is not None
                     and forward_pe > 0
-                    and forward_pe < pe * 0.90  # meaningful forward earnings growth
+                    and forward_pe < pe * pe_b_factor  # meaningful forward contraction
                 )
             )
             if not passes_valuation:

@@ -232,7 +232,7 @@ export function Dashboard({
         <div className="px-3 py-2.5 border-b border-gray-100 flex items-center justify-between gap-2 bg-gray-50">
           <MarketToggle market={market} onChange={handleMarketChange} />
           <div className="flex items-center gap-1.5">
-            {viewMode !== "catalyst" && (
+            {viewMode === "movers" && (
               <div className="flex rounded-lg overflow-hidden border border-gray-200 bg-white text-xs">
                 {PERIOD_OPTIONS.map(({ value, label }) => (
                   <button
@@ -247,12 +247,12 @@ export function Dashboard({
                 ))}
               </div>
             )}
-            {viewMode !== "catalyst" && (
+            {viewMode === "movers" && (
               <button
                 onClick={handleRefresh}
                 disabled={isRefreshing || gainersLoading}
                 className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-200 hover:text-gray-600 transition-colors disabled:opacity-40"
-                title="Force refresh"
+                title="Force refresh gainers"
               >
                 <RefreshCw size={13} className={(isRefreshing || gainersLoading) ? "animate-spin" : ""} />
               </button>

@@ -554,29 +554,48 @@ class TestValueRecoveryScannerIntegration:
 
     def test_india_pe_threshold_excludes_it_giants_at_fair_value(self) -> None:
         """
-        India Path A requires pe < 18 (not the US threshold of 22).
-        A stock at pe=20 is fair value for Indian IT (TCS/Infy range), not cheap.
-        Without forward contraction meeting Path B, it must be excluded.
+        India thresholds:
+          Path A: pe < 18  (TCS/Infy at 20-23× = fair value, not cheap)
+          Path B: pe < 22 AND forward contraction ≥ 15%
+        TCS at pe=23 fails both paths and must be excluded.
+        Infy at pe=20 with only 10% forward contraction also fails Path B.
         """
         scanner  = self._make_scanner()
         tickers  = ["TCS"]
         price_df = _make_price_df(tickers)
-        # pe=20 → fails India Path A (< 18); forward_pe=19 → 20*0.90=18, 19 > 18 → fails Path B
-        it_info = _make_fund_info(trailingPE=20.0, forwardPE=19.0)
+        # pe=23 → fails Path A (≥18); Path B cap: 23 ≥ 22 → fails → excluded
+        tcs_info = _make_fund_info(trailingPE=23.0, forwardPE=20.0)
 
         with (
             patch("services.value_recovery_scanner._INDIA_TICKER_UNIVERSE",
                   _india_universe(tickers)),
             patch("yfinance.download", return_value=price_df),
-            patch("yfinance.Ticker",   return_value=_make_yf_ticker_mock(it_info)),
+            patch("yfinance.Ticker",   return_value=_make_yf_ticker_mock(tcs_info)),
         ):
             result = asyncio.run(scanner.scan("india"))
 
-        # pe=20 should not pass India's tighter pe < 18 threshold
-        assert all(
-            s.pe_ratio is None or s.pe_ratio < 18
-            for s in result.stocks
-        )
+        assert result.stocks == []
+
+    def test_india_path_b_requires_15pct_contraction(self) -> None:
+        """
+        For India Path B, forward PE must be < trailing × 0.85 (15% contraction).
+        A stock at pe=20 with forward_pe=18 has only 10% contraction → excluded.
+        """
+        scanner  = self._make_scanner()
+        tickers  = ["INFY"]
+        price_df = _make_price_df(tickers)
+        # pe=20 < 22 (Path B cap ok), but 18 > 20×0.85=17 → contraction only 10% → excluded
+        infy_info = _make_fund_info(trailingPE=20.0, forwardPE=18.0)
+
+        with (
+            patch("services.value_recovery_scanner._INDIA_TICKER_UNIVERSE",
+                  _india_universe(tickers)),
+            patch("yfinance.download", return_value=price_df),
+            patch("yfinance.Ticker",   return_value=_make_yf_ticker_mock(infy_info)),
+        ):
+            result = asyncio.run(scanner.scan("india"))
+
+        assert result.stocks == []
 
     def test_scan_filters_overvalued_stocks(self) -> None:
         """
