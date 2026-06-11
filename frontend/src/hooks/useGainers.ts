@@ -17,6 +17,17 @@ export function useDips(market: Market) {
   });
 }
 
+// Value Recovery scan: 1-h client stale (backend caches 2 h)
+export function useValueRecovery(market: Market) {
+  return useQuery({
+    queryKey: ["value-recovery", market],
+    queryFn: () => api.getValueRecovery(market),
+    staleTime: 60 * 60 * 1000,
+    gcTime: 3 * 60 * 60 * 1000,
+    retry: 2,
+  });
+}
+
 // Note: DETAIL_STALE / DETAIL_GC are reused for the analysis hook too.
 
 // Gainers list: 5-min stale (backend cache is 30 min), keep in memory 2 hours

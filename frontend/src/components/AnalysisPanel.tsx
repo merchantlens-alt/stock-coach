@@ -1128,9 +1128,26 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
             <p className="text-sm text-gray-500 mt-0.5 truncate">{gainer.name}</p>
           </div>
         </div>
-        <button onClick={onClose} className="hidden md:flex items-center justify-center w-7 h-7 rounded-full hover:bg-gray-100 text-gray-400 shrink-0 mt-0.5">
-          <X size={15} />
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Re-analyse shortcut — always accessible in sticky header once AI data loads */}
+          {ai && !analysisLoading && onRefresh && (
+            <button
+              onClick={onRefresh}
+              disabled={isRefreshing}
+              title="Re-run analysis — fetches latest quarterly results + fresh Gemini call"
+              className="flex items-center gap-1 text-[11px] font-medium text-indigo-500 hover:text-indigo-700 disabled:opacity-40 transition-colors"
+            >
+              {isRefreshing
+                ? <Loader2 size={11} className="animate-spin" />
+                : <RefreshCw size={11} />
+              }
+              <span className="hidden sm:inline">{isRefreshing ? "Re-analysing…" : "Re-analyse"}</span>
+            </button>
+          )}
+          <button onClick={onClose} className="hidden md:flex items-center justify-center w-7 h-7 rounded-full hover:bg-gray-100 text-gray-400 mt-0.5">
+            <X size={15} />
+          </button>
+        </div>
       </div>
 
       {/* ── TAB SWITCHER ──────────────────────────────────────────────────── */}
@@ -1304,9 +1321,9 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
 
         {/* ── AI ANALYSIS ──────────────────────────────────────────────────── */}
 
-        {/* Cache status + Re-analyse button — shown whenever AI data is present */}
+        {/* Cache status — age label only; Re-analyse button is in the sticky header */}
         {ai && !analysisLoading && (
-          <div className="flex items-center justify-between gap-2 py-1.5 px-0.5">
+          <div className="flex items-center gap-1.5 py-1.5 px-0.5">
             <span className="text-[11px] text-gray-400 flex items-center gap-1">
               {ai.from_cache ? (
                 <>
@@ -1320,20 +1337,6 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
                 </>
               )}
             </span>
-            {onRefresh && (
-              <button
-                onClick={onRefresh}
-                disabled={isRefreshing}
-                title="Re-run analysis — fetches latest quarterly results + fresh Gemini call"
-                className="flex items-center gap-1 text-[11px] font-medium text-indigo-500 hover:text-indigo-700 disabled:opacity-40 transition-colors"
-              >
-                {isRefreshing
-                  ? <Loader2 size={11} className="animate-spin" />
-                  : <RefreshCw size={11} />
-                }
-                {isRefreshing ? "Re-analysing…" : "Re-analyse"}
-              </button>
-            )}
           </div>
         )}
 

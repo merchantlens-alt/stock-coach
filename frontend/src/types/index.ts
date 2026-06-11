@@ -441,6 +441,51 @@ export interface DipScanResponse {
   scanned_at: string;
 }
 
+// ── Value Recovery Scanner ────────────────────────────────────────────────────
+
+export type RecoverySignal =
+  | "eps_growing"
+  | "revenue_growing"
+  | "pe_contracting"
+  | "strong_roe"
+  | "low_debt"
+  | "profitable"
+  | "analyst_bullish";
+
+export type RecoveryQuality = "strong" | "emerging";
+
+export interface ValueRecoveryStock {
+  ticker: string;
+  name: string;
+  market: Market;
+  sector?: string;
+  price: number;
+  change_pct_1d: number;
+  pe_ratio?: number;
+  forward_pe?: number;
+  pe_contraction_pct?: number;     // % by which forward P/E is below trailing
+  signals: RecoverySignal[];
+  recovery_quality: RecoveryQuality;
+  recovery_score: number;          // 0-100
+  recovery_thesis: string;
+  earnings_growth_yoy?: number;    // decimal, 0.20 = 20%
+  revenue_growth_yoy?: number;     // decimal
+  roe?: number;                    // decimal
+  de_ratio?: number;               // yfinance percentage units (80 = 0.8× D/E)
+  profit_margin?: number;          // decimal
+  analyst_consensus?: string;
+  analyst_target?: number;
+  upside_to_target?: number;       // % upside from current price to analyst target
+  avg_volume?: number;
+}
+
+export interface ValueRecoveryScanResponse {
+  market: Market;
+  stocks: ValueRecoveryStock[];
+  from_cache: boolean;
+  scanned_at: string;
+}
+
 // ── Catalyst Scanner ──────────────────────────────────────────────────────────
 
 export interface CatalystPlay {

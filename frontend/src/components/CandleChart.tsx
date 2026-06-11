@@ -130,6 +130,17 @@ export function CandleChart({ ticker, market }: CandleChartProps) {
     };
   }, []);
 
+  // Clear stale candles immediately when ticker changes — prevents the previous
+  // stock's chart from showing briefly while the new ticker's data is in-flight.
+  // Runs BEFORE the data effect so the clear always wins the ordering race.
+  useEffect(() => {
+    if (!seriesRef.current) return;
+    seriesRef.current.candle.setData([]);
+    seriesRef.current.volume.setData([]);
+    seriesRef.current.sma20.setData([]);
+    seriesRef.current.sma50.setData([]);
+  }, [ticker]);
+
   // Feed data whenever candles change
   useEffect(() => {
     if (!seriesRef.current || !data?.candles?.length) return;
@@ -189,12 +200,19 @@ export function CandleChart({ ticker, market }: CandleChartProps) {
             <div className="w-5 h-5 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
           </div>
         )}
+        {/* Hard error (network/server failure) */}
         {isError && (
           <div className="flex items-center justify-center h-[220px] text-xs text-gray-400">
             Chart unavailable
           </div>
         )}
-        <div ref={containerRef} className={isError ? "hidden" : ""} />
+        {/* Soft empty: yfinance returned no candles (rate-limited, market closed, etc.) */}
+        {!isLoading && !isError && data?.candles != null && data.candles.length === 0 && (
+          <div className="flex items-center justify-center h-[220px] text-xs text-gray-400">
+            Price history unavailable
+          </div>
+        )}
+        <div ref={containerRef} className={isError || (!isLoading && data?.candles != null && data.candles.length === 0) ? "hidden" : ""} />
       </div>
     </div>
   );

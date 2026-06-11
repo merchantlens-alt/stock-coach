@@ -18,6 +18,7 @@ from services.market_data import MarketDataService
 from services.news_fetcher import NewsFetcher
 from services.dip_scanner import DipScannerService
 from services.portfolio_store import PortfolioStore
+from services.value_recovery_scanner import ValueRecoveryScannerService
 from services.quarterly_fetcher import QuarterlyFetcher
 
 # Module-level singletons — lru_cache cannot be used here because
@@ -36,6 +37,7 @@ _growth_triggers_agent: GrowthTriggersAgent | None = None
 _portfolio_store: PortfolioStore | None = None
 _dip_scanner: DipScannerService | None = None
 _fundamental_enricher: FundamentalEnricher | None = None
+_value_recovery_scanner: ValueRecoveryScannerService | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -152,6 +154,15 @@ def get_portfolio_store(
     if _portfolio_store is None:
         _portfolio_store = PortfolioStore(get_cache(settings))
     return _portfolio_store
+
+
+def get_value_recovery_scanner(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ValueRecoveryScannerService:
+    global _value_recovery_scanner
+    if _value_recovery_scanner is None:
+        _value_recovery_scanner = ValueRecoveryScannerService(settings)
+    return _value_recovery_scanner
 
 
 def get_fundamental_enricher() -> FundamentalEnricher:

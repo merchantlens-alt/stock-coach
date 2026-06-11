@@ -4,13 +4,13 @@ import type { Market } from "../types";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { AnalysisPanel } from "../components/AnalysisPanel";
-import { DipCard } from "../components/DipCard";
 import { GainerCard } from "../components/GainerCard";
 import { MarketNarrative } from "../components/MarketNarrative";
 import { MarketToggle } from "../components/MarketToggle";
 import { SearchBar } from "../components/SearchBar";
+import { ValueRecoveryCard } from "../components/ValueRecoveryCard";
 import { CatalystPage } from "./CatalystPage";
-import { useDips, useGainerAnalysis, useGainerDetail, useGainers, useRefreshAnalysis } from "../hooks/useGainers";
+import { useGainerAnalysis, useGainerDetail, useGainers, useRefreshAnalysis, useValueRecovery } from "../hooks/useGainers";
 import type { Period } from "../types";
 
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
@@ -38,7 +38,7 @@ function loadConvictionTickerMap(): Record<string, string[]> {
 }
 
 // ── View modes for the left panel ─────────────────────────────────────────────
-type ViewMode = "movers" | "catalyst" | "bullish" | "dips";
+type ViewMode = "movers" | "catalyst" | "bullish" | "recovery";
 
 interface DashboardProps {
   jumpTo?: { market: Market; ticker: string } | null;
@@ -118,8 +118,8 @@ export function Dashboard({
     bullish: allGainers.filter(g => (g.ai_prediction_pct ?? -1) > 0).length,
   };
 
-  // Dip scan data
-  const { data: dipData, isLoading: dipsLoading } = useDips(market);
+  // Value Recovery scan data
+  const { data: recoveryData, isLoading: recoveryLoading } = useValueRecovery(market);
 
   const { data: detail, isLoading: detailLoading, error: detailError } = useGainerDetail(market, activeTicker);
   const { data: analysisData, isLoading: analysisLoading } = useGainerAnalysis(market, activeTicker);
@@ -188,8 +188,8 @@ export function Dashboard({
   }
 
   // ── VIEW MODE TABS ──────────────────────────────────────────────────────────
-  const dipCount = dipData?.dips.length ?? 0;
-  const primeDipCount = dipData?.dips.filter(d => d.dip_quality === "prime").length ?? 0;
+  const recoveryCount      = recoveryData?.stocks.length ?? 0;
+  const strongRecoveryCount = recoveryData?.stocks.filter(s => s.recovery_quality === "strong").length ?? 0;
 
   const VIEW_TABS: { key: ViewMode; label: string; count?: number; color: string; inactive: string }[] = [
     {
@@ -213,11 +213,11 @@ export function Dashboard({
       inactive: "text-emerald-700 hover:bg-emerald-50",
     },
     {
-      key: "dips",
-      label: "🎯 Buy Dips",
-      count: dipCount || undefined,
-      color: "bg-indigo-600 text-white",
-      inactive: "text-indigo-700 hover:bg-indigo-50",
+      key: "recovery",
+      label: "♻️ Recovery",
+      count: recoveryCount || undefined,
+      color: "bg-teal-600 text-white",
+      inactive: "text-teal-700 hover:bg-teal-50",
     },
   ];
 
@@ -295,54 +295,51 @@ export function Dashboard({
               onClearSpotlight={onClearSpotlight}
             />
           </div>
-        ) : viewMode === "dips" ? (
-          /* ── DIPS mode: quality pullback opportunities ─────────────────── */
+        ) : viewMode === "recovery" ? (
+          /* ── RECOVERY mode: value re-rating opportunities ──────────────── */
           <div className="flex-1 overflow-y-auto pb-3">
-            <div className="px-4 py-3 border-b border-indigo-100 bg-indigo-50">
-              <p className="text-[10px] text-indigo-700 font-semibold leading-relaxed">
-                🎯 Stocks down 8–45% from their 3-month high with strong analyst consensus and oversold RSI.
-                These are <span className="font-bold">technical dips in fundamentally sound companies</span> — not falling knives.
+            <div className="px-4 py-3 border-b border-teal-100 bg-teal-50">
+              <p className="text-[10px] text-teal-700 font-semibold leading-relaxed">
+                ♻️ Stocks with <span className="font-bold">compressed valuations and improving fundamentals</span> — P/E below market avg or forward P/E contracting, plus ≥2 inflection signals (EPS growth, ROE, analyst upgrades). Market hasn't repriced yet.
               </p>
             </div>
             <div className="p-3 space-y-2 mt-1">
-              {dipsLoading && !dipData && (
+              {recoveryLoading && !recoveryData && (
                 <>
                   {[1, 2, 3, 4].map(i => (
                     <div key={i} className="h-44 rounded-xl bg-gray-100 animate-pulse" />
                   ))}
-                  <div className="flex items-center gap-2 text-xs text-indigo-600 bg-indigo-50 rounded-lg px-3 py-2">
-                    <div className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin shrink-0" />
-                    Scanning universe for quality dips — fetching RSI, analyst targets… 12-18 sec
+                  <div className="flex items-center gap-2 text-xs text-teal-600 bg-teal-50 rounded-lg px-3 py-2">
+                    <div className="w-3 h-3 rounded-full border-2 border-teal-400 border-t-transparent animate-spin shrink-0" />
+                    Scanning fundamentals — P/E, forward earnings, ROE, analyst targets… 15-25 sec
                   </div>
                 </>
               )}
-              {dipData?.dips.length === 0 && !dipsLoading && (
+              {recoveryData?.stocks.length === 0 && !recoveryLoading && (
                 <div className="text-center py-12 text-sm text-gray-400">
-                  <p className="text-2xl mb-2">🎯</p>
-                  <p className="font-medium text-gray-600">No quality dips right now</p>
+                  <p className="text-2xl mb-2">♻️</p>
+                  <p className="font-medium text-gray-600">No value recoveries right now</p>
                   <p className="text-xs mt-1">
-                    Markets are elevated — most stocks are near their highs.
-                    Check back during market corrections.
+                    Most stocks are fairly or fully priced. Check back when valuations compress.
                   </p>
                 </div>
               )}
-              {/* Prime dips first */}
-              {primeDipCount > 0 && (
-                <p className="text-[10px] font-bold text-green-700 uppercase tracking-wide px-1">
-                  🎯 Prime Dips — {primeDipCount} high-confidence opportunities
+              {strongRecoveryCount > 0 && (
+                <p className="text-[10px] font-bold text-teal-700 uppercase tracking-wide px-1">
+                  ♻️ Strong — {strongRecoveryCount} high-conviction re-rating candidates
                 </p>
               )}
-              {dipData?.dips.map(dip => (
-                <DipCard
-                  key={dip.ticker}
-                  dip={dip}
-                  isSelected={activeTicker === dip.ticker}
-                  isLoading={activeTicker === dip.ticker && detailLoading}
+              {recoveryData?.stocks.map(stock => (
+                <ValueRecoveryCard
+                  key={stock.ticker}
+                  stock={stock}
+                  isSelected={activeTicker === stock.ticker}
+                  isLoading={activeTicker === stock.ticker && detailLoading}
                   onClick={() => {
                     setSearchedTicker(null);
-                    setSelectedTicker(selectedTicker === dip.ticker ? null : dip.ticker);
+                    setSelectedTicker(selectedTicker === stock.ticker ? null : stock.ticker);
                   }}
-                  onPrefetch={() => handlePrefetch(dip.ticker)}
+                  onPrefetch={() => handlePrefetch(stock.ticker)}
                 />
               ))}
             </div>

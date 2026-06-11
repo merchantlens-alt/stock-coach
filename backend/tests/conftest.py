@@ -47,6 +47,7 @@ def reset_singletons() -> None:
     deps._portfolio_store = None
     deps._dip_scanner = None
     deps._fundamental_enricher = None
+    deps._value_recovery_scanner = None
     get_settings.cache_clear()
 
 

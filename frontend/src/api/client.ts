@@ -1,4 +1,4 @@
-import type { AddPortfolioEntryRequest, CatalystScanResponse, ConvictionRequest, ConvictionResponse, DipScanResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PriceHistory, RadarResponse, StockAnalysisResponse } from "../types";
+import type { AddPortfolioEntryRequest, CatalystScanResponse, ConvictionRequest, ConvictionResponse, DipScanResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PriceHistory, RadarResponse, StockAnalysisResponse, ValueRecoveryScanResponse } from "../types";
 
 const BASE_URL = "/api";
 
@@ -101,4 +101,8 @@ export const api = {
   /** Dip scanner — stocks down 8-45% from recent high but fundamentally sound. Cached 1 h. */
   getDips: (market: Market): Promise<DipScanResponse> =>
     fetchJSON(`/dips/${market}`),
+
+  /** Value Recovery scanner — compressed valuations + ≥2 fundamental inflection signals. Cached 2 h. */
+  getValueRecovery: (market: Market): Promise<ValueRecoveryScanResponse> =>
+    fetchJSON(`/recovery/${market}`),
 };

@@ -490,6 +490,71 @@ class DipScanResponse(BaseModel):
     scanned_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+# ── Value Recovery Scanner schemas ────────────────────────────────────────────
+
+from enum import Enum  # noqa: E402  (imported at module level but placed near its uses)
+
+
+class RecoverySignal(str, Enum):
+    """Individual fundamental inflection signal for a value recovery candidate."""
+    eps_growing     = "eps_growing"      # EPS growth > 8% YoY
+    revenue_growing = "revenue_growing"  # Revenue growth > 5% YoY
+    pe_contracting  = "pe_contracting"   # Forward P/E < Trailing P/E by >5%
+    strong_roe      = "strong_roe"       # ROE > 13%
+    low_debt        = "low_debt"         # D/E < 0.8× (reported as <80 in yfinance)
+    profitable      = "profitable"       # Profit margin > 8%
+    analyst_bullish = "analyst_bullish"  # Consensus Buy / Strong Buy / Outperform
+
+
+RecoveryQuality = Literal["strong", "emerging"]
+
+
+class ValueRecoveryStock(BaseModel):
+    """
+    A stock where valuation is compressed relative to fundamentals and multiple
+    inflection signals suggest a re-rating is in progress.
+    """
+    ticker: str
+    name: str
+    market: Market
+    sector: Optional[str] = None
+    price: float
+    change_pct_1d: float
+
+    # ── Valuation ─────────────────────────────────────────────────────────────
+    pe_ratio: Optional[float] = None
+    forward_pe: Optional[float] = None
+    # How much cheaper on a forward earnings basis; positive = P/E contracting
+    pe_contraction_pct: Optional[float] = None
+
+    # ── Inflection signals ────────────────────────────────────────────────────
+    signals: list[RecoverySignal] = Field(default_factory=list)
+    recovery_quality: RecoveryQuality = "emerging"
+    recovery_score: float = 0.0   # 0-100 composite score
+    recovery_thesis: str = ""     # one-liner explaining the re-rating thesis
+
+    # ── Key metrics ───────────────────────────────────────────────────────────
+    earnings_growth_yoy: Optional[float] = None
+    revenue_growth_yoy: Optional[float] = None
+    roe: Optional[float] = None
+    de_ratio: Optional[float] = None
+    profit_margin: Optional[float] = None
+
+    # ── Analyst context ───────────────────────────────────────────────────────
+    analyst_consensus: Optional[str] = None
+    analyst_target: Optional[float] = None
+    upside_to_target: Optional[float] = None
+
+    avg_volume: Optional[int] = None
+
+
+class ValueRecoveryScanResponse(BaseModel):
+    market: Market
+    stocks: list[ValueRecoveryStock] = Field(default_factory=list)
+    from_cache: bool = False
+    scanned_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class CatalystPlay(BaseModel):
     """One moving stock with momentum score and AI verdict."""
     ticker: str
