@@ -103,6 +103,6 @@ export const api = {
     fetchJSON(`/dips/${market}`),
 
   /** Value Recovery scanner — compressed valuations + ≥2 fundamental inflection signals. Cached 2 h. */
-  getValueRecovery: (market: Market): Promise<ValueRecoveryScanResponse> =>
-    fetchJSON(`/recovery/${market}`),
+  getValueRecovery: (market: Market, options: FetchOptions = {}): Promise<ValueRecoveryScanResponse> =>
+    fetchJSON(`/recovery/${market}${options.refresh ? "?refresh=true" : ""}`, options),
 };

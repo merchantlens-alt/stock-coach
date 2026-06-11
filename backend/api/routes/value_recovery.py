@@ -36,6 +36,7 @@ async def get_value_recovery(
     market: Market,
     cache: Annotated[CacheBackend, Depends(get_cache)],
     scanner: Annotated[ValueRecoveryScannerService, Depends(get_value_recovery_scanner)],
+    refresh: bool = False,
 ) -> ValueRecoveryScanResponse:
     """
     Returns value recovery candidates — stocks with compressed valuations and
@@ -54,14 +55,17 @@ async def get_value_recovery(
     Recovery = valuation compressed + fundamentals improving (fundamental signal,
     usually a 2-8 week re-rating play rather than a bounce trade).
 
-    Cached 2 hours per market.
+    Cached 2 hours per market. Pass `?refresh=true` to bust the cache.
     """
     key = _cache_key(market)
 
-    cached = await cache.get(key)
-    if cached:
-        log.info("recovery.cache_hit", market=market)
-        return ValueRecoveryScanResponse(**{**cached, "from_cache": True})
+    if not refresh:
+        cached = await cache.get(key)
+        if cached:
+            log.info("recovery.cache_hit", market=market)
+            return ValueRecoveryScanResponse(**{**cached, "from_cache": True})
+    else:
+        log.info("recovery.cache_bust", market=market)
 
     log.info("recovery.cold_scan_start", market=market)
     response = await scanner.scan(market)

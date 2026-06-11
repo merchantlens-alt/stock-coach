@@ -762,3 +762,23 @@ class TestValueRecoveryAPI:
         assert isinstance(signals, list)
         for sig in signals:
             assert isinstance(sig, str)
+
+    def test_refresh_param_bypasses_cache(self, client: TestClient) -> None:
+        """GET /api/recovery/us?refresh=true must call the scanner even when cached."""
+        fresh_response = self._make_response("us")
+        scan_mock = AsyncMock(return_value=fresh_response)
+
+        with patch(
+            "services.value_recovery_scanner.ValueRecoveryScannerService.scan",
+            new=scan_mock,
+        ):
+            # First call populates the cache
+            client.get("/api/recovery/us")
+            first_call_count = scan_mock.call_count  # should be 1
+
+            # Second call WITH refresh=true must hit the scanner again
+            resp = client.get("/api/recovery/us?refresh=true")
+
+        assert resp.status_code == 200
+        # Scanner must have been called one more time (cache was bypassed)
+        assert scan_mock.call_count == first_call_count + 1

@@ -104,6 +104,7 @@ export function Dashboard({
   }, [scannerSpotlight, scannerSpotlightMarket]);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isRecoveryRefreshing, setIsRecoveryRefreshing] = useState(false);
 
   const { data: gainersData, isLoading: gainersLoading, error: gainersError } = useGainers(market, period);
 
@@ -154,6 +155,19 @@ export function Dashboard({
       queryClient.invalidateQueries({ queryKey: ["gainers", market, period] });
     } finally {
       setIsRefreshing(false);
+    }
+  }
+
+  async function handleRecoveryRefresh() {
+    if (isRecoveryRefreshing) return;
+    setIsRecoveryRefreshing(true);
+    try {
+      const result = await api.getValueRecovery(market, { refresh: true });
+      queryClient.setQueryData(["value-recovery", market], result);
+    } catch {
+      queryClient.invalidateQueries({ queryKey: ["value-recovery", market] });
+    } finally {
+      setIsRecoveryRefreshing(false);
     }
   }
 
@@ -286,10 +300,18 @@ export function Dashboard({
         ) : viewMode === "recovery" ? (
           /* ── RECOVERY mode: value re-rating opportunities ──────────────── */
           <div className="flex-1 overflow-y-auto pb-3">
-            <div className="px-4 py-3 border-b border-teal-100 bg-teal-50">
-              <p className="text-[10px] text-teal-700 font-semibold leading-relaxed">
+            <div className="px-4 py-3 border-b border-teal-100 bg-teal-50 flex items-start gap-2">
+              <p className="text-[10px] text-teal-700 font-semibold leading-relaxed flex-1">
                 ♻️ Stocks with <span className="font-bold">compressed valuations and improving fundamentals</span> — P/E below market avg or forward P/E contracting, plus ≥2 inflection signals (EPS growth, ROE, analyst upgrades). Market hasn't repriced yet.
               </p>
+              <button
+                onClick={handleRecoveryRefresh}
+                disabled={isRecoveryRefreshing || recoveryLoading}
+                className="shrink-0 p-1 rounded-lg text-teal-500 hover:bg-teal-100 hover:text-teal-700 transition-colors disabled:opacity-40"
+                title="Force refresh scan"
+              >
+                <RefreshCw size={13} className={(isRecoveryRefreshing || recoveryLoading) ? "animate-spin" : ""} />
+              </button>
             </div>
             <div className="p-3 space-y-2 mt-1">
               {recoveryLoading && !recoveryData && (
