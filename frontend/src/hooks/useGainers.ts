@@ -17,12 +17,13 @@ export function useDips(market: Market) {
   });
 }
 
-// Value Recovery scan: 1-h client stale (backend caches 2 h)
+// Value Recovery scan: 10-min client stale (backend caches 2 h)
+// Kept short so a fresh deploy immediately surfaces filtered results on next visit.
 export function useValueRecovery(market: Market) {
   return useQuery({
     queryKey: ["value-recovery", market],
     queryFn: () => api.getValueRecovery(market),
-    staleTime: 60 * 60 * 1000,
+    staleTime: 10 * 60 * 1000,
     gcTime: 3 * 60 * 60 * 1000,
     retry: 2,
   });
