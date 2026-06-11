@@ -236,9 +236,9 @@ _INDIA_TICKER_UNIVERSE: dict[str, dict[str, str]] = {
 # own market-cap / liquidity criteria. Runs alongside day_gainers; results merged.
 _US_HIGH_MOVERS_QUERY = _YFEquityQuery('and', [
     _YFEquityQuery('eq',  ['region',        'us']),
-    _YFEquityQuery('gt',  ['intradayprice',  1]),       # exclude penny stocks
-    _YFEquityQuery('gt',  ['dayvolume',      50_000]),  # low bar — big % moves matter more
-    _YFEquityQuery('gt',  ['percentchange',  10]),      # only significant movers (≥10%)
+    _YFEquityQuery('gt',  ['intradayprice',  5]),       # $5 minimum — sub-$5 are penny stocks
+    _YFEquityQuery('gt',  ['dayvolume',      200_000]), # meaningful liquidity
+    _YFEquityQuery('gt',  ['percentchange',  5]),       # significant movers (≥5%)
 ])
 
 # Predefined EquityQuery for NSE India gainers — built once at module load.
@@ -494,7 +494,7 @@ class MarketDataService:
             price = float(q.get("regularMarketPrice") or 0)
             change_pct = float(q.get("regularMarketChangePercent") or 0)
             volume = int(q.get("regularMarketVolume") or 0)
-            if price < 1 or change_pct <= 0 or volume < 50_000:
+            if price < 5 or change_pct <= 0 or volume < 200_000:
                 continue
             seen.add(ticker)
             avg_vol = q.get("averageDailyVolume3Month") or q.get("averageDailyVolume10Day")

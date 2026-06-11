@@ -48,6 +48,12 @@ log = get_logger(__name__)
 _CONSENSUS_SKIP    = {"underperform", "underweight", "sell", "strong_sell"}
 _CONSENSUS_BULLISH = {"strong_buy", "buy", "outperform", "overweight"}
 
+# Market-specific P/E thresholds for the valuation entry gate.
+# Indian large-cap IT (TCS, Infy) trade at 20-28× as their NORMAL multiple — that's
+# not a compressed valuation, it's fair value. Using the same 22× US threshold would
+# incorrectly classify them as "cheap". India Path A requires genuinely cheap (< 18×).
+_PE_PATH_A: dict[str, float] = {"us": 22.0, "india": 18.0}
+_PE_PATH_B_CAP: dict[str, float] = {"us": 35.0, "india": 28.0}
 
 # ── Pure helpers (fully testable without I/O) ─────────────────────────────────
 
@@ -72,6 +78,33 @@ def _norm_consensus(raw: Optional[str]) -> Optional[str]:
     return raw.lower().replace(" ", "_").replace("-", "_")
 
 
+def compute_implied_growth_rate(pe: float) -> Optional[float]:
+    """
+    Return the EPS CAGR (% per year) the current trailing P/E is implying.
+
+    Given a 5-year horizon, 10% discount rate, and 15× terminal P/E:
+
+        P = terminal_EPS × 15 / (1.10)^5
+        terminal_EPS = P × (1.10)^5 / 15  =  EPS × implied_ratio
+        implied_ratio = pe × (1.10)^5 / 15
+        implied_CAGR = implied_ratio^(1/5) - 1
+
+    The price cancels — implied growth depends only on the PE multiple and
+    the two assumptions (cost of capital, terminal multiple).
+
+    Interpretation:
+      pe=15 → ~10% implied growth (fair value at discount rate)
+      pe=10 → ~1% implied growth (market priced for near-stagnation)
+      pe=20 → ~16% implied growth (elevated growth already baked in)
+    """
+    if pe <= 0:
+        return None
+    ratio = pe * (1.10 ** 5) / 15.0
+    if ratio <= 0:
+        return None
+    return round((ratio ** (1.0 / 5) - 1) * 100, 1)
+
+
 def classify_signals(
     pe: Optional[float],
     forward_pe: Optional[float],
@@ -81,6 +114,7 @@ def classify_signals(
     de_ratio: Optional[float],
     profit_margin: Optional[float],
     consensus: Optional[str],
+    implied_growth_pct: Optional[float] = None,
 ) -> list[RecoverySignal]:
     """
     Return the list of active inflection signals for a stock.
@@ -89,6 +123,7 @@ def classify_signals(
       - earnings_growth, revenue_growth, roe, profit_margin: decimal (0.15 = 15%)
       - de_ratio: percentage as reported by yfinance (80 = 0.8× actual D/E)
       - pe, forward_pe: raw P/E multiples
+      - implied_growth_pct: % per year the current PE is pricing in (from compute_implied_growth_rate)
     """
     signals: list[RecoverySignal] = []
 
@@ -120,6 +155,14 @@ def classify_signals(
     norm = _norm_consensus(consensus)
     if norm and norm in _CONSENSUS_BULLISH:
         signals.append(RecoverySignal.analyst_bullish)
+
+    # Reverse DCF: the market is pricing in far less growth than is actually occurring.
+    # Gap of 20+ pp means "market thinks 5% growth; company delivering 25%" — a
+    # fundamental mispricing that value re-rating closes over time.
+    if implied_growth_pct is not None and earnings_growth is not None:
+        actual_pct = earnings_growth * 100.0
+        if actual_pct - implied_growth_pct > 20.0:
+            signals.append(RecoverySignal.rdcf_mispriced)
 
     return signals
 
@@ -390,16 +433,19 @@ class ValueRecoveryScannerService:
                 forward_pe = None
 
             # ── Entry gate: at least one valuation compression signal ──────────
-            # Path A: trailing P/E is genuinely cheap (at or below market median)
-            # Path B: forward P/E is contracting meaningfully AND the trailing P/E
-            #         isn't an outright growth premium (cap at 35×).  A 42× trailing
-            #         P/E with a 48% forward contraction is a fast-growth story, not
-            #         a value recovery — the market multiple is expensive TODAY even
-            #         if earnings are growing into it.
+            # Path A: trailing P/E is genuinely cheap (market-specific threshold).
+            #   US: < 22×  (S&P 500 median ~18-20×)
+            #   India: < 18×  (large-cap Indian IT trades 22-28× at fair value;
+            #           18× or below signals genuine compression in the Indian context)
+            # Path B: forward P/E contracting meaningfully AND trailing P/E isn't
+            #   an outright growth premium. A 42× trailing P/E with 48% forward
+            #   contraction is a fast-growth story, not a value recovery.
+            pe_a = _PE_PATH_A.get(market, 22.0)
+            pe_b = _PE_PATH_B_CAP.get(market, 35.0)
             passes_valuation = (
-                pe < 22  # Path A — cheap on trailing multiple
+                pe < pe_a  # Path A — cheap on trailing multiple
                 or (
-                    pe < 35  # Path B — not a premium growth multiple
+                    pe < pe_b  # Path B — not a premium growth multiple
                     and forward_pe is not None
                     and forward_pe > 0
                     and forward_pe < pe * 0.90  # meaningful forward earnings growth
@@ -407,6 +453,9 @@ class ValueRecoveryScannerService:
             )
             if not passes_valuation:
                 continue
+
+            # ── Reverse DCF: what growth rate is the current PE pricing in? ────
+            implied_growth_pct = compute_implied_growth_rate(pe)
 
             # ── Inflection signals ─────────────────────────────────────────────
             signals = classify_signals(
@@ -416,6 +465,7 @@ class ValueRecoveryScannerService:
                 roe=roe, de_ratio=de_ratio,
                 profit_margin=profit_margin,
                 consensus=consensus,
+                implied_growth_pct=implied_growth_pct,
             )
             if len(signals) < 2:
                 continue
@@ -481,6 +531,7 @@ class ValueRecoveryScannerService:
                 analyst_consensus=consensus,
                 analyst_target=analyst_target,
                 upside_to_target=upside_to_target,
+                implied_growth_pct=implied_growth_pct,
                 avg_volume=c["avg_vol"],
             ))
 

@@ -450,7 +450,8 @@ export type RecoverySignal =
   | "strong_roe"
   | "low_debt"
   | "profitable"
-  | "analyst_bullish";
+  | "analyst_bullish"
+  | "rdcf_mispriced";
 
 export type RecoveryQuality = "strong" | "emerging";
 
@@ -476,6 +477,7 @@ export interface ValueRecoveryStock {
   analyst_consensus?: string;
   analyst_target?: number;
   upside_to_target?: number;       // % upside from current price to analyst target
+  implied_growth_pct?: number;     // EPS CAGR % the current PE is pricing in (reverse DCF)
   avg_volume?: number;
 }
 

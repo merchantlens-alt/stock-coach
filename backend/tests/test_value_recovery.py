@@ -25,6 +25,7 @@ from services.value_recovery_scanner import (
     ValueRecoveryScannerService,
     build_recovery_thesis,
     classify_signals,
+    compute_implied_growth_rate,
     compute_recovery_score,
 )
 
@@ -158,15 +159,74 @@ class TestClassifySignals:
         sigs = classify_signals(None, None, None, None, None, None, None, None)
         assert sigs == []
 
+    def test_rdcf_mispriced_fires_when_gap_exceeds_threshold(self) -> None:
+        # pe=14 → implied growth ≈ 8.5%; actual 0.35 = 35% → gap 26.5pp > 20 → fires
+        sigs = classify_signals(
+            14, None, 0.35, None, None, None, None, None,
+            implied_growth_pct=8.5,
+        )
+        assert RecoverySignal.rdcf_mispriced in sigs
+
+    def test_rdcf_mispriced_does_not_fire_when_gap_is_small(self) -> None:
+        # pe=14 → implied ≈ 8.5%; actual 0.20 = 20% → gap 11.5pp < 20 → no fire
+        sigs = classify_signals(
+            14, None, 0.20, None, None, None, None, None,
+            implied_growth_pct=8.5,
+        )
+        assert RecoverySignal.rdcf_mispriced not in sigs
+
+    def test_rdcf_mispriced_does_not_fire_without_implied_growth(self) -> None:
+        sigs = classify_signals(
+            14, None, 0.50, None, None, None, None, None,
+            implied_growth_pct=None,
+        )
+        assert RecoverySignal.rdcf_mispriced not in sigs
+
     def test_all_signals_can_fire_together(self) -> None:
+        # pe=14 → implied ≈ 8.5%; earnings_growth=0.35 (35%) → gap 26.5pp > 20 → rdcf fires
         sigs = classify_signals(
             pe=14, forward_pe=10,
-            earnings_growth=0.25, revenue_growth=0.15,
+            earnings_growth=0.35, revenue_growth=0.15,
             roe=0.20, de_ratio=40.0,
             profit_margin=0.18, consensus="strong_buy",
+            implied_growth_pct=8.5,
         )
-        assert len(sigs) == 7
+        assert len(sigs) == 8
         assert set(sigs) == set(_all_signals())
+
+
+# ── compute_implied_growth_rate ───────────────────────────────────────────────
+
+class TestComputeImpliedGrowthRate:
+    def test_pe_15_implies_approx_10pct(self) -> None:
+        # At 15× PE with 10% discount rate and 15× terminal PE, implied = ~10%
+        result = compute_implied_growth_rate(15.0)
+        assert result is not None
+        assert abs(result - 10.0) < 0.5
+
+    def test_low_pe_implies_low_growth(self) -> None:
+        # pe=10 → market pricing near-stagnation (~1-2%)
+        result = compute_implied_growth_rate(10.0)
+        assert result is not None
+        assert result < 5.0
+
+    def test_high_pe_implies_high_growth(self) -> None:
+        # pe=25 → market pricing in meaningful growth (>15%)
+        result = compute_implied_growth_rate(25.0)
+        assert result is not None
+        assert result > 15.0
+
+    def test_zero_pe_returns_none(self) -> None:
+        assert compute_implied_growth_rate(0.0) is None
+
+    def test_negative_pe_returns_none(self) -> None:
+        assert compute_implied_growth_rate(-5.0) is None
+
+    def test_higher_pe_implies_higher_growth(self) -> None:
+        low  = compute_implied_growth_rate(10.0)
+        high = compute_implied_growth_rate(30.0)
+        assert high is not None and low is not None
+        assert high > low
 
 
 # ── compute_recovery_score ────────────────────────────────────────────────────
@@ -491,6 +551,32 @@ class TestValueRecoveryScannerIntegration:
 
         for stock in result.stocks:
             assert len(stock.signals) >= 2
+
+    def test_india_pe_threshold_excludes_it_giants_at_fair_value(self) -> None:
+        """
+        India Path A requires pe < 18 (not the US threshold of 22).
+        A stock at pe=20 is fair value for Indian IT (TCS/Infy range), not cheap.
+        Without forward contraction meeting Path B, it must be excluded.
+        """
+        scanner  = self._make_scanner()
+        tickers  = ["TCS"]
+        price_df = _make_price_df(tickers)
+        # pe=20 → fails India Path A (< 18); forward_pe=19 → 20*0.90=18, 19 > 18 → fails Path B
+        it_info = _make_fund_info(trailingPE=20.0, forwardPE=19.0)
+
+        with (
+            patch("services.value_recovery_scanner._INDIA_TICKER_UNIVERSE",
+                  _india_universe(tickers)),
+            patch("yfinance.download", return_value=price_df),
+            patch("yfinance.Ticker",   return_value=_make_yf_ticker_mock(it_info)),
+        ):
+            result = asyncio.run(scanner.scan("india"))
+
+        # pe=20 should not pass India's tighter pe < 18 threshold
+        assert all(
+            s.pe_ratio is None or s.pe_ratio < 18
+            for s in result.stocks
+        )
 
     def test_scan_filters_overvalued_stocks(self) -> None:
         """

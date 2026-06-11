@@ -504,6 +504,7 @@ class RecoverySignal(str, Enum):
     low_debt        = "low_debt"         # D/E < 0.8× (reported as <80 in yfinance)
     profitable      = "profitable"       # Profit margin > 8%
     analyst_bullish = "analyst_bullish"  # Consensus Buy / Strong Buy / Outperform
+    rdcf_mispriced  = "rdcf_mispriced"  # Reverse DCF: market pricing far less growth than actual
 
 
 RecoveryQuality = Literal["strong", "emerging"]
@@ -544,6 +545,10 @@ class ValueRecoveryStock(BaseModel):
     analyst_consensus: Optional[str] = None
     analyst_target: Optional[float] = None
     upside_to_target: Optional[float] = None
+
+    # ── Reverse DCF ───────────────────────────────────────────────────────────
+    # EPS CAGR % the current PE is literally pricing in (5yr, 10% discount, 15x terminal)
+    implied_growth_pct: Optional[float] = None
 
     avg_volume: Optional[int] = None
 

@@ -35,10 +35,12 @@ const SIGNAL_LABEL: Record<RecoverySignal, string> = {
   low_debt:        "Low Debt",
   profitable:      "Profitable",
   analyst_bullish: "Analyst Buy",
+  rdcf_mispriced:  "rDCF Gap",
 };
 
 // Priority order: show the most compelling signals first
 const SIGNAL_PRIORITY: RecoverySignal[] = [
+  "rdcf_mispriced",
   "pe_contracting",
   "eps_growing",
   "revenue_growing",
@@ -167,7 +169,9 @@ export function ValueRecoveryCard({ stock, isSelected, isLoading, onClick, onPre
               <span
                 key={sig}
                 className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
-                  sig === "pe_contracting"
+                  sig === "rdcf_mispriced"
+                    ? "bg-purple-50 text-purple-700 border-purple-200"
+                    : sig === "pe_contracting"
                     ? "bg-teal-50 text-teal-700 border-teal-200"
                     : sig === "eps_growing" || sig === "revenue_growing"
                     ? "bg-green-50 text-green-700 border-green-200"
@@ -210,6 +214,20 @@ export function ValueRecoveryCard({ stock, isSelected, isLoading, onClick, onPre
             </span>
           )}
         </div>
+
+        {/* Reverse DCF row — market implied growth vs actual */}
+        {stock.implied_growth_pct != null && stock.earnings_growth_yoy != null && (
+          <div className="flex items-center gap-1.5 text-[10px] text-gray-500 bg-purple-50 rounded-lg px-2 py-1">
+            <span className="text-purple-500">◈</span>
+            <span>Market pricing</span>
+            <span className="font-semibold text-gray-700">{stock.implied_growth_pct.toFixed(0)}% EPS growth</span>
+            <span>·</span>
+            <span>Actual</span>
+            <span className={`font-semibold ${stock.earnings_growth_yoy > stock.implied_growth_pct / 100 ? "text-green-600" : "text-red-500"}`}>
+              {stock.earnings_growth_yoy >= 0 ? "+" : ""}{(stock.earnings_growth_yoy * 100).toFixed(0)}%
+            </span>
+          </div>
+        )}
 
         {/* Loading indicator */}
         {isLoading && (
