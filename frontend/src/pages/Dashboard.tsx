@@ -38,7 +38,7 @@ function loadConvictionTickerMap(): Record<string, string[]> {
 }
 
 // ── View modes for the left panel ─────────────────────────────────────────────
-type ViewMode = "movers" | "catalyst" | "bullish" | "recovery";
+type ViewMode = "movers" | "catalyst" | "recovery";
 
 interface DashboardProps {
   jumpTo?: { market: Market; ticker: string } | null;
@@ -66,6 +66,7 @@ export function Dashboard({
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [searchedTicker, setSearchedTicker] = useState<string | null>(null);
   const [viewMode, setViewMode]       = useState<ViewMode>("movers");
+  const [aiBullishOnly, setAiBullishOnly] = useState(false);
   const queryClient = useQueryClient();
 
   const convictionMap = useMemo(() => loadConvictionTickerMap(), []);
@@ -108,15 +109,8 @@ export function Dashboard({
 
   const allGainers = gainersData?.gainers ?? [];
 
-  const filteredGainers = (() => {
-    if (viewMode === "bullish") return allGainers.filter(g => (g.ai_prediction_pct ?? -1) > 0);
-    return allGainers;
-  })();
-
-  const modeCounts = {
-    movers:  allGainers.length,
-    bullish: allGainers.filter(g => (g.ai_prediction_pct ?? -1) > 0).length,
-  };
+  const bullishGainers  = allGainers.filter(g => (g.ai_prediction_pct ?? -1) > 0);
+  const filteredGainers = aiBullishOnly ? bullishGainers : allGainers;
 
   // Value Recovery scan data
   const { data: recoveryData, isLoading: recoveryLoading } = useValueRecovery(market);
@@ -129,6 +123,7 @@ export function Dashboard({
     setMarket(m);
     setSelectedTicker(null);
     setSearchedTicker(null);
+    setAiBullishOnly(false);
     if (viewMode !== "catalyst") setViewMode("movers");
     onClearSpotlight?.();
   }
@@ -188,14 +183,14 @@ export function Dashboard({
   }
 
   // ── VIEW MODE TABS ──────────────────────────────────────────────────────────
-  const recoveryCount      = recoveryData?.stocks.length ?? 0;
+  const recoveryCount       = recoveryData?.stocks.length ?? 0;
   const strongRecoveryCount = recoveryData?.stocks.filter(s => s.recovery_quality === "strong").length ?? 0;
 
   const VIEW_TABS: { key: ViewMode; label: string; count?: number; color: string; inactive: string }[] = [
     {
       key: "movers",
       label: "Top Movers",
-      count: modeCounts.movers,
+      count: allGainers.length,
       color: "bg-gray-900 text-white",
       inactive: "text-gray-600 hover:bg-gray-100",
     },
@@ -204,13 +199,6 @@ export function Dashboard({
       label: "⚡ Catalyst",
       color: "bg-green-600 text-white",
       inactive: "text-green-700 hover:bg-green-50",
-    },
-    {
-      key: "bullish",
-      label: "🟢 AI Bullish",
-      count: modeCounts.bullish,
-      color: "bg-emerald-600 text-white",
-      inactive: "text-emerald-700 hover:bg-emerald-50",
     },
     {
       key: "recovery",
@@ -357,12 +345,29 @@ export function Dashboard({
 
             {/* Summary bar */}
             {gainersData && (
-              <div className="px-4 py-1.5 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
-                <p className="text-[10px] text-gray-400">
+              <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 flex items-center gap-2">
+                <p className="text-[10px] text-gray-400 shrink-0">
                   {filteredGainers.length} stocks · {gainersData.date}
                 </p>
+                {/* AI Bullish toggle chip */}
+                {bullishGainers.length > 0 && (
+                  <button
+                    onClick={() => setAiBullishOnly(v => !v)}
+                    className={[
+                      "flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border transition-colors whitespace-nowrap",
+                      aiBullishOnly
+                        ? "bg-emerald-600 text-white border-emerald-600"
+                        : "bg-white text-emerald-700 border-emerald-300 hover:bg-emerald-50",
+                    ].join(" ")}
+                  >
+                    🟢 AI Bullish
+                    <span className={`text-[9px] rounded-full px-1 font-bold ${aiBullishOnly ? "bg-white/20" : "bg-emerald-100 text-emerald-600"}`}>
+                      {bullishGainers.length}
+                    </span>
+                  </button>
+                )}
                 {gainersData.from_cache && (
-                  <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">cached</span>
+                  <span className="ml-auto text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded shrink-0">cached</span>
                 )}
               </div>
             )}
@@ -411,7 +416,7 @@ export function Dashboard({
 
                 {filteredGainers.length === 0 && !gainersLoading && (
                   <div className="text-center py-12 text-sm text-gray-400">
-                    {viewMode === "bullish"
+                    {aiBullishOnly
                       ? "No AI-bullish stocks yet — run analysis on some stocks first."
                       : "No stocks found."}
                   </div>
