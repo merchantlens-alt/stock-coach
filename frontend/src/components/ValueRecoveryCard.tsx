@@ -204,8 +204,9 @@ export function ValueRecoveryCard({ stock, isSelected, isLoading, onClick, onPre
               <TrendingUp size={10} className="text-indigo-500 shrink-0" />
               <span className="font-semibold text-gray-900">{fmt(stock.analyst_target, currency)}</span>
               <span className="text-green-600 font-semibold">
-                +{stock.upside_to_target.toFixed(1)}% upside
+                +{stock.upside_to_target.toFixed(1)}%
               </span>
+              <span className="text-gray-400">12m target</span>
             </span>
           )}
         </div>

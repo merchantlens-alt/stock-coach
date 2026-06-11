@@ -112,8 +112,9 @@ class TestGetNews:
 
     @pytest.mark.asyncio
     async def test_merges_items_from_both_sources(self, fetcher):
-        newsapi_items = [_item("NewsAPI Article", ts=1_700_001_000)]
-        yf_items = [_item("YF Article", ts=1_700_002_000)]
+        # Titles must mention ticker/company — the relevance filter requires it
+        newsapi_items = [_item("ASTC closes government contract deal", ts=1_700_001_000)]
+        yf_items      = [_item("Astrotech reports Q3 earnings beat",   ts=1_700_002_000)]
 
         fetcher._fetch_newsapi = AsyncMock(return_value=newsapi_items)  # type: ignore[method-assign]
         fetcher._fetch_yf_news = AsyncMock(return_value=yf_items)       # type: ignore[method-assign]
@@ -121,36 +122,49 @@ class TestGetNews:
         result = await fetcher.get_news("ASTC", "Astrotech")
         assert len(result) == 2
         # Most recent first
-        assert result[0].title == "YF Article"
+        assert result[0].title == "Astrotech reports Q3 earnings beat"
 
     @pytest.mark.asyncio
     async def test_still_returns_items_if_newsapi_fails(self, fetcher):
-        yf_items = [_item("YF Article")]
+        yf_items = [_item("ASTC surges on contract win")]
 
         fetcher._fetch_newsapi = AsyncMock(side_effect=Exception("newsapi down"))  # type: ignore[method-assign]
         fetcher._fetch_yf_news = AsyncMock(return_value=yf_items)                  # type: ignore[method-assign]
 
         result = await fetcher.get_news("ASTC", "Astrotech")
         assert len(result) == 1
-        assert result[0].title == "YF Article"
+        assert result[0].title == "ASTC surges on contract win"
 
     @pytest.mark.asyncio
     async def test_uses_google_rss_fallback_when_no_api_key(self):
         fetcher = NewsFetcher(_make_settings(api_key=""))
-        rss_items = [_item("Google RSS Article")]
-        yf_items = [_item("YF Article")]
+        rss_items = [_item("ASTC Google RSS headline")]
+        yf_items  = [_item("Astrotech YF news item")]
 
         fetcher._fetch_google_news_rss = AsyncMock(return_value=rss_items)  # type: ignore[method-assign]
-        fetcher._fetch_yf_news = AsyncMock(return_value=yf_items)           # type: ignore[method-assign]
+        fetcher._fetch_yf_news         = AsyncMock(return_value=yf_items)   # type: ignore[method-assign]
 
         result = await fetcher.get_news("ASTC", "Astrotech")
         assert len(result) == 2
 
     @pytest.mark.asyncio
     async def test_respects_limit(self, fetcher):
-        many = [_item(f"Article {i}", ts=1_700_000_000 + i) for i in range(10)]
+        many = [_item(f"ASTC update {i}", ts=1_700_000_000 + i) for i in range(10)]
         fetcher._fetch_newsapi = AsyncMock(return_value=many)  # type: ignore[method-assign]
         fetcher._fetch_yf_news = AsyncMock(return_value=[])    # type: ignore[method-assign]
 
         result = await fetcher.get_news("ASTC", "Astrotech", limit=5)
         assert len(result) == 5
+
+    @pytest.mark.asyncio
+    async def test_filters_unrelated_articles(self, fetcher):
+        """Articles that don't mention the ticker or company must be dropped."""
+        relevant   = _item("ASTC wins NASA subcontract")
+        irrelevant = _item("Egg freezing is a booming business in Canada")
+
+        fetcher._fetch_newsapi = AsyncMock(return_value=[relevant, irrelevant])
+        fetcher._fetch_yf_news = AsyncMock(return_value=[])
+
+        result = await fetcher.get_news("ASTC", "Astrotech")
+        assert len(result) == 1
+        assert result[0].title == "ASTC wins NASA subcontract"

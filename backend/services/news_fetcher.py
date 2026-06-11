@@ -79,6 +79,15 @@ class NewsFetcher:
                     seen_titles.add(key)
                     merged.append(item)
 
+        # Relevance filter — yfinance returns Yahoo Finance trending news that is
+        # not company-specific (e.g. "Egg freezing in Canada" appearing for ADBE).
+        # Keep only articles whose title mentions the ticker or a meaningful word
+        # from the company name.  We're permissive to avoid dropping real coverage.
+        merged = [
+            item for item in merged
+            if _is_relevant(item.title, ticker, company_name)
+        ]
+
         # Sort by recency (None published_at goes last), return top limit
         merged.sort(key=lambda x: x.published_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
         return merged[:limit]
@@ -246,6 +255,34 @@ class NewsFetcher:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+
+_COMPANY_STOP = {"inc", "ltd", "corp", "llc", "plc", "limited", "co", "the",
+                 "and", "for", "group", "holdings", "technologies", "technology"}
+
+
+def _is_relevant(title: str, ticker: str, company_name: str) -> bool:
+    """
+    Return True when a headline is plausibly about this company.
+
+    yfinance's Ticker.news returns Yahoo Finance trending content that is not
+    filtered to the requested ticker — this guard removes the noise.
+
+    Strategy (permissive — we'd rather keep a borderline article than drop a
+    real one):
+      1. Does the bare ticker symbol appear in the title?
+      2. Does any meaningful word (≥4 chars, not a generic suffix) from the
+         company name appear in the title?
+    """
+    text = title.lower()
+    # Strip exchange suffix (.NS, .BO) before matching
+    bare = ticker.lower().replace(".ns", "").replace(".bo", "")
+    if bare in text:
+        return True
+
+    words = [w.strip(".,()-") for w in company_name.lower().split()]
+    meaningful = [w for w in words if len(w) >= 4 and w not in _COMPANY_STOP]
+    return any(w in text for w in meaningful)
 
 
 def _parse_rss(xml: str, limit: int) -> list[NewsItem]:

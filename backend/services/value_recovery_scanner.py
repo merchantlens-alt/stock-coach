@@ -291,7 +291,7 @@ class ValueRecoveryScannerService:
             return []
 
         log.info("value_recovery.us_candidates", count=len(candidates))
-        fund_map = await self._batch_fundamentals(
+        fund_map = await self._fetch_fundamentals_with_retry(
             [c["ticker"] for c in candidates], market="us"
         )
         return self._score_and_filter(candidates, fund_map, market="us")
@@ -344,7 +344,7 @@ class ValueRecoveryScannerService:
             return []
 
         log.info("value_recovery.india_candidates", count=len(candidates))
-        fund_map = await self._batch_fundamentals(
+        fund_map = await self._fetch_fundamentals_with_retry(
             [c["ticker"] for c in candidates], market="india"
         )
         return self._score_and_filter(candidates, fund_map, market="india")
@@ -390,12 +390,19 @@ class ValueRecoveryScannerService:
                 forward_pe = None
 
             # ── Entry gate: at least one valuation compression signal ──────────
+            # Path A: trailing P/E is genuinely cheap (at or below market median)
+            # Path B: forward P/E is contracting meaningfully AND the trailing P/E
+            #         isn't an outright growth premium (cap at 35×).  A 42× trailing
+            #         P/E with a 48% forward contraction is a fast-growth story, not
+            #         a value recovery — the market multiple is expensive TODAY even
+            #         if earnings are growing into it.
             passes_valuation = (
-                pe < 22  # trading at or below market median
+                pe < 22  # Path A — cheap on trailing multiple
                 or (
-                    forward_pe is not None
+                    pe < 35  # Path B — not a premium growth multiple
+                    and forward_pe is not None
                     and forward_pe > 0
-                    and forward_pe < pe * 0.90  # earnings expected to grow ≥10%
+                    and forward_pe < pe * 0.90  # meaningful forward earnings growth
                 )
             )
             if not passes_valuation:
@@ -419,6 +426,15 @@ class ValueRecoveryScannerService:
                 upside_to_target = round(
                     (analyst_target - c["price"]) / c["price"] * 100, 1
                 )
+
+            # Require meaningful re-rating room when an analyst target exists.
+            # 15% minimum over 12 months filters low-conviction picks (e.g. 10%
+            # upside = just market return, not a recovery play).
+            # Stocks with no analyst coverage are NOT excluded — they just don't
+            # receive the analyst upside bonus in the score.
+            _MIN_UPSIDE = 15.0
+            if upside_to_target is not None and upside_to_target < _MIN_UPSIDE:
+                continue
 
             score = compute_recovery_score(
                 pe=pe,
@@ -476,6 +492,42 @@ class ValueRecoveryScannerService:
             total=len(results),
         )
         return results
+
+    # ── Fundamentals fetch with retry ────────────────────────────────────────
+
+    async def _fetch_fundamentals_with_retry(
+        self, tickers: list[str], market: str
+    ) -> dict[str, dict]:
+        """
+        Fetch fundamentals, then do a single retry pass for any ticker that came
+        back empty (yfinance rate-limit or transient timeout).  This prevents
+        high-quality stocks like META from silently falling off the list just
+        because their info call happened to time out in the first batch.
+        """
+        fund_map = await self._batch_fundamentals(tickers, market)
+
+        failed = [t for t in tickers if not fund_map.get(t)]
+        if failed:
+            log.info(
+                "value_recovery.retrying_failed_tickers",
+                market=market,
+                count=len(failed),
+                tickers=failed[:10],  # log up to 10 for debugging
+            )
+            # Small delay before retry to let yfinance rate-limit window reset
+            await asyncio.sleep(2.0)
+            retried = await self._batch_fundamentals(failed, market)
+            fund_map.update(retried)
+
+            still_failed = [t for t in failed if not fund_map.get(t)]
+            if still_failed:
+                log.warning(
+                    "value_recovery.retry_still_failed",
+                    market=market,
+                    count=len(still_failed),
+                )
+
+        return fund_map
 
     # ── Batch fundamentals fetch ──────────────────────────────────────────────
 

@@ -7,6 +7,7 @@ import {
   LineSeries,
   type UTCTimestamp,
 } from "lightweight-charts";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Candle, Market } from "../types";
 import { usePriceHistory } from "../hooks/useGainers";
@@ -48,7 +49,7 @@ export function CandleChart({ ticker, market }: CandleChartProps) {
   const chartRef = useRef<ReturnType<typeof createChart> | null>(null);
   const seriesRef = useRef<SeriesRefs | null>(null);
 
-  const { data, isLoading, isError } = usePriceHistory(market, ticker, period);
+  const { data, isLoading, isError, refetch } = usePriceHistory(market, ticker, period);
 
   // Create chart once on mount, destroy on unmount
   useEffect(() => {
@@ -202,14 +203,26 @@ export function CandleChart({ ticker, market }: CandleChartProps) {
         )}
         {/* Hard error (network/server failure) */}
         {isError && (
-          <div className="flex items-center justify-center h-[220px] text-xs text-gray-400">
-            Chart unavailable
+          <div className="flex flex-col items-center justify-center h-[220px] gap-2">
+            <p className="text-xs text-gray-400">Chart unavailable</p>
+            <button
+              onClick={() => refetch()}
+              className="flex items-center gap-1 text-[11px] text-indigo-500 hover:text-indigo-700 transition-colors"
+            >
+              <RefreshCw size={11} /> Retry
+            </button>
           </div>
         )}
         {/* Soft empty: yfinance returned no candles (rate-limited, market closed, etc.) */}
         {!isLoading && !isError && data?.candles != null && data.candles.length === 0 && (
-          <div className="flex items-center justify-center h-[220px] text-xs text-gray-400">
-            Price history unavailable
+          <div className="flex flex-col items-center justify-center h-[220px] gap-2">
+            <p className="text-xs text-gray-400">Price history unavailable</p>
+            <button
+              onClick={() => refetch()}
+              className="flex items-center gap-1 text-[11px] text-indigo-500 hover:text-indigo-700 transition-colors"
+            >
+              <RefreshCw size={11} /> Retry
+            </button>
           </div>
         )}
         <div ref={containerRef} className={isError || (!isLoading && data?.candles != null && data.candles.length === 0) ? "hidden" : ""} />

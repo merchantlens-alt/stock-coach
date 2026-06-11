@@ -493,11 +493,18 @@ class TestValueRecoveryScannerIntegration:
             assert len(stock.signals) >= 2
 
     def test_scan_filters_overvalued_stocks(self) -> None:
-        """Stocks with PE >= 50 and no forward PE should be excluded by entry gate."""
-        scanner     = self._make_scanner()
-        tickers     = ["AAPL"]
-        price_df    = _make_price_df(tickers)
-        overval_info = _make_fund_info(trailingPE=55.0, forwardPE=None)
+        """
+        Stocks with a high trailing P/E and no meaningful forward contraction are excluded.
+
+        Path A (pe < 22): cheap absolute — excluded when pe = 42×
+        Path B (pe < 35 + contraction): growth-at-reasonable-price —
+          excluded when pe = 42×, even with a 48% contraction (DY scenario)
+        """
+        scanner  = self._make_scanner()
+        tickers  = ["AAPL"]
+        price_df = _make_price_df(tickers)
+        # pe=42 > 35 → fails Path B; pe=42 > 22 → fails Path A → excluded
+        overval_info = _make_fund_info(trailingPE=42.0, forwardPE=22.0)
 
         with (
             patch("services.value_recovery_scanner._US_TICKER_UNIVERSE",
@@ -507,9 +514,51 @@ class TestValueRecoveryScannerIntegration:
         ):
             result = asyncio.run(scanner.scan("us"))
 
+        # No stock with pe > 35 should survive (unless pe < 22 path was hit)
         for stock in result.stocks:
-            if stock.pe_ratio is not None:
-                assert stock.pe_ratio <= 50
+            if stock.pe_ratio is not None and stock.pe_ratio >= 22:
+                assert stock.pe_ratio < 35
+
+    def test_scan_filters_low_analyst_upside(self) -> None:
+        """Stocks with a known analyst target but < 15% upside must be excluded."""
+        scanner  = self._make_scanner()
+        tickers  = ["AAPL"]
+        price_df = _make_price_df(tickers)  # prices linspace 100→120, last price ~120
+        # Target = 130 → upside = (130-120)/120 = 8.3% < 15% → excluded
+        low_upside_info = _make_fund_info(targetMeanPrice=130.0)
+
+        with (
+            patch("services.value_recovery_scanner._US_TICKER_UNIVERSE",
+                  _us_universe(tickers)),
+            patch("yfinance.download", return_value=price_df),
+            patch("yfinance.Ticker",   return_value=_make_yf_ticker_mock(low_upside_info)),
+        ):
+            result = asyncio.run(scanner.scan("us"))
+
+        # Stock with only 8% upside must not appear
+        assert all(
+            s.upside_to_target is None or s.upside_to_target >= 15.0
+            for s in result.stocks
+        )
+
+    def test_scan_keeps_stocks_without_analyst_target(self) -> None:
+        """Stocks with no analyst target (upside_to_target = None) are NOT excluded."""
+        scanner  = self._make_scanner()
+        tickers  = ["AAPL"]
+        price_df = _make_price_df(tickers)
+        # No target price → upside_to_target will be None → should not be filtered
+        no_target_info = _make_fund_info(targetMeanPrice=None)
+
+        with (
+            patch("services.value_recovery_scanner._US_TICKER_UNIVERSE",
+                  _us_universe(tickers)),
+            patch("yfinance.download", return_value=price_df),
+            patch("yfinance.Ticker",   return_value=_make_yf_ticker_mock(no_target_info)),
+        ):
+            result = asyncio.run(scanner.scan("us"))
+
+        # Passing score (all other signals present) → should still appear
+        assert len(result.stocks) > 0
 
     # ── Error handling ─────────────────────────────────────────────────────
 
