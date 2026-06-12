@@ -3,12 +3,13 @@ import { useState } from "react";
 import { Header } from "./components/Header";
 import { ConvictionPage } from "./pages/ConvictionPage";
 import { Dashboard } from "./pages/Dashboard";
+import { GlossaryPage } from "./pages/GlossaryPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { RadarPage } from "./pages/RadarPage";
 import type { Market } from "./types";
 
 // "scanner" tab has been merged into "gainers" as a catalyst view mode.
-export type AppTab = "gainers" | "radar" | "conviction" | "portfolio";
+export type AppTab = "gainers" | "radar" | "conviction" | "portfolio" | "glossary";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -75,6 +76,7 @@ export default function App() {
           <ConvictionPage initialBelief={convictionBelief} onBeliefConsumed={() => setConvictionBelief("")} />
         )}
         {tab === "portfolio" && <PortfolioPage />}
+        {tab === "glossary"  && <GlossaryPage />}
       </div>
     </QueryClientProvider>
   );

@@ -1,4 +1,4 @@
-import { Lightbulb, Radio, Target, TrendingUp } from "lucide-react";
+import { BookOpen, Lightbulb, Radio, Target, TrendingUp } from "lucide-react";
 import type { AppTab } from "../App";
 
 interface HeaderProps {
@@ -30,6 +30,12 @@ const TABS: { key: AppTab; label: string; icon: React.ReactNode; sub: string }[]
     label: "PLAYS",
     icon:  <Target size={12} />,
     sub:   "My bets",
+  },
+  {
+    key:   "glossary",
+    label: "GUIDE",
+    icon:  <BookOpen size={12} />,
+    sub:   "Dictionary",
   },
 ];
 
