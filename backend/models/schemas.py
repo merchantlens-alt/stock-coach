@@ -587,3 +587,103 @@ class CatalystScanResponse(BaseModel):
     plays: list[CatalystPlay] = Field(default_factory=list)
     from_cache: bool = False
     scanned_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Fund Scanner schemas (ETFs + India mutual funds) ──────────────────────────
+
+# Phase 1 covers India mutual funds (NAV-derived metrics via mfapi.in).
+FundType = Literal["mutual_fund", "etf"]
+
+# "Should I enter this fund now?" — the AI/heuristic verdict, not a star rating.
+FundEntrySignal = Literal["strong_entry", "watch", "avoid"]
+
+# How much history backs the verdict — young funds are surfaced, not excluded.
+FundTrackRecord = Literal["established", "emerging", "new"]
+
+
+class FundScheme(BaseModel):
+    """A scanned fund with NAV-derived metrics and an advisor-grade entry verdict."""
+    scheme_code: str
+    name: str
+    fund_house: Optional[str] = None
+    category: Optional[str] = None        # Flexi Cap, Large Cap, Small Cap, ELSS, …
+    fund_type: FundType = "mutual_fund"
+    market: Market = "india"
+
+    # ── Latest NAV ────────────────────────────────────────────────────────────
+    nav: Optional[float] = None
+    nav_date: Optional[str] = None        # DD-MM-YYYY as returned by mfapi
+
+    # ── Rolling returns (%) ───────────────────────────────────────────────────
+    returns_1m: Optional[float] = None
+    returns_3m: Optional[float] = None
+    returns_6m: Optional[float] = None
+    returns_1y: Optional[float] = None
+    returns_3y_cagr: Optional[float] = None        # annualised
+    returns_5y_cagr: Optional[float] = None        # annualised
+    since_inception_cagr: Optional[float] = None   # annualised, full history
+
+    # ── Risk metrics ──────────────────────────────────────────────────────────
+    volatility: Optional[float] = None        # annualised %, from daily returns
+    sharpe: Optional[float] = None            # (annual return − rf) / volatility
+    max_drawdown: Optional[float] = None      # most negative peak-to-trough %, e.g. -32.1
+
+    # ── Enrichment (populated by a provider when available; None ⇒ not sourced) ─
+    # mfapi gives neither, so these light up only once an AMFI/Kuvera adapter is
+    # wired. Scoring uses them when present and degrades gracefully when absent.
+    expense_ratio: Optional[float] = None     # Total Expense Ratio %, e.g. 0.65
+    aum: Optional[float] = None               # ₹ crore
+
+    # ── Advisor context ───────────────────────────────────────────────────────
+    track_record: FundTrackRecord = "established"
+    # Rank within the fund's own category cohort (1 = best). For "see the field".
+    category_rank: Optional[int] = None
+    category_size: Optional[int] = None
+    # Active return vs the category's passive benchmark, over the common 3y window.
+    active_return_3y: Optional[float] = None
+    benchmark_name: Optional[str] = None
+
+    # ── Rule-out / discovery flags ────────────────────────────────────────────
+    is_closet_index: bool = False    # hugs its benchmark — paying active fees for beta
+    is_decaying: bool = False        # recent return well below long-term — saturation/drift
+    is_discovery: bool = False       # young fund already ranking top of its peers
+
+    # ── Verdicts ──────────────────────────────────────────────────────────────
+    fund_score: float = 0.0                   # 0-100 category-relative "enter now" score
+    long_term_score: float = 0.0              # 0-100 buy-and-hold potential (momentum-free)
+    entry_signal: FundEntrySignal = "watch"
+    entry_reason: str = ""                    # plain-English AI/heuristic reasoning
+
+
+class FundScanResponse(BaseModel):
+    market: Market = "india"
+    funds: list[FundScheme] = Field(default_factory=list)
+    category: Optional[str] = None            # echo of the requested category filter
+    universe_size: int = 0                    # how many funds were scanned
+    from_cache: bool = False
+    scanned_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Model portfolio ("the 5 funds you should own") ────────────────────────────
+
+# Self-selected risk flavour — no personal data collected (generic for everyone).
+RiskProfile = Literal["conservative", "balanced", "aggressive"]
+
+
+class ModelHolding(BaseModel):
+    """One slot in the model portfolio: a role, a weight, and the chosen fund."""
+    role: str                 # Core, Anchor, Growth, High Growth, Satellite
+    weight_pct: float         # allocation within the 5-fund portfolio
+    why: str                  # why this slot + why this fund, in plain English
+    fund: FundScheme
+
+
+class ModelPortfolioResponse(BaseModel):
+    market: Market = "india"
+    risk: RiskProfile = "balanced"
+    holdings: list[ModelHolding] = Field(default_factory=list)
+    rationale: str = ""                       # portfolio-level summary
+    blended_expense_ratio: Optional[float] = None   # weighted TER, if sourced
+    universe_size: int = 0
+    from_cache: bool = False
+    generated_at: datetime = Field(default_factory=datetime.utcnow)

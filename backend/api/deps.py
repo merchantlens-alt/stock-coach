@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from agents.catalyst_analyst import CatalystAnalystAgent
+from agents.fund_analyst import FundAnalystAgent
 from agents.gainer_analyst import GainerAnalystAgent
 from agents.growth_triggers_agent import GrowthTriggersAgent
 from agents.market_analyst import MarketAnalystAgent
@@ -13,6 +14,7 @@ from agents.thesis_analyst import ThesisAnalystAgent
 from core.config import Settings, get_settings
 from services.cache import CacheBackend, build_cache
 from services.catalyst_scanner import CatalystScannerService
+from services.fund_data import FundDataService
 from services.fundamental_enricher import FundamentalEnricher
 from services.market_data import MarketDataService
 from services.news_fetcher import NewsFetcher
@@ -38,6 +40,8 @@ _portfolio_store: PortfolioStore | None = None
 _dip_scanner: DipScannerService | None = None
 _fundamental_enricher: FundamentalEnricher | None = None
 _value_recovery_scanner: ValueRecoveryScannerService | None = None
+_fund_analyst: FundAnalystAgent | None = None
+_fund_data: FundDataService | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -163,6 +167,24 @@ def get_value_recovery_scanner(
     if _value_recovery_scanner is None:
         _value_recovery_scanner = ValueRecoveryScannerService(settings)
     return _value_recovery_scanner
+
+
+def get_fund_analyst(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> FundAnalystAgent:
+    global _fund_analyst
+    if _fund_analyst is None:
+        _fund_analyst = FundAnalystAgent(settings)
+    return _fund_analyst
+
+
+def get_fund_data(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> FundDataService:
+    global _fund_data
+    if _fund_data is None:
+        _fund_data = FundDataService(settings, get_fund_analyst(settings))
+    return _fund_data
 
 
 def get_fundamental_enricher() -> FundamentalEnricher:

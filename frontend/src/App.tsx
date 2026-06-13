@@ -3,13 +3,18 @@ import { useState } from "react";
 import { Header } from "./components/Header";
 import { ConvictionPage } from "./pages/ConvictionPage";
 import { Dashboard } from "./pages/Dashboard";
+import { FundsPage } from "./pages/FundsPage";
 import { GlossaryPage } from "./pages/GlossaryPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { RadarPage } from "./pages/RadarPage";
 import type { Market } from "./types";
 
-// "scanner" tab has been merged into "gainers" as a catalyst view mode.
-export type AppTab = "gainers" | "radar" | "conviction" | "portfolio" | "glossary";
+// Top-level mode: Funds is the primary home; Stocks is one switch away.
+// Each mode lazily mounts its own pages, so stock data never fetches until
+// the user actually switches into Stocks mode.
+export type AppMode   = "funds" | "stocks";
+export type FundsTab  = "build" | "scanner" | "analyse" | "switch";
+export type StocksTab = "gainers" | "radar" | "conviction" | "portfolio";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,63 +25,98 @@ const queryClient = new QueryClient({
 });
 
 export default function App() {
-  const [tab, setTab] = useState<AppTab>("gainers");
+  const [mode, setMode]           = useState<AppMode>("funds");   // ← Funds is home
+  const [fundsTab, setFundsTab]   = useState<FundsTab>("build");
+  const [stocksTab, setStocksTab] = useState<StocksTab>("gainers");
+  const [guideOpen, setGuideOpen] = useState(false);
 
-  // ── Cross-tab navigation state ──────────────────────────────────────────────
+  // ── Cross-tab navigation state (stocks side) ────────────────────────────────
 
   // Gainers panel jump: click "Analyse" anywhere → open stock detail in Market tab
   const [jumpTo, setJumpTo] = useState<{ market: Market; ticker: string } | null>(null);
 
-  // Scanner view inside the Market/Gainers tab — controlled by Dashboard internally,
-  // but Radar can push "spotlight" tickers and switch the view to catalyst mode.
-  const [scannerSpotlight, setScannerSpotlight]           = useState<string[]>([]);
+  // Scanner view inside the Market/Gainers tab — Radar can push "spotlight" tickers.
+  const [scannerSpotlight, setScannerSpotlight]             = useState<string[]>([]);
   const [scannerSpotlightMarket, setScannerSpotlightMarket] = useState<Market>("us");
 
   // Analysis → Conviction: "Build Thesis" pre-fills the belief input
   const [convictionBelief, setConvictionBelief] = useState("");
 
+  // Any cross-tab jump lands in Stocks mode on the right sub-tab, closing the guide.
+  function toStocks(tab: StocksTab) {
+    setGuideOpen(false);
+    setMode("stocks");
+    setStocksTab(tab);
+  }
+
   function handleSelectFromScanner(market: Market, ticker: string) {
-    // Open in the Market tab's analysis panel (no extra tab switch needed now)
     setJumpTo({ market, ticker });
-    setTab("gainers");
+    toStocks("gainers");
   }
 
   function handleFindMoving(tickers: string[], market: Market) {
-    // Radar → Market tab, catalyst view with spotlight
     setScannerSpotlight(tickers);
     setScannerSpotlightMarket(market);
-    setTab("gainers");
+    toStocks("gainers");
   }
 
   function handleBuildThesis(belief: string) {
     setConvictionBelief(belief);
-    setTab("conviction");
+    toStocks("conviction");
+  }
+
+  // ── Header callbacks ────────────────────────────────────────────────────────
+
+  const activeSubTab = mode === "funds" ? fundsTab : stocksTab;
+
+  function handleModeChange(next: AppMode) {
+    setGuideOpen(false);
+    setMode(next);
+  }
+
+  function handleSubTabChange(key: string) {
+    setGuideOpen(false);
+    if (mode === "funds") setFundsTab(key as FundsTab);
+    else setStocksTab(key as StocksTab);
   }
 
   return (
     <QueryClientProvider client={queryClient}>
       <div className="flex flex-col h-screen bg-gray-50">
-        <Header activeTab={tab} onTabChange={setTab} />
+        <Header
+          mode={mode}
+          onModeChange={handleModeChange}
+          activeSubTab={activeSubTab}
+          onSubTabChange={handleSubTabChange}
+          guideOpen={guideOpen}
+          onToggleGuide={() => setGuideOpen(o => !o)}
+        />
 
-        {tab === "gainers" && (
-          <Dashboard
-            jumpTo={jumpTo}
-            onJumpConsumed={() => setJumpTo(null)}
-            onBuildThesis={handleBuildThesis}
-            scannerSpotlight={scannerSpotlight}
-            scannerSpotlightMarket={scannerSpotlightMarket}
-            onClearSpotlight={() => setScannerSpotlight([])}
-            onSelectFromScanner={handleSelectFromScanner}
-          />
+        {/* Guide overlays whatever mode is active; mode pages stay unmounted while open */}
+        {guideOpen ? (
+          <GlossaryPage />
+        ) : mode === "funds" ? (
+          <FundsPage tab={fundsTab} />
+        ) : (
+          <>
+            {stocksTab === "gainers" && (
+              <Dashboard
+                jumpTo={jumpTo}
+                onJumpConsumed={() => setJumpTo(null)}
+                onBuildThesis={handleBuildThesis}
+                scannerSpotlight={scannerSpotlight}
+                scannerSpotlightMarket={scannerSpotlightMarket}
+                onClearSpotlight={() => setScannerSpotlight([])}
+                onSelectFromScanner={handleSelectFromScanner}
+              />
+            )}
+            {stocksTab === "radar"      && <RadarPage onFindMoving={handleFindMoving} />}
+            {stocksTab === "conviction" && (
+              <ConvictionPage initialBelief={convictionBelief} onBeliefConsumed={() => setConvictionBelief("")} />
+            )}
+            {stocksTab === "portfolio"  && <PortfolioPage />}
+          </>
         )}
-        {tab === "radar" && (
-          <RadarPage onFindMoving={handleFindMoving} />
-        )}
-        {tab === "conviction" && (
-          <ConvictionPage initialBelief={convictionBelief} onBeliefConsumed={() => setConvictionBelief("")} />
-        )}
-        {tab === "portfolio" && <PortfolioPage />}
-        {tab === "glossary"  && <GlossaryPage />}
       </div>
     </QueryClientProvider>
   );

@@ -517,3 +517,81 @@ export interface CatalystScanResponse {
   from_cache: boolean;
   scanned_at: string;
 }
+
+// ── Fund Scanner (ETFs + India mutual funds) ──────────────────────────────────
+
+export type FundType = "mutual_fund" | "etf";
+export type FundEntrySignal = "strong_entry" | "watch" | "avoid";
+export type FundTrackRecord = "established" | "emerging" | "new";
+
+export interface FundScheme {
+  scheme_code: string;
+  name: string;
+  fund_house?: string;
+  category?: string;
+  fund_type: FundType;
+  market: Market;
+  nav?: number;
+  nav_date?: string;
+  // Rolling returns (%)
+  returns_1m?: number;
+  returns_3m?: number;
+  returns_6m?: number;
+  returns_1y?: number;
+  returns_3y_cagr?: number;
+  returns_5y_cagr?: number;
+  since_inception_cagr?: number;
+  // Risk metrics
+  volatility?: number;
+  sharpe?: number;
+  max_drawdown?: number;
+  // Enrichment (None until an AMFI/Kuvera adapter is wired)
+  expense_ratio?: number;
+  aum?: number;
+  // Advisor context
+  track_record: FundTrackRecord;
+  category_rank?: number;
+  category_size?: number;
+  active_return_3y?: number;
+  benchmark_name?: string;
+  // Rule-out / discovery flags
+  is_closet_index: boolean;
+  is_decaying: boolean;
+  is_discovery: boolean;
+  // Verdicts
+  fund_score: number;
+  long_term_score: number;
+  entry_signal: FundEntrySignal;
+  entry_reason: string;
+}
+
+export interface FundScanResponse {
+  market: Market;
+  funds: FundScheme[];
+  category?: string;
+  universe_size: number;
+  from_cache: boolean;
+  scanned_at: string;
+}
+
+// ── Model portfolio ("the 5 funds you should own") ────────────────────────────
+
+export type RiskProfile = "conservative" | "balanced" | "aggressive";
+
+export interface ModelHolding {
+  role: string;
+  weight_pct: number;
+  why: string;
+  fund: FundScheme;
+}
+
+export interface ModelPortfolioResponse {
+  market: Market;
+  risk: RiskProfile;
+  holdings: ModelHolding[];
+  rationale: string;
+  blended_expense_ratio?: number;
+  universe_size: number;
+  from_cache: boolean;
+  generated_at: string;
+}

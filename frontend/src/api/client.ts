@@ -1,4 +1,4 @@
-import type { AddPortfolioEntryRequest, CatalystScanResponse, ConvictionRequest, ConvictionResponse, DipScanResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PriceHistory, RadarResponse, StockAnalysisResponse, ValueRecoveryScanResponse } from "../types";
+import type { AddPortfolioEntryRequest, CatalystScanResponse, ConvictionRequest, ConvictionResponse, DipScanResponse, FundScanResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, ModelPortfolioResponse, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PriceHistory, RadarResponse, RiskProfile, StockAnalysisResponse, ValueRecoveryScanResponse } from "../types";
 
 const BASE_URL = "/api";
 
@@ -105,4 +105,20 @@ export const api = {
   /** Value Recovery scanner — compressed valuations + ≥2 fundamental inflection signals. Cached 2 h. */
   getValueRecovery: (market: Market, options: FetchOptions = {}): Promise<ValueRecoveryScanResponse> =>
     fetchJSON(`/recovery/${market}${options.refresh ? "?refresh=true" : ""}`, options),
+
+  /** Fund scanner — India mutual funds with NAV-derived metrics + AI entry verdict. Cached 6 h. */
+  getFundScan: (category?: string, options: FetchOptions = {}): Promise<FundScanResponse> => {
+    const params = new URLSearchParams();
+    if (category) params.set("category", category);
+    if (options.refresh) params.set("refresh", "true");
+    const qs = params.toString();
+    return fetchJSON(`/funds/scan${qs ? `?${qs}` : ""}`, options);
+  },
+
+  /** Generic 5-fund model portfolio for a self-selected risk level. Cached 6 h. */
+  getModelPortfolio: (risk: RiskProfile = "balanced", options: FetchOptions = {}): Promise<ModelPortfolioResponse> => {
+    const params = new URLSearchParams({ risk });
+    if (options.refresh) params.set("refresh", "true");
+    return fetchJSON(`/funds/model-portfolio?${params.toString()}`, options);
+  },
 };
