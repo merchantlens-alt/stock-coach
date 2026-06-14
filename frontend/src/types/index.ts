@@ -640,3 +640,46 @@ export interface CompareResponse {
   model_funds: CompareFundReturn[];
   generated_at: string;
 }
+
+// ── Portfolio X-ray (analyse your funds) ──────────────────────────────────────
+
+export interface XrayFundInput {
+  market: Market;
+  code: string;
+  name: string;
+  weight?: number;
+}
+
+export interface XrayRequest {
+  risk: RiskProfile;
+  funds: XrayFundInput[];
+}
+
+export interface AllocSlice { label: string; pct: number; }
+export interface SectorSlice { sector: string; pct: number; }
+export interface CompanyHolding { name: string; symbol?: string; pct: number; }
+
+export interface XrayFundLine {
+  market: Market;
+  code: string;
+  name: string;
+  category?: string;
+  weight: number;
+  fund_score?: number;
+  flag?: string;   // "decaying" | "closet" | "avoid"
+}
+
+export interface PortfolioXrayResponse {
+  risk: RiskProfile;
+  geography: AllocSlice[];
+  caps: AllocSlice[];
+  sectors: SectorSlice[];
+  top_companies: CompanyHolding[];
+  sector_coverage: number;
+  redundancies: string[];
+  gaps: string[];
+  flagged_funds: string[];
+  narrative: string;
+  funds: XrayFundLine[];
+  generated_at: string;
+}

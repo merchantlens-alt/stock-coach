@@ -1,25 +1,28 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { Market, RiskProfile } from "../types";
 
-// Fund scan: 30-min client stale (backend caches 6 h). `category` undefined = whole universe.
+// Fund scan: NAVs change once daily, so stay fresh for 12 h (backend caches 24 h).
 export function useFundScan(market: Market, category?: string) {
   return useQuery({
     queryKey: ["funds", "scan", market, category ?? "all"],
     queryFn: () => api.getFundScan(market, category),
-    staleTime: 30 * 60 * 1000,
-    gcTime: 3 * 60 * 60 * 1000,
+    staleTime: 12 * 60 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
     retry: 2,
   });
 }
 
-// Model portfolio: keyed by market + risk flavour.
+// Model portfolio: a long-term call — keep it stable for the day (backend holds 3 days).
+// keepPreviousData ⇒ switching risk keeps the current portfolio on screen (just the
+// weights update) instead of flashing a loading state.
 export function useModelPortfolio(market: Market, risk: RiskProfile) {
   return useQuery({
     queryKey: ["funds", "model", market, risk],
     queryFn: () => api.getModelPortfolio(market, risk),
-    staleTime: 30 * 60 * 1000,
-    gcTime: 3 * 60 * 60 * 1000,
+    placeholderData: keepPreviousData,
+    staleTime: 12 * 60 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
     retry: 2,
   });
 }

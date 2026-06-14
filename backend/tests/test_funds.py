@@ -21,6 +21,8 @@ from models.schemas import (
     FundScheme,
     ModelHolding,
     ModelPortfolioResponse,
+    XrayFundInput,
+    XrayRequest,
 )
 from services.fund_metrics import basket_sip, growth_over_years, sip_value
 
@@ -484,13 +486,13 @@ class TestUSETFScoring:
             max_drawdown=dd, aum=aum,
         )
 
-    def _score(self, funds: list[FundScheme]):
+    def _score(self, funds: list[FundScheme], category: str = "US Broad Market"):
         from core.config import Settings
         from services.us_etf_data import USETFDataService, _Scanned
 
         svc = USETFDataService(Settings())
         cohort = [_Scanned(f, {}) for f in funds]
-        svc._score_cohort(cohort)
+        svc._score_cohort(category, cohort)
         return {s.fund.scheme_code: s.fund for s in cohort}
 
     def test_cheaper_etf_ranks_higher_all_else_equal(self) -> None:
@@ -518,6 +520,27 @@ class TestUSETFScoring:
         assert r["A"].fund_score > 0 and r["A"].long_term_score > 0
         assert r["A"].entry_signal in {"strong_entry", "watch", "avoid"}
         assert r["A"].fund_score > r["D"].fund_score
+
+    def test_bonds_ranked_on_cost_and_stability_not_return(self) -> None:
+        # All bonds have weak return/Sharpe (the 2022 rate crash). The cheapest,
+        # steadiest, most-liquid one should still win — and a volatile long-bond
+        # (TLT-like) should rank poorly despite the same negative Sharpe.
+        def bond(code, exp, vol, aum, dd):
+            f = self._etf(code, exp, -0.4, 0.2, dd, aum, category="Bonds")
+            f.volatility = vol
+            return f
+        funds = [
+            bond("AGG",  0.03,  5.0, 1.0e11, -8.0),    # cheap, stable, liquid
+            bond("MID",  0.10,  7.0, 5.0e10, -12.0),
+            bond("TLT",  0.15, 16.0, 4.0e10, -40.0),   # volatile long-duration
+            bond("DEAR", 0.40,  8.0, 1.0e10, -15.0),
+        ]
+        r = self._score(funds, category="Bonds")
+        assert r["AGG"].category_rank == 1
+        assert r["TLT"].fund_score < r["AGG"].fund_score
+        # Framed as ballast, not a return pick.
+        assert "stability" in r["AGG"].entry_reason.lower()
+        assert "2022" in r["AGG"].entry_reason
 
 
 class TestUSModelPortfolio:
@@ -696,6 +719,86 @@ class TestCompareRoute:
         assert resp.status_code == 200
         body = resp.json()
         assert body["windows"][0]["model_value"] == 2300000
+
+
+class _FakeIndiaSvc:
+    def __init__(self, funds): self._funds = funds
+    async def scan(self, category=None): return FundScanResponse(market="india", funds=self._funds)
+
+class _FakeUSSvc:
+    def __init__(self, funds, holdings): self._funds, self._holdings = funds, holdings
+    async def scan(self, category=None): return FundScanResponse(market="us", funds=self._funds)
+    async def get_holdings(self, code): return self._holdings.get(code, ({}, []))
+
+
+class TestPortfolioXray:
+    def _india(self, code, category, **flags):
+        return FundScheme(scheme_code=code, name=f"{code} Fund", category=category,
+                          fund_type="mutual_fund", market="india", fund_score=70.0, **flags)
+
+    def _us(self, code, category):
+        return FundScheme(scheme_code=code, name=f"{code} ETF", category=category,
+                          fund_type="etf", market="us", fund_score=80.0)
+
+    def _run(self, req_funds, india_funds, us_funds, holdings, risk="aggressive"):
+        from agents.portfolio_xray_agent import PortfolioXrayAgent
+        from core.config import Settings
+        from services.portfolio_xray import run_xray
+
+        agent = PortfolioXrayAgent(Settings())  # MOCK_AI in conftest ⇒ heuristic
+        req = XrayRequest(risk=risk, funds=req_funds)
+        return asyncio.run(run_xray(
+            _FakeIndiaSvc(india_funds), _FakeUSSvc(us_funds, holdings), agent, req,
+        ))
+
+    def test_full_xray(self) -> None:
+        req_funds = [
+            XrayFundInput(market="india", code="I1", name="Flexi A"),
+            XrayFundInput(market="india", code="I2", name="Small B"),
+            XrayFundInput(market="us", code="VOO", name="Vanguard S&P 500"),
+            XrayFundInput(market="us", code="BND", name="Total Bond"),
+        ]
+        india = [self._india("I1", "Flexi Cap"), self._india("I2", "Small Cap", is_decaying=True)]
+        us = [self._us("VOO", "US Broad Market"), self._us("BND", "Bonds")]
+        holdings = {"VOO": ({"technology": 0.35, "financial_services": 0.13},
+                            [("AAPL", "Apple Inc", 0.06), ("MSFT", "Microsoft Corp", 0.05)])}
+        r = self._run(req_funds, india, us, holdings)
+
+        geo = {s.label: s.pct for s in r.geography}
+        assert geo.get("India Equity") == 50.0
+        assert geo.get("Bonds") == 25.0 and geo.get("US Equity") == 25.0
+        caps = {s.label for s in r.caps}
+        assert {"Flexi/Multi", "Small", "Large", "Bonds"} <= caps
+        assert any(s.sector == "Technology" for s in r.sectors)
+        assert r.sector_coverage == 0.5                     # half the book is US (has look-through)
+        assert r.top_companies and r.top_companies[0].symbol == "AAPL"
+        assert any("decaying" in f for f in r.flagged_funds)
+        assert any("international" in g.lower() for g in r.gaps)   # no intl exposure
+        assert r.narrative
+
+    def test_redundancy_flagged_for_two_flexi(self) -> None:
+        req_funds = [
+            XrayFundInput(market="india", code="I1", name="Flexi A"),
+            XrayFundInput(market="india", code="I2", name="Flexi B"),
+        ]
+        india = [self._india("I1", "Flexi Cap"), self._india("I2", "Flexi Cap")]
+        r = self._run(req_funds, india, [], {})
+        assert any("Flexi Cap" in red for red in r.redundancies)
+
+    def test_route(self, client: TestClient) -> None:
+        from models.schemas import PortfolioXrayResponse, AllocSlice
+
+        resp_obj = PortfolioXrayResponse(
+            risk="balanced", geography=[AllocSlice(label="India Equity", pct=100.0)],
+            narrative="Well diversified.",
+        )
+        with patch("api.routes.funds.run_xray", new=AsyncMock(return_value=resp_obj)):
+            resp = client.post("/api/funds/xray", json={
+                "risk": "balanced",
+                "funds": [{"market": "india", "code": "120639", "name": "PPFCF"}],
+            })
+        assert resp.status_code == 200
+        assert resp.json()["geography"][0]["label"] == "India Equity"
 
 
 class TestFundAnalystMock:

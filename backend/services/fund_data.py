@@ -73,8 +73,10 @@ _GLOBAL = ("international", "global", "overseas", "nasdaq", "greater china",
            "japan", "europe", "china", "taiwan", "korea", "brazil", "asean")
 
 # ── Category taxonomy (first match wins; order matters) ────────────────────────
-# Deliberately keeps diversified active equity + genuine special-opportunities
-# funds; the long tail of narrow sectoral/index bets is excluded as non-core.
+# Diversified active equity. "Special Opportunities" is handled separately in
+# _classify so it can catch generic "X Opportunities" / special-situations /
+# business-cycle funds (e.g. Franklin India Opportunities, WhiteOak Special
+# Opportunities) while excluding narrow sectoral and debt "Opportunities" funds.
 _CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
     ("ELSS",            ("elss", "tax saver", "taxsaver")),
     ("Flexi Cap",       ("flexi cap", "flexicap")),
@@ -85,10 +87,20 @@ _CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
     ("Small Cap",       ("small cap", "smallcap")),
     ("Focused",         ("focused",)),
     ("Value/Contra",    ("value", "contra")),
-    # Genuine go-anywhere special-situations / cycle funds only (e.g. WhiteOak
-    # Special Opportunities) — NOT narrow sectoral "X Opportunities" funds.
-    ("Special Opportunities", ("special opportun", "business cycle")),
 ]
+
+# A fund is "Special Opportunities" if it's a special-situations / business-cycle /
+# generic opportunities fund — but NOT a narrow sectoral or debt "Opportunities"
+# fund (those bets belong to their sector, or are debt, not go-anywhere equity).
+_OPP_DIRECT = ("special opportun", "business cycle", "special situation")
+_OPP_EXCLUDE = (
+    "credit", "cash", "debt", "bond", "income",                # debt
+    "healthcare", "pharma", "health", "energy", "banking", "financial", "bank ",
+    "technology", "tech ", "digital", "auto", "manufacturing", "consumption",
+    "infrastructure", "infra", "psu", "mnc", "esg", "transport", "logistics",
+    "realty", "real estate", "commodit", "metal", "dividend yield", "fmcg",
+    "media", "telecom", "defence", "tourism", "housing", "rural",  # sectoral/thematic-narrow
+)
 
 # Category → passive benchmark (resolved to a broad index fund's NAV series).
 _BENCHMARK_BY_CATEGORY: dict[str, str] = {
@@ -208,6 +220,12 @@ def _classify(name: str) -> Optional[str]:
     for cat, kws in _CATEGORIES:
         if any(k in n for k in kws):
             return cat
+    # Special Opportunities: explicit special-situations/cycle funds, OR any generic
+    # "Opportunities" fund that isn't a narrow sectoral or debt bet.
+    if any(k in n for k in _OPP_DIRECT):
+        return "Special Opportunities"
+    if "opportunit" in n and not any(t in n for t in _OPP_EXCLUDE):
+        return "Special Opportunities"
     return None
 
 

@@ -6,6 +6,7 @@ from fastapi import Depends
 
 from agents.catalyst_analyst import CatalystAnalystAgent
 from agents.fund_analyst import FundAnalystAgent
+from agents.portfolio_xray_agent import PortfolioXrayAgent
 from agents.gainer_analyst import GainerAnalystAgent
 from agents.growth_triggers_agent import GrowthTriggersAgent
 from agents.market_analyst import MarketAnalystAgent
@@ -44,6 +45,7 @@ _value_recovery_scanner: ValueRecoveryScannerService | None = None
 _fund_analyst: FundAnalystAgent | None = None
 _fund_data: FundDataService | None = None
 _us_etf_data: USETFDataService | None = None
+_xray_agent: PortfolioXrayAgent | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -196,6 +198,15 @@ def get_us_etf_data(
     if _us_etf_data is None:
         _us_etf_data = USETFDataService(settings)
     return _us_etf_data
+
+
+def get_xray_agent(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> PortfolioXrayAgent:
+    global _xray_agent
+    if _xray_agent is None:
+        _xray_agent = PortfolioXrayAgent(settings)
+    return _xray_agent
 
 
 def get_fundamental_enricher() -> FundamentalEnricher:

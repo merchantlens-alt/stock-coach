@@ -108,6 +108,11 @@ _US_RISK_RATIONALE: dict[str, str] = {
 
 _US_SCORE_W = {"long": 0.25, "sharpe": 0.25, "cost": 0.20, "dd": 0.15, "aum": 0.15}
 _US_LT_W    = {"long": 0.30, "sharpe": 0.20, "cost": 0.25, "dd": 0.15, "aum": 0.10}
+# Defensive categories are BALLAST, not return engines. Judging them by trailing
+# return/Sharpe is meaningless (e.g. the 2022 bond crash makes every bond ETF look
+# terrible). Score them on cost + stability (low volatility/drawdown) + liquidity.
+_DEFENSIVE = {"Bonds"}
+_US_DEF_W  = {"cost": 0.35, "lowvol": 0.30, "aum": 0.20, "dd": 0.15}
 _MIN_HISTORY = 60
 
 
@@ -197,17 +202,22 @@ class USETFDataService:
         for s in scanned:
             by_cat.setdefault(s.fund.category or "?", []).append(s)
         for cat, cohort in by_cat.items():
-            self._score_cohort(cohort)
+            self._score_cohort(cat, cohort)
 
-    def _score_cohort(self, cohort: list[_Scanned]) -> None:
+    def _score_cohort(self, category: str, cohort: list[_Scanned]) -> None:
         if len(cohort) < 4:
             for s in cohort:
                 score, signal = score_fund(s.metrics)
                 s.fund.fund_score = score
                 s.fund.long_term_score = score
                 s.fund.entry_signal = signal  # type: ignore[assignment]
-                s.fund.entry_reason = self._reason(s.fund)
-            self._assign_ranks(cohort)
+            self._rank_and_explain(cohort)
+            return
+
+        # Defensive sleeves (bonds): rank on cost + stability + liquidity, NOT on
+        # trailing return/Sharpe (which the rate cycle distorts for all of them).
+        if category in _DEFENSIVE:
+            self._score_defensive(cohort)
             return
 
         def longret(f: FundScheme) -> Optional[float]:
@@ -233,8 +243,30 @@ class USETFDataService:
             s.fund.entry_signal = (  # type: ignore[assignment]
                 "strong_entry" if score >= 65 else "watch" if score >= 42 else "avoid"
             )
-            s.fund.entry_reason = self._reason(s.fund)
+        self._rank_and_explain(cohort)
+
+    def _score_defensive(self, cohort: list[_Scanned]) -> None:
+        """Bonds: cheapest + most stable + most liquid wins (not best trailing return)."""
+        p_cost   = percentile_ranks([s.fund.expense_ratio for s in cohort], higher_is_better=False)
+        p_lowvol = percentile_ranks([s.fund.volatility for s in cohort], higher_is_better=False)
+        p_aum    = percentile_ranks([s.fund.aum for s in cohort], higher_is_better=True)
+        p_dd     = percentile_ranks([s.fund.max_drawdown for s in cohort], higher_is_better=True)
+        w = _US_DEF_W
+        for i, s in enumerate(cohort):
+            score = round(w["cost"] * p_cost[i] + w["lowvol"] * p_lowvol[i]
+                          + w["aum"] * p_aum[i] + w["dd"] * p_dd[i], 1)
+            s.fund.fund_score = score
+            s.fund.long_term_score = score
+            s.fund.entry_signal = (  # type: ignore[assignment]
+                "strong_entry" if score >= 65 else "watch" if score >= 42 else "avoid"
+            )
+        self._rank_and_explain(cohort)
+
+    def _rank_and_explain(self, cohort: list[_Scanned]) -> None:
+        """Assign category ranks first, THEN build reasons (which cite the rank)."""
         self._assign_ranks(cohort)
+        for s in cohort:
+            s.fund.entry_reason = self._reason(s.fund)
 
     @staticmethod
     def _assign_ranks(cohort: list[_Scanned]) -> None:
@@ -245,10 +277,21 @@ class USETFDataService:
 
     @staticmethod
     def _reason(f: FundScheme) -> str:
+        cost = f"{f.expense_ratio:.2f}% fee" if f.expense_ratio is not None else "low cost"
+        rank = f"#{f.category_rank} of {f.category_size}" if f.category_rank else ""
+
+        # Bonds are ballast — frame them as stability, not return, and explain why
+        # the trailing numbers look weak (the rate cycle, not the fund).
+        if f.category in _DEFENSIVE:
+            vol = f"{f.volatility:.0f}% volatility" if f.volatility is not None else "low volatility"
+            return (
+                f"Stability sleeve, not a return engine — the cheapest, steadiest broad bond ETF "
+                f"({cost}, {vol}; {rank} on cost & steadiness). Held to cushion equity drawdowns; "
+                "weak 5-year bond returns reflect the 2022 rate shock, not fund quality."
+            )
+
         longret = f.returns_5y_cagr or f.returns_3y_cagr or f.since_inception_cagr
         label = "5yr" if f.returns_5y_cagr is not None else "3yr" if f.returns_3y_cagr is not None else "since-incep"
-        cost = f"{f.expense_ratio:.2f}% fee" if f.expense_ratio is not None else "low cost"
-        rank = f"#{f.category_rank} of {f.category_size} in {f.category}" if f.category_rank else (f.category or "ETF")
         ret = f"{longret:.0f}% {label} CAGR" if longret is not None else "limited history"
         if f.entry_signal == "strong_entry":
             lead = f"Best-in-class {f.category}"
@@ -256,7 +299,34 @@ class USETFDataService:
             lead = "A pricier or weaker option than its peers"
         else:
             lead = f"A solid {f.category} holding"
-        return f"{lead} — {rank} on cost-adjusted long-term return ({cost}, {ret})."
+        return f"{lead} — {rank} in {f.category} on cost-adjusted long-term return ({cost}, {ret})."
+
+    async def get_holdings(
+        self, ticker: str
+    ) -> tuple[dict[str, float], list[tuple[str, str, float]]]:
+        """
+        ETF look-through: (sector_weights, top_holdings).
+          sector_weights: {sector_key: weight 0-1}
+          top_holdings:   [(symbol, name, weight 0-1), …]
+        Empty on failure.
+        """
+        import yfinance as yf
+
+        def _pull():
+            fd = yf.Ticker(ticker).funds_data
+            sectors = dict(fd.sector_weightings or {})
+            holds: list[tuple[str, str, float]] = []
+            th = fd.top_holdings
+            if th is not None:
+                for sym, row in th.iterrows():
+                    holds.append((str(sym), str(row.get("Name", sym)), float(row.get("Holding Percent", 0.0))))
+            return sectors, holds
+
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_pull), timeout=12.0)
+        except Exception as exc:
+            log.warning("us_etf.holdings_failed", ticker=ticker, error=str(exc))
+            return {}, []
 
     async def get_price_series(self, ticker: str) -> list[tuple[datetime, float]]:
         """Dated price series [(datetime, close), …] oldest→newest, for backtests."""

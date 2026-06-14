@@ -16,7 +16,8 @@ from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends
 
-from api.deps import get_cache, get_fund_data, get_us_etf_data
+from api.deps import get_cache, get_fund_data, get_us_etf_data, get_xray_agent
+from agents.portfolio_xray_agent import PortfolioXrayAgent
 from core.logging import get_logger
 from models.schemas import (
     CompareRequest,
@@ -24,17 +25,25 @@ from models.schemas import (
     FundScanResponse,
     Market,
     ModelPortfolioResponse,
+    PortfolioXrayResponse,
     RiskProfile,
+    XrayRequest,
 )
 from services.cache import CacheBackend
 from services.fund_compare import run_compare
 from services.fund_data import FundDataService
+from services.portfolio_xray import run_xray
 from services.us_etf_data import USETFDataService
 
 router = APIRouter(prefix="/funds", tags=["funds"])
 log = get_logger(__name__)
 
-_FUNDS_TTL = 6 * 60 * 60  # 6 hours
+# NAVs publish once daily, so a scan is fresh for a full day — refreshing more
+# often just re-runs the heavy universe scan for identical numbers.
+_FUNDS_TTL = 24 * 60 * 60       # 24 h — one trading day
+# The model portfolio is a long-term "what to own" call; it shouldn't churn
+# day-to-day. Hold it longer for composition stability (refresh button still busts).
+_MODEL_TTL = 3 * 24 * 60 * 60   # 3 days
 
 _VALID_RISK = {"conservative", "balanced", "aggressive"}
 
@@ -113,7 +122,7 @@ async def model_portfolio(
     response.generated_at = datetime.utcnow()
 
     if response.holdings:
-        await cache.set(key, response.model_dump(mode="json"), _FUNDS_TTL)
+        await cache.set(key, response.model_dump(mode="json"), _MODEL_TTL)
 
     return response
 
@@ -133,5 +142,22 @@ async def compare_funds(
     """
     service = us if body.market == "us" else india
     response = await run_compare(service, body)
+    response.generated_at = datetime.utcnow()
+    return response
+
+
+@router.post("/xray", response_model=PortfolioXrayResponse)
+async def xray_portfolio(
+    body: XrayRequest,
+    india: Annotated[FundDataService, Depends(get_fund_data)],
+    us: Annotated[USETFDataService, Depends(get_us_etf_data)],
+    agent: Annotated[PortfolioXrayAgent, Depends(get_xray_agent)],
+) -> PortfolioXrayResponse:
+    """
+    Analyse a mixed India-MF + US-ETF portfolio: geography & cap allocation, US
+    sector + top-company look-through, redundancy & quality flags, gaps vs the
+    chosen risk target, and a plain-English AI summary. Not cached (per-request).
+    """
+    response = await run_xray(india, us, agent, body)
     response.generated_at = datetime.utcnow()
     return response

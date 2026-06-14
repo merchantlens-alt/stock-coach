@@ -48,6 +48,8 @@ def _pick_for_slot(
 def _slot_why(role: str, role_note: str, f: FundScheme) -> str:
     rank = (f"#{f.category_rank} of {f.category_size} in {f.category}"
             if f.category_rank else f"a {f.category} fund")
+    # Bonds are picked for stability, not return — don't claim "long-term potential".
+    basis = "on cost & stability" if f.category == "Bonds" else "on long-term potential"
     extra = ""
     if f.is_discovery:
         extra = " A younger fund already beating peers — held small as a satellite."
@@ -55,7 +57,7 @@ def _slot_why(role: str, role_note: str, f: FundScheme) -> str:
         extra = f" Expense ratio {f.expense_ratio:.2f}%."
     elif f.active_return_3y is not None and f.active_return_3y > 0:
         extra = f" Beats its benchmark by {f.active_return_3y:+.0f}pp."
-    return f"{role}: {role_note}. Picked {rank} on long-term potential.{extra}"
+    return f"{role}: {role_note}. Picked {rank} {basis}.{extra}"
 
 
 def assemble_portfolio(

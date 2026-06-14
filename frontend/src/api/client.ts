@@ -1,4 +1,4 @@
-import type { AddPortfolioEntryRequest, CatalystScanResponse, CompareRequest, CompareResponse, ConvictionRequest, ConvictionResponse, DipScanResponse, FundScanResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, ModelPortfolioResponse, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PriceHistory, RadarResponse, RiskProfile, StockAnalysisResponse, ValueRecoveryScanResponse } from "../types";
+import type { AddPortfolioEntryRequest, CatalystScanResponse, CompareRequest, CompareResponse, ConvictionRequest, ConvictionResponse, DipScanResponse, FundScanResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, ModelPortfolioResponse, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PortfolioXrayResponse, PriceHistory, RadarResponse, RiskProfile, StockAnalysisResponse, ValueRecoveryScanResponse, XrayRequest } from "../types";
 
 const BASE_URL = "/api";
 
@@ -124,6 +124,14 @@ export const api = {
   /** SIP backtest: your funds vs the model portfolio over trailing 1/3/5 years. */
   compareFunds: (body: CompareRequest): Promise<CompareResponse> =>
     fetchJSON("/funds/compare", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+    }),
+
+  /** Portfolio X-ray: allocation, US sector/company look-through, gaps, AI summary. */
+  xrayPortfolio: (body: XrayRequest): Promise<PortfolioXrayResponse> =>
+    fetchJSON("/funds/xray", {
       method: "POST",
       body: JSON.stringify(body),
       headers: { "Content-Type": "application/json" },

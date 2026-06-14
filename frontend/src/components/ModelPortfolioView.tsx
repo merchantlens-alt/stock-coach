@@ -8,7 +8,7 @@
  */
 
 import { Loader2, RefreshCw, Sparkles, TrendingDown } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { MarketToggleFunds } from "./MarketToggleFunds";
@@ -41,6 +41,18 @@ export function ModelPortfolioView({ market, onMarketChange }: { market: Market;
   const [refreshing, setRefreshing] = useState(false);
   const queryClient = useQueryClient();
   const { data, isLoading, error } = useModelPortfolio(market, risk);
+
+  // Warm all three risk profiles up front so switching is instant (the funds are
+  // the same — only the weights differ — so the other two are cheap to pre-load).
+  useEffect(() => {
+    for (const r of ["conservative", "balanced", "aggressive"] as RiskProfile[]) {
+      queryClient.prefetchQuery({
+        queryKey: ["funds", "model", market, r],
+        queryFn: () => api.getModelPortfolio(market, r),
+        staleTime: 12 * 60 * 60 * 1000,
+      });
+    }
+  }, [market, queryClient]);
 
   async function handleRefresh() {
     if (refreshing) return;

@@ -735,3 +735,58 @@ class CompareResponse(BaseModel):
     user_funds: list[CompareFundReturn] = Field(default_factory=list)
     model_funds: list[CompareFundReturn] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Portfolio X-ray (analyse your funds across India + US) ─────────────────────
+
+class XrayFundInput(BaseModel):
+    market: Market
+    code: str
+    name: str
+    weight: Optional[float] = None   # % of portfolio; None ⇒ equal-weight
+
+
+class XrayRequest(BaseModel):
+    risk: RiskProfile = "balanced"
+    funds: list[XrayFundInput] = Field(default_factory=list)
+
+
+class AllocSlice(BaseModel):
+    label: str
+    pct: float
+
+
+class SectorSlice(BaseModel):
+    sector: str
+    pct: float                       # % of the whole portfolio
+
+
+class CompanyHolding(BaseModel):
+    name: str
+    symbol: Optional[str] = None
+    pct: float                       # % of the whole portfolio
+
+
+class XrayFundLine(BaseModel):
+    market: Market
+    code: str
+    name: str
+    category: Optional[str] = None
+    weight: float
+    fund_score: Optional[float] = None
+    flag: Optional[str] = None       # "decaying" | "closet" | "avoid" | None
+
+
+class PortfolioXrayResponse(BaseModel):
+    risk: RiskProfile = "balanced"
+    geography: list[AllocSlice] = Field(default_factory=list)
+    caps: list[AllocSlice] = Field(default_factory=list)
+    sectors: list[SectorSlice] = Field(default_factory=list)         # US look-through
+    top_companies: list[CompanyHolding] = Field(default_factory=list)  # US look-through
+    sector_coverage: float = 0.0     # fraction of portfolio with holdings data (≈ US weight)
+    redundancies: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    flagged_funds: list[str] = Field(default_factory=list)
+    narrative: str = ""
+    funds: list[XrayFundLine] = Field(default_factory=list)
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
