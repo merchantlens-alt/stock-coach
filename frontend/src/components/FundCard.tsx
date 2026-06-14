@@ -45,9 +45,12 @@ function Metric({ label, children }: { label: string; children: React.ReactNode 
 export function FundCard({ fund }: Props) {
   const meta = SIGNAL_META[fund.entry_signal];
   const hasWarning = fund.is_closet_index || fund.is_decaying;
-  // Young funds often lack a 3y CAGR — fall back to since-inception.
-  const longReturn = fund.returns_3y_cagr ?? fund.since_inception_cagr;
-  const longLabel = fund.returns_3y_cagr != null ? "3Y CAGR" : "SI CAGR";
+  const isETF = fund.market === "us";
+  const currency = isETF ? "$" : "₹";
+  // ETFs report a 5Y CAGR; young MFs fall back to since-inception.
+  const longReturn = fund.returns_5y_cagr ?? fund.returns_3y_cagr ?? fund.since_inception_cagr;
+  const longLabel = fund.returns_5y_cagr != null ? "5Y CAGR"
+    : fund.returns_3y_cagr != null ? "3Y CAGR" : "SI CAGR";
 
   return (
     <div className={`rounded-xl border bg-white transition-shadow hover:shadow-md ${
@@ -96,8 +99,8 @@ export function FundCard({ fund }: Props) {
           </div>
           {fund.nav != null && (
             <div className="shrink-0 text-right">
-              <div className="text-sm font-bold text-gray-900">₹{fund.nav.toFixed(2)}</div>
-              <div className="text-[9px] text-gray-400">NAV{fund.nav_date ? ` · ${fund.nav_date}` : ""}</div>
+              <div className="text-sm font-bold text-gray-900">{currency}{fund.nav.toFixed(2)}</div>
+              <div className="text-[9px] text-gray-400">{isETF ? "Price" : "NAV"}{fund.nav_date ? ` · ${fund.nav_date}` : ""}</div>
             </div>
           )}
         </div>
@@ -150,6 +153,14 @@ export function FundCard({ fund }: Props) {
               <span className="text-gray-400">α vs {fund.benchmark_name ?? "bench"}</span>
               <span className={`font-semibold ${fund.active_return_3y >= 0 ? "text-green-600" : "text-red-500"}`}>
                 {fund.active_return_3y >= 0 ? "+" : ""}{fund.active_return_3y.toFixed(1)}pp
+              </span>
+            </span>
+          )}
+          {fund.expense_ratio != null && (
+            <span className="flex items-center gap-1 text-gray-500">
+              <span className="text-gray-400">Expense</span>
+              <span className={`font-semibold ${fund.expense_ratio <= 0.1 ? "text-green-600" : fund.expense_ratio <= 0.5 ? "text-gray-700" : "text-amber-600"}`}>
+                {fund.expense_ratio.toFixed(2)}%
               </span>
             </span>
           )}

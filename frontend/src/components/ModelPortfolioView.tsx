@@ -11,8 +11,9 @@ import { Loader2, RefreshCw, Sparkles, TrendingDown } from "lucide-react";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { MarketToggleFunds } from "./MarketToggleFunds";
 import { useModelPortfolio } from "../hooks/useFunds";
-import type { ModelHolding, RiskProfile } from "../types";
+import type { Market, ModelHolding, RiskProfile } from "../types";
 
 const RISKS: { key: RiskProfile; label: string; sub: string }[] = [
   { key: "conservative", label: "Conservative", sub: "Steadier, lower swings" },
@@ -35,20 +36,20 @@ function pct(v: number | undefined): string {
   return `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
 }
 
-export function ModelPortfolioView() {
+export function ModelPortfolioView({ market, onMarketChange }: { market: Market; onMarketChange: (m: Market) => void }) {
   const [risk, setRisk] = useState<RiskProfile>("balanced");
   const [refreshing, setRefreshing] = useState(false);
   const queryClient = useQueryClient();
-  const { data, isLoading, error } = useModelPortfolio(risk);
+  const { data, isLoading, error } = useModelPortfolio(market, risk);
 
   async function handleRefresh() {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      const result = await api.getModelPortfolio(risk, { refresh: true });
-      queryClient.setQueryData(["funds", "model", risk], result);
+      const result = await api.getModelPortfolio(market, risk, { refresh: true });
+      queryClient.setQueryData(["funds", "model", market, risk], result);
     } catch {
-      queryClient.invalidateQueries({ queryKey: ["funds", "model", risk] });
+      queryClient.invalidateQueries({ queryKey: ["funds", "model", market, risk] });
     } finally {
       setRefreshing(false);
     }
@@ -65,18 +66,23 @@ export function ModelPortfolioView() {
           <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
             <Sparkles size={16} className="text-indigo-600" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h2 className="text-sm font-bold text-gray-900">Funds you should own</h2>
-            <p className="text-[11px] text-gray-400">A diversified 5-fund core, ranked on long-term potential · pick your risk</p>
+            <p className="text-[11px] text-gray-400 truncate">
+              {market === "us" ? "A low-cost ETF core" : "A diversified 5-fund core"} · ranked on long-term potential · pick your risk
+            </p>
           </div>
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing}
-            className="ml-auto flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-gray-900 disabled:opacity-50"
-          >
-            <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
-            <span className="hidden sm:inline">Refresh</span>
-          </button>
+          <div className="ml-auto flex items-center gap-3">
+            <MarketToggleFunds market={market} onChange={onMarketChange} />
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-gray-900 disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          </div>
         </div>
 
         {/* Risk selector */}

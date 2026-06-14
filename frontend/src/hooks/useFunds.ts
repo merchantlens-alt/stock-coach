@@ -1,24 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { RiskProfile } from "../types";
+import type { Market, RiskProfile } from "../types";
 
-// Fund scan: 30-min client stale (backend caches 6 h — NAVs publish once daily).
-// `category` undefined = scan the whole curated universe.
-export function useFundScan(category?: string) {
+// Fund scan: 30-min client stale (backend caches 6 h). `category` undefined = whole universe.
+export function useFundScan(market: Market, category?: string) {
   return useQuery({
-    queryKey: ["funds", "scan", category ?? "all"],
-    queryFn: () => api.getFundScan(category),
+    queryKey: ["funds", "scan", market, category ?? "all"],
+    queryFn: () => api.getFundScan(market, category),
     staleTime: 30 * 60 * 1000,
     gcTime: 3 * 60 * 60 * 1000,
     retry: 2,
   });
 }
 
-// Model portfolio: same cache profile; keyed by risk flavour.
-export function useModelPortfolio(risk: RiskProfile) {
+// Model portfolio: keyed by market + risk flavour.
+export function useModelPortfolio(market: Market, risk: RiskProfile) {
   return useQuery({
-    queryKey: ["funds", "model", risk],
-    queryFn: () => api.getModelPortfolio(risk),
+    queryKey: ["funds", "model", market, risk],
+    queryFn: () => api.getModelPortfolio(market, risk),
     staleTime: 30 * 60 * 1000,
     gcTime: 3 * 60 * 60 * 1000,
     retry: 2,

@@ -36,12 +36,8 @@ import httpx
 
 from core.config import Settings
 from core.logging import get_logger
-from models.schemas import (
-    FundScanResponse,
-    FundScheme,
-    ModelHolding,
-    ModelPortfolioResponse,
-)
+from models.schemas import FundScanResponse, FundScheme, ModelPortfolioResponse
+from services.fund_portfolio import assemble_portfolio
 from services.fund_metrics import (
     build_entry_reason,
     closet_metrics,
@@ -325,87 +321,13 @@ class FundDataService:
         """
         risk = risk if risk in _RISK_WEIGHTS else "balanced"
         scan = await self.scan(category=None)
-        if not scan.funds:
-            return ModelPortfolioResponse(risk=risk, universe_size=scan.universe_size)
-
-        # Eligible picks: drop rule-outs; index by category, best long-term first.
-        by_cat: dict[str, list[FundScheme]] = {}
-        for f in scan.funds:
-            if f.is_closet_index or f.is_decaying:
-                continue
-            by_cat.setdefault(f.category or "?", []).append(f)
-        for lst in by_cat.values():
-            lst.sort(key=lambda f: f.long_term_score, reverse=True)
-
-        weights = _RISK_WEIGHTS[risk]
-        used_amc: set[str] = set()
-        used_codes: set[str] = set()
-        holdings: list[ModelHolding] = []
-
-        for (role, primary, fallbacks, role_note), weight in zip(_SLOTS, weights):
-            pick = self._pick_for_slot([primary, *fallbacks], by_cat, used_amc, used_codes)
-            if pick is None:
-                continue
-            used_amc.add(_amc_of(pick.name))
-            used_codes.add(pick.scheme_code)
-            holdings.append(ModelHolding(
-                role=role,
-                weight_pct=float(weight),
-                why=self._slot_why(role, role_note, pick),
-                fund=pick,
-            ))
-
-        # Re-normalise weights if a slot couldn't be filled, so they still sum to 100.
-        filled = sum(h.weight_pct for h in holdings)
-        if holdings and filled > 0 and abs(filled - 100.0) > 0.1:
-            for h in holdings:
-                h.weight_pct = round(h.weight_pct / filled * 100, 1)
-
-        # Blended TER only if every holding has a sourced expense ratio.
-        blended: Optional[float] = None
-        if holdings and all(h.fund.expense_ratio is not None for h in holdings):
-            blended = round(
-                sum(h.weight_pct / 100 * (h.fund.expense_ratio or 0) for h in holdings), 3
-            )
-
-        rationale = _RISK_RATIONALE[risk]
-        if blended is None:
-            rationale += (" Every pick is a Direct-Growth plan — the lowest-cost, "
-                          "commission-free share class — which itself protects years of compounding.")
-
-        return ModelPortfolioResponse(
-            risk=risk, holdings=holdings, rationale=rationale,
-            blended_expense_ratio=blended, universe_size=scan.universe_size,
+        return assemble_portfolio(
+            funds=scan.funds, slots=_SLOTS, weights=_RISK_WEIGHTS[risk],
+            risk=risk, rationale=_RISK_RATIONALE[risk], market="india",
+            universe_size=scan.universe_size,
+            no_cost_note=("Every pick is a Direct-Growth plan — the lowest-cost, "
+                          "commission-free share class — which itself protects years of compounding."),
         )
-
-    @staticmethod
-    def _pick_for_slot(
-        categories: list[str],
-        by_cat: dict[str, list[FundScheme]],
-        used_amc: set[str],
-        used_codes: set[str],
-    ) -> Optional[FundScheme]:
-        # First pass: respect AMC diversification. Second pass: relax it if needed.
-        for allow_dupe_amc in (False, True):
-            for cat in categories:
-                for f in by_cat.get(cat, []):
-                    if f.scheme_code in used_codes:
-                        continue
-                    if not allow_dupe_amc and _amc_of(f.name) in used_amc:
-                        continue
-                    return f
-        return None
-
-    @staticmethod
-    def _slot_why(role: str, role_note: str, f: FundScheme) -> str:
-        rank = (f"#{f.category_rank} of {f.category_size} in {f.category}"
-                if f.category_rank else f"a {f.category} fund")
-        extra = ""
-        if f.is_discovery:
-            extra = " A younger fund already beating peers — held small as a satellite."
-        elif f.active_return_3y is not None and f.active_return_3y > 0:
-            extra = f" Beats its benchmark by {f.active_return_3y:+.0f}pp."
-        return f"{role}: {role_note}. Picked {rank} on long-term potential.{extra}"
 
     # ── Universe discovery ──────────────────────────────────────────────────────
 
@@ -642,6 +564,16 @@ class FundDataService:
             s.fund.category_size = size
 
     # ── HTTP helpers ────────────────────────────────────────────────────────────
+
+    async def get_price_series(self, code: str) -> list[tuple[datetime, float]]:
+        """Dated NAV series [(datetime, nav), …] oldest→newest, for backtests."""
+        dated = await self._fetch_dated(code)
+        out: list[tuple[datetime, float]] = []
+        for d, nav in dated:
+            dt = _parse_nav_date(d)
+            if dt is not None:
+                out.append((dt, nav))
+        return out
 
     async def _fetch_dated(self, code: str) -> list[tuple[str, float]]:
         """Fetch a scheme's NAV history as [(DD-MM-YYYY, nav), …] oldest → newest."""

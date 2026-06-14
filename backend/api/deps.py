@@ -15,6 +15,7 @@ from core.config import Settings, get_settings
 from services.cache import CacheBackend, build_cache
 from services.catalyst_scanner import CatalystScannerService
 from services.fund_data import FundDataService
+from services.us_etf_data import USETFDataService
 from services.fundamental_enricher import FundamentalEnricher
 from services.market_data import MarketDataService
 from services.news_fetcher import NewsFetcher
@@ -42,6 +43,7 @@ _fundamental_enricher: FundamentalEnricher | None = None
 _value_recovery_scanner: ValueRecoveryScannerService | None = None
 _fund_analyst: FundAnalystAgent | None = None
 _fund_data: FundDataService | None = None
+_us_etf_data: USETFDataService | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -185,6 +187,15 @@ def get_fund_data(
     if _fund_data is None:
         _fund_data = FundDataService(settings, get_fund_analyst(settings))
     return _fund_data
+
+
+def get_us_etf_data(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> USETFDataService:
+    global _us_etf_data
+    if _us_etf_data is None:
+        _us_etf_data = USETFDataService(settings)
+    return _us_etf_data
 
 
 def get_fundamental_enricher() -> FundamentalEnricher:

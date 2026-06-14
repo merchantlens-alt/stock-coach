@@ -23,8 +23,9 @@ Design notes
 """
 from __future__ import annotations
 
+import bisect
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, TypedDict
 
 # India risk-free proxy (≈ 10-yr G-Sec). Used for Sharpe.
@@ -306,6 +307,103 @@ def compute_metrics(navs: list[float]) -> FundMetrics:
         "decay_decel":          decay_decel(navs),
         "history_points":       len(navs),
     }
+
+
+def growth_over_years(
+    series: list[tuple[datetime, float]], years: float
+) -> Optional[float]:
+    """
+    Backtest multiple for a lumpsum held over the trailing `years`: latest NAV ÷
+    NAV ~`years` ago (nearest available date). Returns e.g. 1.45 for +45%.
+    None if the series doesn't reach back far enough.
+
+    `series` must be [(date, nav), …] sorted oldest → newest.
+    """
+    if len(series) < 2:
+        return None
+    latest_dt, latest_nav = series[-1]
+    if latest_nav <= 0:
+        return None
+    target = latest_dt - timedelta(days=round(years * 365.25))
+    if series[0][0] > target:           # history starts after the target ⇒ too young
+        return None
+    then = min(series, key=lambda p: abs((p[0] - target).days))
+    if then[1] <= 0:
+        return None
+    return latest_nav / then[1]
+
+
+def _has_history(series: list[tuple[datetime, float]], years: float) -> bool:
+    if len(series) < 2:
+        return False
+    return series[0][0] <= series[-1][0] - timedelta(days=round(years * 365.25))
+
+
+def _nav_at(series: list[tuple[datetime, float]], dates: list[datetime], d: datetime) -> Optional[float]:
+    """NAV on the date nearest to `d` (binary search)."""
+    j = bisect.bisect_left(dates, d)
+    cands = []
+    if j < len(series):
+        cands.append(series[j])
+    if j > 0:
+        cands.append(series[j - 1])
+    if not cands:
+        return None
+    return min(cands, key=lambda p: abs((p[0] - d).days))[1]
+
+
+def sip_value(
+    series: list[tuple[datetime, float]], monthly_amount: float, years: float
+) -> Optional[tuple[float, float]]:
+    """
+    SIP backtest: invest `monthly_amount` every month for the trailing `years`,
+    buying units at each month's NAV. Returns (corpus_value_today, total_invested),
+    or None if the series doesn't reach back far enough.
+
+    `series` = [(date, nav), …] sorted oldest → newest.
+    """
+    if not _has_history(series, years):
+        return None
+    latest_dt, latest_nav = series[-1]
+    if latest_nav <= 0:
+        return None
+    dates = [p[0] for p in series]
+    start = latest_dt - timedelta(days=round(years * 365.25))
+    months = int(round(years * 12))
+    units = 0.0
+    for i in range(months):
+        d = start + timedelta(days=round(i * 365.25 / 12))
+        nav = _nav_at(series, dates, d)
+        if nav and nav > 0:
+            units += monthly_amount / nav
+    return units * latest_nav, monthly_amount * months
+
+
+def basket_sip(
+    items: list[tuple[list[tuple[datetime, float]], float]],
+    monthly_amount: float,
+    years: float,
+) -> tuple[Optional[float], Optional[float], float]:
+    """
+    Weighted SIP across a basket of (series, weight). The monthly contribution is
+    split by weight; funds lacking `years` of history are dropped and the rest
+    renormalised so the monthly outlay stays constant. Returns
+    (corpus_today | None, total_invested | None, coverage 0-1).
+    """
+    eligible = [(s, w) for s, w in items if w > 0 and _has_history(s, years)]
+    if not eligible:
+        return None, None, 0.0
+    total_w = sum(w for _, w in eligible)
+    if total_w <= 0:
+        return None, None, 0.0
+    corpus = 0.0
+    invested = 0.0
+    for series, weight in eligible:
+        res = sip_value(series, monthly_amount * (weight / total_w), years)
+        if res is not None:
+            corpus += res[0]
+            invested += res[1]
+    return corpus, invested, round(len(eligible) / len(items), 2)
 
 
 def track_record_tier(history_points: int) -> str:

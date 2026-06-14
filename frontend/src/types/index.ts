@@ -595,3 +595,48 @@ export interface ModelPortfolioResponse {
   from_cache: boolean;
   generated_at: string;
 }
+
+// ── Portfolio backtest comparison (your funds vs the model) ────────────────────
+
+export interface CompareFundInput {
+  code: string;
+  name: string;
+  weight?: number;
+}
+
+export interface CompareRequest {
+  market: Market;
+  risk: RiskProfile;
+  amount: number;            // monthly SIP amount
+  user_funds: CompareFundInput[];
+}
+
+export interface CompareFundReturn {
+  code: string;
+  name: string;
+  weight: number;
+  returns_1y?: number;
+  returns_3y?: number;
+  returns_5y?: number;
+}
+
+export interface CompareWindow {
+  years: number;
+  invested?: number;
+  user_value?: number;
+  user_gain_pct?: number;
+  model_value?: number;
+  model_gain_pct?: number;
+  user_coverage: number;
+  model_coverage: number;
+}
+
+export interface CompareResponse {
+  market: Market;
+  risk: RiskProfile;
+  amount: number;
+  windows: CompareWindow[];
+  user_funds: CompareFundReturn[];
+  model_funds: CompareFundReturn[];
+  generated_at: string;
+}

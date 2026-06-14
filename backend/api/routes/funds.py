@@ -1,14 +1,13 @@
 """
-Fund Scanner route — GET /api/funds/scan
+Fund routes — GET /api/funds/scan and /api/funds/model-portfolio
 
-Scans a curated universe of India mutual funds (Direct-Growth plans) via mfapi.in,
-computes NAV-derived metrics, and returns an AI/heuristic "should I enter now"
-verdict per fund.
+`market=india` (default) scans India mutual funds (Direct-Growth, via mfapi.in,
+NAV-derived metrics, category-relative scoring with saturation/closet rule-outs).
+`market=us` scans a curated universe of US ETFs (via yfinance, cost-led scoring
+with real expense ratio + AUM).
 
-Optional `?category=` narrows to one category (Flexi Cap, Large Cap, Small Cap,
-Mid Cap, ELSS, Index, Contra, Value). `?refresh=true` busts the cache.
-
-Cache TTL: 6 hours — mutual-fund NAVs publish once daily after market close.
+`?category=` narrows to one category, `?refresh=true` busts the cache.
+Cache TTL: 6 hours.
 """
 from __future__ import annotations
 
@@ -17,11 +16,20 @@ from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends
 
-from api.deps import get_cache, get_fund_data
+from api.deps import get_cache, get_fund_data, get_us_etf_data
 from core.logging import get_logger
-from models.schemas import FundScanResponse, ModelPortfolioResponse, RiskProfile
+from models.schemas import (
+    CompareRequest,
+    CompareResponse,
+    FundScanResponse,
+    Market,
+    ModelPortfolioResponse,
+    RiskProfile,
+)
 from services.cache import CacheBackend
+from services.fund_compare import run_compare
 from services.fund_data import FundDataService
+from services.us_etf_data import USETFDataService
 
 router = APIRouter(prefix="/funds", tags=["funds"])
 log = get_logger(__name__)
@@ -31,41 +39,46 @@ _FUNDS_TTL = 6 * 60 * 60  # 6 hours
 _VALID_RISK = {"conservative", "balanced", "aggressive"}
 
 
-def _cache_key(category: Optional[str]) -> str:
-    return f"funds:scan:{(category or 'all').lower()}"
+def _scan_key(market: str, category: Optional[str]) -> str:
+    return f"funds:scan:{market}:{(category or 'all').lower()}"
 
 
 @router.get("/scan", response_model=FundScanResponse)
 async def scan_funds(
     cache: Annotated[CacheBackend, Depends(get_cache)],
-    funds: Annotated[FundDataService, Depends(get_fund_data)],
+    india: Annotated[FundDataService, Depends(get_fund_data)],
+    us: Annotated[USETFDataService, Depends(get_us_etf_data)],
+    market: Market = "india",
     category: Optional[str] = None,
     refresh: bool = False,
 ) -> FundScanResponse:
     """
-    Returns scored India mutual funds with an entry verdict (strong_entry / watch /
-    avoid) and plain-English reasoning grounded in NAV-derived metrics:
-    rolling returns, 3y/5y CAGR, Sharpe ratio, and max drawdown.
+    Returns scored funds with an entry verdict and plain-English reasoning.
 
-    Cached 6 hours per category. Pass `?refresh=true` to force a fresh scan.
+    India (default): mutual funds ranked category-relative on alpha, Sharpe, and
+    drawdown, with saturated and closet-index funds ruled out.
+    US: ETFs ranked cost-led on expense ratio, long-term return, Sharpe, and size.
+
+    Cached 6 hours per market+category. Pass `?refresh=true` to force a fresh scan.
     """
-    key = _cache_key(category)
+    key = _scan_key(market, category)
 
     if not refresh:
         cached = await cache.get(key)
         if cached:
-            log.info("funds.cache_hit", category=category or "all")
+            log.info("funds.cache_hit", market=market, category=category or "all")
             return FundScanResponse(**{**cached, "from_cache": True})
     else:
-        log.info("funds.cache_bust", category=category or "all")
+        log.info("funds.cache_bust", market=market, category=category or "all")
 
-    log.info("funds.cold_scan_start", category=category or "all")
-    response = await funds.scan(category=category)
+    log.info("funds.cold_scan_start", market=market, category=category or "all")
+    service = us if market == "us" else india
+    response = await service.scan(category=category)
     response.scanned_at = datetime.utcnow()
 
     if response.funds:
         await cache.set(key, response.model_dump(mode="json"), _FUNDS_TTL)
-        log.info("funds.cached", category=category or "all", count=len(response.funds), ttl=_FUNDS_TTL)
+        log.info("funds.cached", market=market, category=category or "all", count=len(response.funds))
 
     return response
 
@@ -73,32 +86,52 @@ async def scan_funds(
 @router.get("/model-portfolio", response_model=ModelPortfolioResponse)
 async def model_portfolio(
     cache: Annotated[CacheBackend, Depends(get_cache)],
-    funds: Annotated[FundDataService, Depends(get_fund_data)],
+    india: Annotated[FundDataService, Depends(get_fund_data)],
+    us: Annotated[USETFDataService, Depends(get_us_etf_data)],
+    market: Market = "india",
     risk: RiskProfile = "balanced",
     refresh: bool = False,
 ) -> ModelPortfolioResponse:
     """
     A generic 5-fund model portfolio — "the funds you should own" — for a self-
-    selected risk level (conservative / balanced / aggressive). One fund per role
-    (Core / Anchor / Growth / High-Growth / Satellite), each the best long-term
-    pick in its category with rule-outs excluded and AMC overlap avoided.
-
-    No personal profiling — the risk flavour is self-selected. Cached 6 hours.
+    selected risk level. India: active funds across market caps. US: a Boglehead-
+    style lazy ETF allocation (broad core + growth tilt + international + income +
+    diversifier). No personal profiling. Cached 6 hours.
     """
     risk_key = risk if risk in _VALID_RISK else "balanced"
-    key = f"funds:model:{risk_key}"
+    key = f"funds:model:{market}:{risk_key}"
 
     if not refresh:
         cached = await cache.get(key)
         if cached:
-            log.info("funds.model_cache_hit", risk=risk_key)
+            log.info("funds.model_cache_hit", market=market, risk=risk_key)
             return ModelPortfolioResponse(**{**cached, "from_cache": True})
 
-    log.info("funds.model_build", risk=risk_key)
-    response = await funds.build_model_portfolio(risk=risk_key)
+    log.info("funds.model_build", market=market, risk=risk_key)
+    service = us if market == "us" else india
+    response = await service.build_model_portfolio(risk=risk_key)
     response.generated_at = datetime.utcnow()
 
     if response.holdings:
         await cache.set(key, response.model_dump(mode="json"), _FUNDS_TTL)
 
+    return response
+
+
+@router.post("/compare", response_model=CompareResponse)
+async def compare_funds(
+    body: CompareRequest,
+    india: Annotated[FundDataService, Depends(get_fund_data)],
+    us: Annotated[USETFDataService, Depends(get_us_etf_data)],
+) -> CompareResponse:
+    """
+    Backtest a lumpsum: "if I'd invested `amount` across MY funds N years ago vs
+    the model portfolio, where would I be today?" Trailing 1 / 3 / 5 years.
+
+    Funds without enough history for a window are dropped and weights renormalised
+    (coverage is reported per window). Not cached — inputs vary per request.
+    """
+    service = us if body.market == "us" else india
+    response = await run_compare(service, body)
+    response.generated_at = datetime.utcnow()
     return response

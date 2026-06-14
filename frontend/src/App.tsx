@@ -13,7 +13,7 @@ import type { Market } from "./types";
 // Each mode lazily mounts its own pages, so stock data never fetches until
 // the user actually switches into Stocks mode.
 export type AppMode   = "funds" | "stocks";
-export type FundsTab  = "build" | "scanner" | "analyse" | "switch";
+export type FundsTab  = "build" | "scanner" | "compare" | "analyse";
 export type StocksTab = "gainers" | "radar" | "conviction" | "portfolio";
 
 const queryClient = new QueryClient({

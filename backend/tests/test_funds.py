@@ -9,16 +9,33 @@ Coverage:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
 from models.schemas import (
+    CompareFundInput,
+    CompareRequest,
     FundScanResponse,
     FundScheme,
     ModelHolding,
     ModelPortfolioResponse,
 )
+from services.fund_metrics import basket_sip, growth_over_years, sip_value
+
+
+def _series(total_growth: float, years: int = 6) -> list[tuple[datetime, float]]:
+    """Monthly NAV series ending today, compounding to `total_growth` over `years`."""
+    today = datetime.utcnow()
+    n = years * 12 + 1
+    out: list[tuple[datetime, float]] = []
+    for i in range(n):
+        frac = i / (n - 1)
+        nav = 100.0 * (total_growth ** frac)
+        dt = today - timedelta(days=int((n - 1 - i) * 30.44))
+        out.append((dt, nav))
+    return out
 from services.fund_metrics import (
     annualised_volatility,
     closet_metrics,
@@ -452,6 +469,233 @@ class TestModelPortfolioRoute:
         assert body["risk"] == "aggressive"
         assert len(body["holdings"]) == 1
         assert body["holdings"][0]["role"] == "Core"
+
+
+class TestUSETFScoring:
+    """US ETF scoring is cost-led and category-relative — no network."""
+
+    @staticmethod
+    def _etf(code: str, expense: float, sharpe: float, cagr5: float, dd: float,
+             aum: float, category: str = "US Broad Market") -> FundScheme:
+        return FundScheme(
+            scheme_code=code, name=f"{code} ETF", category=category,
+            fund_type="etf", market="us",
+            expense_ratio=expense, sharpe=sharpe, returns_5y_cagr=cagr5,
+            max_drawdown=dd, aum=aum,
+        )
+
+    def _score(self, funds: list[FundScheme]):
+        from core.config import Settings
+        from services.us_etf_data import USETFDataService, _Scanned
+
+        svc = USETFDataService(Settings())
+        cohort = [_Scanned(f, {}) for f in funds]
+        svc._score_cohort(cohort)
+        return {s.fund.scheme_code: s.fund for s in cohort}
+
+    def test_cheaper_etf_ranks_higher_all_else_equal(self) -> None:
+        # Identical funds except expense ratio ⇒ cost decides.
+        funds = [
+            self._etf("CHEAP",  0.03, 0.9, 14.0, -18.0, 1e12),
+            self._etf("MID",    0.10, 0.9, 14.0, -18.0, 1e12),
+            self._etf("PRICEY", 0.20, 0.9, 14.0, -18.0, 1e12),
+            self._etf("DEAR",   0.50, 0.9, 14.0, -18.0, 1e12),
+        ]
+        r = self._score(funds)
+        assert r["CHEAP"].category_rank == 1
+        assert r["DEAR"].category_rank == 4
+        assert r["CHEAP"].fund_score > r["DEAR"].fund_score
+        # QQQM-beats-QQQ in miniature: same exposure, lower fee wins.
+
+    def test_scores_and_signal_populated(self) -> None:
+        funds = [
+            self._etf("A", 0.03, 1.2, 16.0, -15.0, 2e12),
+            self._etf("B", 0.10, 0.8, 12.0, -22.0, 5e11),
+            self._etf("C", 0.20, 0.6, 10.0, -28.0, 1e11),
+            self._etf("D", 0.40, 0.4,  8.0, -33.0, 5e10),
+        ]
+        r = self._score(funds)
+        assert r["A"].fund_score > 0 and r["A"].long_term_score > 0
+        assert r["A"].entry_signal in {"strong_entry", "watch", "avoid"}
+        assert r["A"].fund_score > r["D"].fund_score
+
+
+class TestUSModelPortfolio:
+    def _svc(self, funds: list[FundScheme]):
+        from core.config import Settings
+        from services.us_etf_data import USETFDataService
+
+        svc = USETFDataService(Settings())
+
+        async def fake_scan(category=None):
+            return FundScanResponse(market="us", funds=funds, universe_size=75)
+
+        svc.scan = fake_scan  # type: ignore[assignment]
+        return svc
+
+    @staticmethod
+    def _etf(code: str, category: str, lt: float, expense: float) -> FundScheme:
+        return FundScheme(
+            scheme_code=code, name=f"{code} ETF", category=category,
+            fund_type="etf", market="us", long_term_score=lt,
+            expense_ratio=expense, category_rank=1, category_size=6,
+        )
+
+    def _slots(self) -> list[FundScheme]:
+        return [
+            self._etf("VTI",  "US Broad Market", 90, 0.03),
+            self._etf("QQQM", "US Large Growth", 85, 0.15),
+            self._etf("VXUS", "International Total", 80, 0.05),
+            self._etf("SCHD", "US Dividend", 82, 0.06),
+            self._etf("BND",  "Bonds", 70, 0.03),
+        ]
+
+    def test_balanced_five_holdings_and_blended_cost(self) -> None:
+        resp = asyncio.run(self._svc(self._slots()).build_model_portfolio("balanced"))
+        assert [h.role for h in resp.holdings] == ["Core", "Growth", "International", "Income", "Diversifier"]
+        assert [h.weight_pct for h in resp.holdings] == [45, 20, 20, 10, 5]
+        # All ETFs have expense ratios ⇒ blended TER is computed.
+        assert resp.blended_expense_ratio is not None
+        assert 0.0 < resp.blended_expense_ratio < 0.15
+
+    def test_aggressive_drops_zero_weight_diversifier(self) -> None:
+        resp = asyncio.run(self._svc(self._slots()).build_model_portfolio("aggressive"))
+        roles = [h.role for h in resp.holdings]
+        assert "Diversifier" not in roles      # 0% weight ⇒ slot skipped
+        assert len(resp.holdings) == 4
+        assert abs(sum(h.weight_pct for h in resp.holdings) - 100.0) < 0.1
+
+
+class TestUSFundRoute:
+    def test_scan_us_market(self, client: TestClient) -> None:
+        etf = FundScheme(
+            scheme_code="VOO", name="Vanguard S&P 500 ETF", category="US Broad Market",
+            fund_type="etf", market="us", nav=682.1, expense_ratio=0.03,
+            fund_score=88.0, long_term_score=90.0, entry_signal="strong_entry",
+            entry_reason="Best-in-class US Broad Market.",
+        )
+        resp_obj = FundScanResponse(market="us", funds=[etf], universe_size=75)
+        with patch(
+            "services.us_etf_data.USETFDataService.scan",
+            new=AsyncMock(return_value=resp_obj),
+        ):
+            resp = client.get("/api/funds/scan?market=us")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["market"] == "us"
+        assert body["funds"][0]["scheme_code"] == "VOO"
+        assert body["funds"][0]["expense_ratio"] == 0.03
+
+
+class TestBacktestMath:
+    def test_growth_over_years_positive(self) -> None:
+        s = _series(2.0, years=6)            # doubled over 6y
+        g5 = growth_over_years(s, 5)
+        assert g5 is not None and 1.6 < g5 < 1.95   # 2^(5/6) ≈ 1.78
+
+    def test_growth_over_years_none_when_too_young(self) -> None:
+        s = _series(1.5, years=2)
+        assert growth_over_years(s, 5) is None
+        assert growth_over_years(s, 1) is not None
+
+    def test_sip_corpus_exceeds_invested_on_rising_fund(self) -> None:
+        s = _series(2.0, years=6)            # steadily rising
+        res = sip_value(s, 10000.0, 5)
+        assert res is not None
+        corpus, invested = res
+        assert invested == 10000 * 60        # 60 monthly instalments
+        assert corpus > invested             # rising NAV ⇒ gains
+
+    def test_sip_none_when_too_young(self) -> None:
+        assert sip_value(_series(1.5, years=2), 10000.0, 5) is None
+
+    def test_basket_sip_weighted_and_coverage(self) -> None:
+        a = _series(2.0, 6)
+        b = _series(1.4, 6)
+        corpus, invested, cov = basket_sip([(a, 50.0), (b, 50.0)], 10000.0, 5)
+        assert cov == 1.0
+        assert corpus is not None and invested == 10000 * 60
+        assert corpus > invested
+
+    def test_basket_sip_drops_young_and_keeps_outlay_constant(self) -> None:
+        old = _series(2.0, 6)
+        young = _series(1.5, 2)              # no 5y history
+        corpus, invested, cov = basket_sip([(old, 50.0), (young, 50.0)], 10000.0, 5)
+        assert cov == 0.5                     # only one fund qualified
+        # full monthly outlay still deployed into the eligible fund
+        assert invested == 10000 * 60
+
+
+class _FakeCompareService:
+    """Stand-in service for run_compare: deterministic growth per code."""
+    _GROWTH = {"U1": 1.5, "U2": 1.2, "M1": 2.0, "M2": 1.8}
+
+    async def build_model_portfolio(self, risk: str) -> ModelPortfolioResponse:
+        return ModelPortfolioResponse(holdings=[
+            ModelHolding(role="Core", weight_pct=60, why="",
+                         fund=FundScheme(scheme_code="M1", name="Model A", category="Flexi Cap")),
+            ModelHolding(role="Growth", weight_pct=40, why="",
+                         fund=FundScheme(scheme_code="M2", name="Model B", category="Mid Cap")),
+        ])
+
+    async def get_price_series(self, code: str):
+        return _series(self._GROWTH.get(code, 1.0), years=6)
+
+
+class TestRunCompare:
+    def _run(self):
+        from services.fund_compare import run_compare
+        req = CompareRequest(
+            market="india", risk="balanced", amount=200000.0,
+            user_funds=[CompareFundInput(code="U1", name="User A"),
+                        CompareFundInput(code="U2", name="User B")],
+        )
+        return asyncio.run(run_compare(_FakeCompareService(), req))
+
+    def test_three_windows(self) -> None:
+        resp = self._run()
+        assert [w.years for w in resp.windows] == [1, 3, 5]
+
+    def test_model_beats_user_when_model_funds_grow_more(self) -> None:
+        resp = self._run()
+        w5 = next(w for w in resp.windows if w.years == 5)
+        assert w5.user_value is not None and w5.model_value is not None
+        assert w5.model_value > w5.user_value      # M1/M2 grew more than U1/U2
+
+    def test_sip_corpus_and_invested(self) -> None:
+        resp = self._run()
+        w5 = next(w for w in resp.windows if w.years == 5)
+        # amount=200000 monthly × 60 months
+        assert w5.invested == 200000 * 60
+        assert w5.user_value > w5.invested         # rising funds ⇒ corpus > paid-in
+        assert w5.user_gain_pct is not None and w5.user_gain_pct > 0
+
+    def test_per_fund_breakdown_present(self) -> None:
+        resp = self._run()
+        assert {f.code for f in resp.user_funds} == {"U1", "U2"}
+        assert {f.code for f in resp.model_funds} == {"M1", "M2"}
+        assert all(f.weight == 50.0 for f in resp.user_funds)   # equal-weighted
+
+
+class TestCompareRoute:
+    def test_compare_endpoint(self, client: TestClient) -> None:
+        from models.schemas import CompareResponse, CompareWindow
+
+        resp_obj = CompareResponse(
+            market="india", amount=25000.0,
+            windows=[CompareWindow(years=5, invested=1500000,
+                                   user_value=2100000, user_gain_pct=40.0,
+                                   model_value=2300000, model_gain_pct=53.3,
+                                   user_coverage=1.0, model_coverage=1.0)],
+        )
+        with patch("api.routes.funds.run_compare", new=AsyncMock(return_value=resp_obj)):
+            resp = client.post("/api/funds/compare", json={
+                "market": "india", "risk": "balanced", "amount": 25000,
+                "user_funds": [{"code": "120639", "name": "PPFCF"}],
+            })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["windows"][0]["model_value"] == 2300000
 
 
 class TestFundAnalystMock:

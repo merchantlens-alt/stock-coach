@@ -1,44 +1,56 @@
 /**
- * FundsPage — primary home of the app. ETF + India mutual-fund tooling.
+ * FundsPage — primary home of the app. India MF + US ETF tooling.
  *
- * Sub-views:
- *   • Scanner — LIVE: screen India mutual funds with NAV-derived metrics + AI
- *               entry verdict (strong_entry / watch / avoid).
- *   • Analyse — placeholder (Phase 2): deep dive on one fund.
- *   • Switch  — placeholder (Phase 3): "I hold A, should I move to B?"
+ * Sub-views (market toggle shared across all):
+ *   • Top 5   — the model portfolio you should own (ModelPortfolioView).
+ *   • Scanner — screen the universe with category-relative / cost-led scoring.
+ *   • Compare — SIP backtest: your funds vs the model (CompareView).
+ *   • Analyse — placeholder: deep dive on one fund.
  */
 
-import { ArrowLeftRight, Loader2, Microscope, RefreshCw, ScanSearch, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { Loader2, Microscope, RefreshCw, ScanSearch, Sparkles } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { api } from "../api/client";
+import { CompareView } from "../components/CompareView";
 import { FundCard } from "../components/FundCard";
+import { MarketToggleFunds } from "../components/MarketToggleFunds";
 import { ModelPortfolioView } from "../components/ModelPortfolioView";
 import { useFundScan } from "../hooks/useFunds";
 import type { FundsTab } from "../App";
+import type { Market } from "../types";
 
 // ── Scanner ─────────────────────────────────────────────────────────────────
 
-const CATEGORIES = [
+const INDIA_CATEGORIES = [
   "Flexi Cap", "Multi Cap", "Large Cap", "Large & Mid Cap", "Mid Cap",
   "Small Cap", "ELSS", "Focused", "Value/Contra", "Special Opportunities",
-] as const;
+];
+const US_CATEGORIES = [
+  "US Broad Market", "US Large Growth", "US Large Value", "US Dividend",
+  "US Mid Cap", "US Small Cap", "US Technology", "US Sector",
+  "International Developed", "International Total", "Emerging Markets", "Bonds", "REIT",
+];
 
-function FundScanner() {
+function FundScanner({ market, onMarketChange }: { market: Market; onMarketChange: (m: Market) => void }) {
   const [category, setCategory] = useState<string | undefined>(undefined);
   const [refreshing, setRefreshing] = useState(false);
   const queryClient = useQueryClient();
-  const { data, isLoading, error } = useFundScan(category);
+  const { data, isLoading, error } = useFundScan(market, category);
+
+  // Categories differ per market — reset the filter when the market changes.
+  useEffect(() => { setCategory(undefined); }, [market]);
+  const categories = market === "us" ? US_CATEGORIES : INDIA_CATEGORIES;
 
   async function handleRefresh() {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      const result = await api.getFundScan(category, { refresh: true });
-      queryClient.setQueryData(["funds", "scan", category ?? "all"], result);
+      const result = await api.getFundScan(market, category, { refresh: true });
+      queryClient.setQueryData(["funds", "scan", market, category ?? "all"], result);
     } catch {
-      queryClient.invalidateQueries({ queryKey: ["funds", "scan", category ?? "all"] });
+      queryClient.invalidateQueries({ queryKey: ["funds", "scan", market, category ?? "all"] });
     } finally {
       setRefreshing(false);
     }
@@ -55,14 +67,19 @@ function FundScanner() {
           <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center shrink-0">
             <ScanSearch size={16} className="text-violet-600" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h2 className="text-sm font-bold text-gray-900">Fund Scanner</h2>
-            <p className="text-[11px] text-gray-400">Ranked within category · saturation & closet-index ruled out · new funds surfaced</p>
+            <p className="text-[11px] text-gray-400 truncate">
+              {market === "us"
+                ? "US ETFs · cost-led ranking on expense ratio, return & size"
+                : "India MFs · ranked within category · saturation & closet-index ruled out"}
+            </p>
           </div>
           <div className="ml-auto flex items-center gap-3">
+            <MarketToggleFunds market={market} onChange={onMarketChange} />
             {funds.length > 0 && (
-              <span className="text-[11px] text-gray-400">
-                {funds.length}{data?.universe_size ? ` / ${data.universe_size}` : ""} funds
+              <span className="hidden md:inline text-[11px] text-gray-400">
+                {funds.length}{data?.universe_size ? ` / ${data.universe_size}` : ""}
               </span>
             )}
             <button
@@ -90,7 +107,7 @@ function FundScanner() {
           >
             All
           </button>
-          {CATEGORIES.map(cat => (
+          {categories.map(cat => (
             <button
               key={cat}
               onClick={() => setCategory(cat === category ? undefined : cat)}
@@ -112,8 +129,8 @@ function FundScanner() {
         {isLoading && (
           <div className="flex flex-col items-center justify-center py-20 text-gray-400">
             <Loader2 size={28} className="animate-spin mb-3 text-violet-500" />
-            <p className="text-sm font-medium">Scanning funds & computing metrics…</p>
-            <p className="text-xs mt-1">First scan pulls NAV history — ~10-20s</p>
+            <p className="text-sm font-medium">Scanning {market === "us" ? "ETFs" : "funds"} & computing metrics…</p>
+            <p className="text-xs mt-1">{market === "us" ? "Pulling ETF data — a few seconds" : "First scan pulls NAV history — ~30s"}</p>
           </div>
         )}
 
@@ -143,7 +160,7 @@ function FundScanner() {
   );
 }
 
-// ── Placeholder sub-views (Analyse / Switch) ──────────────────────────────────
+// ── Placeholder sub-view (Analyse) ────────────────────────────────────────────
 
 interface Placeholder {
   icon: ReactNode;
@@ -152,27 +169,15 @@ interface Placeholder {
   bullets: { lead: string; rest: string }[];
 }
 
-const PLACEHOLDERS: Record<"analyse" | "switch", Placeholder> = {
-  analyse: {
-    icon: <Microscope size={22} className="text-violet-600" />,
-    title: "Fund Analyser",
-    tagline: "Deep dive on a single fund — and cross-reference the stocks it actually holds.",
-    bullets: [
-      { lead: "Holdings heatmap", rest: "Sector and top-company exposure — see what you're really buying under the label." },
-      { lead: "Cost compounding", rest: "What the expense ratio actually costs you over 10 and 20 years." },
-      { lead: "Stock crossover",  rest: "\"This fund holds Infosys at 23% — here's the AI analysis we already ran on it.\"" },
-    ],
-  },
-  switch: {
-    icon: <ArrowLeftRight size={22} className="text-violet-600" />,
-    title: "Switch Analyser",
-    tagline: "Hold one fund, eyeing another? Get a clear stay-or-switch call.",
-    bullets: [
-      { lead: "Holdings overlap", rest: "How much of A and B is the same stocks — high overlap means switching buys little." },
-      { lead: "Side-by-side",     rest: "Rolling returns, risk, and expense-ratio delta, head to head." },
-      { lead: "AI verdict",       rest: "\"Switch — B has lower cost, better 3yr alpha, only 40% overlap.\" or \"Hold — not worth the exit tax.\"" },
-    ],
-  },
+const ANALYSE_PLACEHOLDER: Placeholder = {
+  icon: <Microscope size={22} className="text-violet-600" />,
+  title: "Fund Analyser",
+  tagline: "Deep dive on a single fund — and cross-reference the stocks it actually holds.",
+  bullets: [
+    { lead: "Holdings heatmap", rest: "Sector and top-company exposure — see what you're really buying under the label." },
+    { lead: "Cost compounding", rest: "What the expense ratio actually costs you over 10 and 20 years." },
+    { lead: "Stock crossover",  rest: "\"This fund holds Infosys at 23% — here's the AI analysis we already ran on it.\"" },
+  ],
 };
 
 function PlaceholderView({ p }: { p: Placeholder }) {
@@ -217,7 +222,10 @@ function PlaceholderView({ p }: { p: Placeholder }) {
 // ── Page shell ────────────────────────────────────────────────────────────────
 
 export function FundsPage({ tab }: { tab: FundsTab }) {
-  if (tab === "build") return <ModelPortfolioView />;
-  if (tab === "scanner") return <FundScanner />;
-  return <PlaceholderView p={PLACEHOLDERS[tab]} />;
+  // Market (India MF / US ETF) is shared across the Funds sub-tabs.
+  const [market, setMarket] = useState<Market>("india");
+  if (tab === "build") return <ModelPortfolioView market={market} onMarketChange={setMarket} />;
+  if (tab === "scanner") return <FundScanner market={market} onMarketChange={setMarket} />;
+  if (tab === "compare") return <CompareView market={market} onMarketChange={setMarket} />;
+  return <PlaceholderView p={ANALYSE_PLACEHOLDER} />;
 }

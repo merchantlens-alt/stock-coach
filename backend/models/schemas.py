@@ -687,3 +687,51 @@ class ModelPortfolioResponse(BaseModel):
     universe_size: int = 0
     from_cache: bool = False
     generated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Portfolio backtest comparison (your funds vs the model 5) ──────────────────
+
+class CompareFundInput(BaseModel):
+    code: str                       # scheme_code (India) or ticker (US)
+    name: str
+    weight: Optional[float] = None  # % allocation; None ⇒ equal-weight the basket
+
+
+class CompareRequest(BaseModel):
+    market: Market = "india"
+    risk: RiskProfile = "balanced"  # which model portfolio to compare against
+    amount: float = 25000.0         # MONTHLY SIP amount, split across the basket
+    user_funds: list[CompareFundInput] = Field(default_factory=list)
+
+
+class CompareFundReturn(BaseModel):
+    """Per-fund trailing returns, for transparency in the breakdown."""
+    code: str
+    name: str
+    weight: float
+    returns_1y: Optional[float] = None
+    returns_3y: Optional[float] = None
+    returns_5y: Optional[float] = None
+
+
+class CompareWindow(BaseModel):
+    """One trailing window: a monthly SIP's corpus today, each side."""
+    years: int
+    invested: Optional[float] = None        # total paid in over the window (same both sides)
+    user_value: Optional[float] = None      # corpus today
+    user_gain_pct: Optional[float] = None   # corpus ÷ invested − 1
+    model_value: Optional[float] = None
+    model_gain_pct: Optional[float] = None
+    # Fraction of each basket that had enough history for this window (0-1).
+    user_coverage: float = 0.0
+    model_coverage: float = 0.0
+
+
+class CompareResponse(BaseModel):
+    market: Market = "india"
+    risk: RiskProfile = "balanced"
+    amount: float = 200000.0
+    windows: list[CompareWindow] = Field(default_factory=list)
+    user_funds: list[CompareFundReturn] = Field(default_factory=list)
+    model_funds: list[CompareFundReturn] = Field(default_factory=list)
+    generated_at: datetime = Field(default_factory=datetime.utcnow)

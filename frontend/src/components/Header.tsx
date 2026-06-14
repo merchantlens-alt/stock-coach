@@ -23,8 +23,8 @@ interface SubTab {
 const FUNDS_TABS: SubTab[] = [
   { key: "build",   label: "TOP 5",   icon: <Sparkles size={12} /> },
   { key: "scanner", label: "SCANNER", icon: <ScanSearch size={12} /> },
+  { key: "compare", label: "COMPARE", icon: <ArrowLeftRight size={12} /> },
   { key: "analyse", label: "ANALYSE", icon: <Microscope size={12} /> },
-  { key: "switch",  label: "SWITCH",  icon: <ArrowLeftRight size={12} /> },
 ];
 
 const STOCKS_TABS: SubTab[] = [

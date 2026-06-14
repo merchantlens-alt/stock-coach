@@ -1,4 +1,4 @@
-import type { AddPortfolioEntryRequest, CatalystScanResponse, ConvictionRequest, ConvictionResponse, DipScanResponse, FundScanResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, ModelPortfolioResponse, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PriceHistory, RadarResponse, RiskProfile, StockAnalysisResponse, ValueRecoveryScanResponse } from "../types";
+import type { AddPortfolioEntryRequest, CatalystScanResponse, CompareRequest, CompareResponse, ConvictionRequest, ConvictionResponse, DipScanResponse, FundScanResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, ModelPortfolioResponse, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PriceHistory, RadarResponse, RiskProfile, StockAnalysisResponse, ValueRecoveryScanResponse } from "../types";
 
 const BASE_URL = "/api";
 
@@ -106,19 +106,26 @@ export const api = {
   getValueRecovery: (market: Market, options: FetchOptions = {}): Promise<ValueRecoveryScanResponse> =>
     fetchJSON(`/recovery/${market}${options.refresh ? "?refresh=true" : ""}`, options),
 
-  /** Fund scanner — India mutual funds with NAV-derived metrics + AI entry verdict. Cached 6 h. */
-  getFundScan: (category?: string, options: FetchOptions = {}): Promise<FundScanResponse> => {
-    const params = new URLSearchParams();
+  /** Fund scanner — India mutual funds or US ETFs with metrics + entry verdict. Cached 6 h. */
+  getFundScan: (market: Market = "india", category?: string, options: FetchOptions = {}): Promise<FundScanResponse> => {
+    const params = new URLSearchParams({ market });
     if (category) params.set("category", category);
     if (options.refresh) params.set("refresh", "true");
-    const qs = params.toString();
-    return fetchJSON(`/funds/scan${qs ? `?${qs}` : ""}`, options);
+    return fetchJSON(`/funds/scan?${params.toString()}`, options);
   },
 
-  /** Generic 5-fund model portfolio for a self-selected risk level. Cached 6 h. */
-  getModelPortfolio: (risk: RiskProfile = "balanced", options: FetchOptions = {}): Promise<ModelPortfolioResponse> => {
-    const params = new URLSearchParams({ risk });
+  /** Generic 5-fund model portfolio for a self-selected market + risk level. Cached 6 h. */
+  getModelPortfolio: (market: Market = "india", risk: RiskProfile = "balanced", options: FetchOptions = {}): Promise<ModelPortfolioResponse> => {
+    const params = new URLSearchParams({ market, risk });
     if (options.refresh) params.set("refresh", "true");
     return fetchJSON(`/funds/model-portfolio?${params.toString()}`, options);
   },
+
+  /** SIP backtest: your funds vs the model portfolio over trailing 1/3/5 years. */
+  compareFunds: (body: CompareRequest): Promise<CompareResponse> =>
+    fetchJSON("/funds/compare", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+    }),
 };
