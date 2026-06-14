@@ -52,6 +52,7 @@ def reset_singletons() -> None:
     deps._fund_data = None
     deps._us_etf_data = None
     deps._xray_agent = None
+    deps._fund_enrichment = None
     get_settings.cache_clear()
 
 

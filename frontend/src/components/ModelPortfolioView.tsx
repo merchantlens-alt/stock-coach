@@ -184,6 +184,9 @@ function HoldingCard({ h }: { h: ModelHolding }) {
   const c = ROLE_COLOR[h.role] ?? fallbackColor;
   const longReturn = f.returns_5y_cagr ?? f.returns_3y_cagr ?? f.since_inception_cagr;
   const longLabel = f.returns_5y_cagr != null ? "5Y" : f.returns_3y_cagr != null ? "3Y" : "SI";
+  // Bonds are ballast, not return engines — their Sharpe/CAGR look "bad" only
+  // because of the rate cycle. Show cost + stability instead of equity metrics.
+  const isBond = f.category === "Bonds";
 
   return (
     <div className="rounded-xl border border-gray-100 bg-white p-4">
@@ -200,22 +203,34 @@ function HoldingCard({ h }: { h: ModelHolding }) {
           <div className="flex items-start justify-between gap-2">
             <h3 className="text-sm font-bold text-gray-900 leading-tight line-clamp-2">{f.name}</h3>
             <div className="shrink-0 text-right">
-              <div className="text-[10px] text-gray-400">Long-term</div>
+              <div className="text-[10px] text-gray-400">{isBond ? "Stability" : "Long-term"}</div>
               <div className="text-sm font-bold text-indigo-600">{f.long_term_score.toFixed(0)}</div>
             </div>
           </div>
 
           {/* Key metrics */}
-          <div className="flex items-center gap-3 mt-1.5 text-[10px] text-gray-500">
-            <span><span className="text-gray-400">{longLabel} CAGR </span><span className={`font-semibold ${(longReturn ?? 0) >= 0 ? "text-green-600" : "text-red-500"}`}>{pct(longReturn)}</span></span>
-            <span><span className="text-gray-400">Sharpe </span><span className="font-semibold text-gray-700">{f.sharpe?.toFixed(2) ?? "—"}</span></span>
-            {f.active_return_3y != null && (
-              <span><span className="text-gray-400">α </span><span className={`font-semibold ${f.active_return_3y >= 0 ? "text-green-600" : "text-red-500"}`}>{f.active_return_3y >= 0 ? "+" : ""}{f.active_return_3y.toFixed(0)}pp</span></span>
-            )}
-            {f.max_drawdown != null && (
-              <span className="flex items-center gap-0.5"><TrendingDown size={9} className="text-gray-400" /><span className="font-semibold text-red-500">{f.max_drawdown.toFixed(0)}%</span></span>
-            )}
-          </div>
+          {isBond ? (
+            <div className="flex items-center gap-3 mt-1.5 text-[10px] text-gray-500">
+              {f.expense_ratio != null && (
+                <span><span className="text-gray-400">Expense </span><span className="font-semibold text-green-600">{f.expense_ratio.toFixed(2)}%</span></span>
+              )}
+              {f.max_drawdown != null && (
+                <span><span className="text-gray-400">Max DD </span><span className="font-semibold text-gray-700">{f.max_drawdown.toFixed(0)}%</span></span>
+              )}
+              <span className="text-gray-400 italic">low-volatility ballast</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 mt-1.5 text-[10px] text-gray-500">
+              <span><span className="text-gray-400">{longLabel} CAGR </span><span className={`font-semibold ${(longReturn ?? 0) >= 0 ? "text-green-600" : "text-red-500"}`}>{pct(longReturn)}</span></span>
+              <span><span className="text-gray-400">Sharpe </span><span className="font-semibold text-gray-700">{f.sharpe?.toFixed(2) ?? "—"}</span></span>
+              {f.active_return_3y != null && (
+                <span><span className="text-gray-400">α </span><span className={`font-semibold ${f.active_return_3y >= 0 ? "text-green-600" : "text-red-500"}`}>{f.active_return_3y >= 0 ? "+" : ""}{f.active_return_3y.toFixed(0)}pp</span></span>
+              )}
+              {f.max_drawdown != null && (
+                <span className="flex items-center gap-0.5"><TrendingDown size={9} className="text-gray-400" /><span className="font-semibold text-red-500">{f.max_drawdown.toFixed(0)}%</span></span>
+              )}
+            </div>
+          )}
 
           <p className="text-[10px] text-gray-500 leading-relaxed mt-1.5">{h.why}</p>
         </div>

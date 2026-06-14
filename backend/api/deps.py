@@ -46,6 +46,7 @@ _fund_analyst: FundAnalystAgent | None = None
 _fund_data: FundDataService | None = None
 _us_etf_data: USETFDataService | None = None
 _xray_agent: PortfolioXrayAgent | None = None
+_fund_enrichment: "FundEnrichmentProvider | None" = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -182,12 +183,22 @@ def get_fund_analyst(
     return _fund_analyst
 
 
+def get_fund_enrichment() -> "FundEnrichmentProvider":
+    """India TER/AUM provider. Swap NullEnrichmentProvider → an AMFI adapter here
+    once its data source + format are confirmed on a network that can reach AMFI."""
+    global _fund_enrichment
+    if _fund_enrichment is None:
+        from services.fund_enrichment import NullEnrichmentProvider
+        _fund_enrichment = NullEnrichmentProvider()
+    return _fund_enrichment
+
+
 def get_fund_data(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> FundDataService:
     global _fund_data
     if _fund_data is None:
-        _fund_data = FundDataService(settings, get_fund_analyst(settings))
+        _fund_data = FundDataService(settings, get_fund_analyst(settings), get_fund_enrichment())
     return _fund_data
 
 

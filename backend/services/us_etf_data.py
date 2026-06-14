@@ -71,6 +71,20 @@ _US_ETF_UNIVERSE: dict[str, str] = {
     "VGIT": "Bonds", "IEF": "Bonds",
     # REIT
     "VNQ": "REIT", "SCHH": "REIT", "IYR": "REIT",
+    # Thematic / innovation (niche, higher-risk — visible in the scanner, but the
+    # model portfolio only draws from the core categories above).
+    "QTUM": "US Thematic", "ARKK": "US Thematic", "ARKQ": "US Thematic",
+    "ARKG": "US Thematic", "ARKW": "US Thematic", "ARKF": "US Thematic",
+    "BOTZ": "US Thematic", "ROBO": "US Thematic", "SKYY": "US Thematic",
+    "WCLD": "US Thematic", "FINX": "US Thematic", "CIBR": "US Thematic",
+    "HACK": "US Thematic", "BUG": "US Thematic", "LIT": "US Thematic",
+    "ICLN": "US Thematic", "TAN": "US Thematic", "QCLN": "US Thematic",
+    "URA": "US Thematic", "XBI": "US Thematic", "IBB": "US Thematic",
+    "JETS": "US Thematic", "DRIV": "US Thematic", "KARS": "US Thematic",
+    "MOAT": "US Thematic",
+    # Commodity
+    "GLD": "US Commodity", "IAU": "US Commodity", "GLDM": "US Commodity",
+    "SLV": "US Commodity", "PDBC": "US Commodity",
 }
 
 # ── Model-portfolio slots (Boglehead-style) ───────────────────────────────────

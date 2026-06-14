@@ -169,6 +169,10 @@ _RISK_RATIONALE: dict[str, str] = {
 # Decay is judged RELATIVE to the category: a fund decelerating ≥6pp more than
 # its cohort median is fund-specific fade (saturation / drift), not market beta.
 _DECAY_REL_THRESHOLD = -6.0
+# Real AUM-based saturation (₹ crore), gated on AUM being sourced. A small/mid-cap
+# fund past these sizes can't deploy into genuine small/mids without moving prices —
+# its edge erodes. Dormant until the enrichment provider supplies AUM.
+_AUM_SATURATION_CR: dict[str, float] = {"Small Cap": 25000.0, "Mid Cap": 40000.0}
 _CLOSET_CORR = 0.95         # benchmark correlation above this …
 _CLOSET_ACTIVE = 1.5        # … with ≤1.5pp alpha ⇒ closet indexer
 
@@ -263,9 +267,17 @@ class _ScannedFund:
 
 
 class FundDataService:
-    def __init__(self, settings: Settings, analyst: Any | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        analyst: Any | None = None,
+        enrichment: Any | None = None,
+    ) -> None:
         self._settings = settings
         self._analyst = analyst
+        # TER/AUM provider — NullEnrichmentProvider until an AMFI adapter is wired.
+        from services.fund_enrichment import NullEnrichmentProvider
+        self._enrichment = enrichment or NullEnrichmentProvider()
         # Instance caches (process lifetime, refreshed every _UNIVERSE_TTL).
         self._universe: Optional[list[dict[str, str]]] = None   # [{code, name, category}]
         self._universe_at: float = 0.0
@@ -299,6 +311,10 @@ class FundDataService:
 
         if not scanned:
             return FundScanResponse(funds=[], category=category, scanned_at=datetime.utcnow())
+
+        # Enrich with TER + AUM (no-op until an AMFI adapter is wired). Populating
+        # these lets cost-aware ranking and AUM-saturation kick in automatically.
+        await self._apply_enrichment(scanned)
 
         # Category-relative scoring + rule-out flags.
         self._score_by_category(scanned)
@@ -395,6 +411,22 @@ class FundDataService:
             if dated:
                 self._benchmarks[key] = dated
         log.info("fund_data.benchmarks_ready", resolved=len(self._benchmarks))
+
+    async def _apply_enrichment(self, scanned: list[_ScannedFund]) -> None:
+        """Populate TER + AUM on each fund from the enrichment provider (if any)."""
+        try:
+            data = await self._enrichment.enrich([s.fund.scheme_code for s in scanned])
+        except Exception as exc:
+            log.warning("fund_data.enrichment_failed", error=str(exc))
+            return
+        if not data:
+            return
+        for s in scanned:
+            e = data.get(s.fund.scheme_code)
+            if e is not None:
+                s.fund.expense_ratio = e.expense_ratio
+                s.fund.aum = e.aum
+        log.info("fund_data.enriched", count=sum(1 for s in scanned if s.fund.aum is not None))
 
     # ── Per-fund build ──────────────────────────────────────────────────────────
 
@@ -521,10 +553,20 @@ class FundDataService:
                 and s.fund.active_return_3y <= _CLOSET_ACTIVE
             )
 
+            # AUM saturation — real (absolute) once AUM is sourced; no-op until then.
+            sat_threshold = _AUM_SATURATION_CR.get(category)
+            aum_saturated = (
+                sat_threshold is not None
+                and s.fund.aum is not None
+                and s.fund.aum > sat_threshold
+            )
+
             if is_decaying:
                 base -= 18
             if is_closet:
                 base -= 25
+            if aum_saturated:
+                base -= 12
             score = round(max(0.0, min(base, 100.0)), 1)
 
             # ── Long-term potential: momentum-free, alpha- & consistency-led ───
@@ -539,6 +581,8 @@ class FundDataService:
                 lt -= 15
             if is_closet:
                 lt -= 28
+            if aum_saturated:
+                lt -= 14
             long_term = round(max(0.0, min(lt, 100.0)), 1)
 
             signal = "strong_entry" if score >= 65 else "watch" if score >= 42 else "avoid"

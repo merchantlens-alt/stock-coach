@@ -30,7 +30,8 @@ const INDIA_CATEGORIES = [
 const US_CATEGORIES = [
   "US Broad Market", "US Large Growth", "US Large Value", "US Dividend",
   "US Mid Cap", "US Small Cap", "US Technology", "US Sector",
-  "International Developed", "International Total", "Emerging Markets", "Bonds", "REIT",
+  "International Developed", "International Total", "Emerging Markets",
+  "US Thematic", "US Commodity", "Bonds", "REIT",
 ];
 
 function FundScanner({ market, onMarketChange }: { market: Market; onMarketChange: (m: Market) => void }) {

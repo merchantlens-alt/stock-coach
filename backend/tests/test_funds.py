@@ -262,6 +262,55 @@ class TestCategoryScoring:
         assert young.fund_score >= 60
 
 
+class TestEnrichment:
+    """The TER/AUM enrichment seam + AUM-saturation teeth (no network)."""
+
+    def test_apply_enrichment_populates_ter_aum(self) -> None:
+        from core.config import Settings
+        from services.fund_data import FundDataService, _ScannedFund
+        from services.fund_enrichment import FundEnrichment, StaticEnrichmentProvider
+
+        prov = StaticEnrichmentProvider({"X1": FundEnrichment(expense_ratio=0.65, aum=12000.0)})
+        svc = FundDataService(Settings(), analyst=None, enrichment=prov)
+        funds = [
+            _ScannedFund(FundScheme(scheme_code="X1", name="X1", category="Flexi Cap"), {}, []),
+            _ScannedFund(FundScheme(scheme_code="X2", name="X2", category="Flexi Cap"), {}, []),
+        ]
+        asyncio.run(svc._apply_enrichment(funds))
+        assert funds[0].fund.expense_ratio == 0.65 and funds[0].fund.aum == 12000.0
+        assert funds[1].fund.expense_ratio is None and funds[1].fund.aum is None
+
+    def test_null_provider_leaves_metrics_unchanged(self) -> None:
+        from core.config import Settings
+        from services.fund_data import FundDataService, _ScannedFund
+
+        svc = FundDataService(Settings(), analyst=None)   # Null provider by default
+        funds = [_ScannedFund(FundScheme(scheme_code="X1", name="X1", category="Flexi Cap"), {}, [])]
+        asyncio.run(svc._apply_enrichment(funds))
+        assert funds[0].fund.aum is None
+
+    def test_aum_saturation_penalises_bloated_smallcap(self) -> None:
+        from core.config import Settings
+        from services.fund_data import FundDataService, _ScannedFund
+
+        def mk(code: str, aum: float):
+            f = FundScheme(scheme_code=code, name=f"{code} Fund", category="Small Cap",
+                           sharpe=1.0, returns_3y_cagr=20.0, returns_1y=15.0,
+                           max_drawdown=-20.0, active_return_3y=3.0, aum=aum)
+            m = {"sharpe": 1.0, "returns_3y_cagr": 20.0, "returns_1y": 15.0,
+                 "max_drawdown": -20.0, "returns_6m": 15.0, "decay_decel": -2.0,
+                 "_correlation": 0.8, "history_points": 1300}
+            return _ScannedFund(f, m, [])
+
+        svc = FundDataService(Settings(), analyst=None)
+        cohort = [mk("A", 5000), mk("B", 6000), mk("C", 7000), mk("D", 8000), mk("BLOAT", 50000)]
+        svc._score_cohort("Small Cap", cohort)
+        by = {s.fund.scheme_code: s.fund for s in cohort}
+        # All metrics identical — only BLOAT is over the ₹25k-cr small-cap threshold.
+        assert by["BLOAT"].fund_score < by["A"].fund_score
+        assert by["BLOAT"].long_term_score < by["A"].long_term_score
+
+
 class TestScoreFund:
     def test_strong_fund_scores_high(self) -> None:
         metrics = {
