@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { AdvisorEvaluateRequest, AdvisorEvaluateResponse, InvestorProfile, Market } from "../types";
+import type { AdvisorEvaluateRequest, AdvisorEvaluateResponse, AllocationPlanResponse, InvestorProfile, Market } from "../types";
 
 export function useInvestorProfile() {
   return useQuery({
@@ -20,6 +20,16 @@ export function useSaveProfile() {
       // Invalidate all advisor verdicts — profile changed, old verdicts are stale.
       queryClient.invalidateQueries({ queryKey: ["advisor"] });
     },
+  });
+}
+
+export function useAllocationPlan(enabled = true) {
+  return useQuery<AllocationPlanResponse>({
+    queryKey: ["advisor", "allocation-plan"],
+    queryFn: () => api.getAllocationPlan(),
+    enabled,
+    retry: false,
+    staleTime: 24 * 60 * 60_000, // 24 h — matches backend cache TTL
   });
 }
 

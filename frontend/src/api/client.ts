@@ -1,6 +1,23 @@
-import type { AddPortfolioEntryRequest, AdvisorEvaluateRequest, AdvisorEvaluateResponse, CompareRequest, CompareResponse, ConvictionRequest, ConvictionResponse, FundScanResponse, GainerDetail, GrowthTriggersReport, InvestorProfile, Market, ModelPortfolioResponse, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PortfolioXrayResponse, PriceHistory, RiskProfile, StockAnalysisResponse, XrayRequest } from "../types";
+import type { AddPortfolioEntryRequest, AdvisorEvaluateRequest, AdvisorEvaluateResponse, AllocationPlanResponse, CompareRequest, CompareResponse, ConvictionRequest, ConvictionResponse, FundScanResponse, GainerDetail, GrowthTriggersReport, InvestorProfile, Market, ModelPortfolioResponse, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PortfolioXrayResponse, PriceHistory, RiskProfile, StockAnalysisResponse, XrayRequest } from "../types";
 
 const BASE_URL = "/api";
+const TOKEN_KEY = "sc_token";
+
+// Module-level token store — avoids repeated localStorage reads per request
+let _token: string | null = null;
+
+try { _token = localStorage.getItem(TOKEN_KEY); } catch { /* SSR safety */ }
+
+export const authToken = {
+  get: () => _token,
+  set: (t: string) => { _token = t; try { localStorage.setItem(TOKEN_KEY, t); } catch { /**/ } },
+  clear: () => { _token = null; try { localStorage.removeItem(TOKEN_KEY); } catch { /**/ } },
+};
+
+// App.tsx subscribes to this to force a re-render on 401
+const _unauthListeners: Array<() => void> = [];
+export function onUnauthenticated(cb: () => void) { _unauthListeners.push(cb); }
+function _notifyUnauth() { _unauthListeners.forEach(fn => fn()); }
 
 interface FetchOptions {
   signal?: AbortSignal;
@@ -12,7 +29,17 @@ interface FetchOptions {
 
 async function fetchJSON<T>(path: string, options: FetchOptions = {}): Promise<T> {
   const { signal, method, body, headers } = options;
-  const resp = await fetch(`${BASE_URL}${path}`, { signal, method, body, headers });
+  const mergedHeaders: Record<string, string> = { ...headers };
+  if (_token) mergedHeaders["Authorization"] = `Bearer ${_token}`;
+  const resp = await fetch(`${BASE_URL}${path}`, {
+    signal, method, body,
+    headers: mergedHeaders,
+  });
+  if (resp.status === 401) {
+    authToken.clear();
+    _notifyUnauth();
+    throw new Error("Session expired. Please log in again.");
+  }
   if (!resp.ok) {
     const errBody = await resp.json().catch(() => ({}));
     throw new Error(errBody.detail ?? `Request failed: ${resp.status}`);
@@ -124,6 +151,10 @@ export const api = {
       body: JSON.stringify(profile),
       headers: { "Content-Type": "application/json" },
     }),
+
+  /** AI cross-asset allocation plan based on full investor profile. Cached 24 h. */
+  getAllocationPlan: (options: FetchOptions = {}): Promise<AllocationPlanResponse> =>
+    fetchJSON("/advisor/allocation-plan", options),
 
   /** Get personalised Buy/Pass verdict for a stock or fund. */
   evaluateAdvisor: (body: AdvisorEvaluateRequest): Promise<AdvisorEvaluateResponse> =>

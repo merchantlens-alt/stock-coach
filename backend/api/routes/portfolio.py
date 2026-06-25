@@ -14,8 +14,9 @@ from models.portfolio import (
     PortfolioSummary,
     ResolveEntryRequest,
 )
+from models.schemas import UserRecord
 from services.portfolio_store import PortfolioStore
-from api.deps import get_portfolio_store
+from api.deps import get_current_user, get_portfolio_store
 from core.logging import get_logger
 
 router = APIRouter(tags=["portfolio"])
@@ -30,7 +31,6 @@ def _fetch_prices_sync(tickers: list[str], market: str) -> dict[str, float]:
     yf_tickers = [f"{t}{suffix}" for t in tickers]
     prices: dict[str, float] = {}
     try:
-        # yf.Tickers handles multi-ticker fast_info efficiently
         batch = yf.Tickers(" ".join(yf_tickers))
         for ticker, yf_ticker in zip(tickers, yf_tickers):
             try:
@@ -49,11 +49,8 @@ def _fetch_prices_sync(tickers: list[str], market: str) -> dict[str, float]:
 async def get_portfolio_prices(
     tickers: Annotated[str, Query(description="Comma-separated ticker symbols, max 20")],
     market: Annotated[str, Query()] = "us",
+    current_user: Annotated[UserRecord, Depends(get_current_user)] = ...,
 ) -> dict:
-    """
-    Batch-fetch current market prices for portfolio tickers.
-    Returns {prices: {TICKER: price}} — missing tickers are silently omitted.
-    """
     ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()][:20]
     if not ticker_list:
         return {"prices": {}}
@@ -65,17 +62,17 @@ async def get_portfolio_prices(
 @router.get("/portfolio", response_model=PortfolioSummary)
 async def list_portfolio(
     store: Annotated[PortfolioStore, Depends(get_portfolio_store)],
+    current_user: Annotated[UserRecord, Depends(get_current_user)],
 ) -> PortfolioSummary:
-    """Return all tracked positions with win/loss summary."""
-    return await store.summary()
+    return await store.summary(current_user.user_id)
 
 
 @router.post("/portfolio", response_model=PortfolioEntry, status_code=201)
 async def add_portfolio_entry(
     body: AddPortfolioEntryRequest,
     store: Annotated[PortfolioStore, Depends(get_portfolio_store)],
+    current_user: Annotated[UserRecord, Depends(get_current_user)],
 ) -> PortfolioEntry:
-    """Add a stock to portfolio tracking (holding or watchlist)."""
     today = date.today()
     entry = PortfolioEntry(
         id=str(uuid.uuid4()),
@@ -94,24 +91,23 @@ async def add_portfolio_entry(
         target_date=(today + timedelta(days=30)).isoformat(),
         created_at=datetime.now(timezone.utc).isoformat(),
     )
-    await store.save(entry)
-    log.info("portfolio.entry_added", ticker=entry.ticker, market=entry.market, type=body.type.value)
+    await store.save(entry, current_user.user_id)
+    log.info("portfolio.entry_added", ticker=entry.ticker, user=current_user.username)
     return entry
 
 
 @router.post("/portfolio/resolve-expired", response_model=dict)
 async def mark_expired(
     store: Annotated[PortfolioStore, Depends(get_portfolio_store)],
+    current_user: Annotated[UserRecord, Depends(get_current_user)],
 ) -> dict:
-    """Mark all active entries past their target_date as 'expired'.
-    Call this daily (cron) or manually. Expired entries prompt user to enter actual price."""
-    entries = await store.get_all()
+    entries = await store.get_all(current_user.user_id)
     today = date.today()
     marked = 0
     for entry in entries:
         if entry.status == PortfolioStatus.active:
             if date.fromisoformat(entry.target_date) < today:
-                await store.save(entry.model_copy(update={"status": PortfolioStatus.expired}))
+                await store.save(entry.model_copy(update={"status": PortfolioStatus.expired}), current_user.user_id)
                 marked += 1
     log.info("portfolio.expired_marked", count=marked)
     return {"marked_expired": marked}
@@ -121,8 +117,9 @@ async def mark_expired(
 async def get_portfolio_entry(
     entry_id: Annotated[str, Path()],
     store: Annotated[PortfolioStore, Depends(get_portfolio_store)],
+    current_user: Annotated[UserRecord, Depends(get_current_user)],
 ) -> PortfolioEntry:
-    entry = await store.get(entry_id)
+    entry = await store.get(current_user.user_id, entry_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Portfolio entry not found")
     return entry
@@ -132,8 +129,9 @@ async def get_portfolio_entry(
 async def delete_portfolio_entry(
     entry_id: Annotated[str, Path()],
     store: Annotated[PortfolioStore, Depends(get_portfolio_store)],
+    current_user: Annotated[UserRecord, Depends(get_current_user)],
 ) -> None:
-    if not await store.delete(entry_id):
+    if not await store.delete(current_user.user_id, entry_id):
         raise HTTPException(status_code=404, detail="Portfolio entry not found")
     log.info("portfolio.entry_deleted", id=entry_id)
 
@@ -143,9 +141,9 @@ async def resolve_portfolio_entry(
     entry_id: Annotated[str, Path()],
     body: ResolveEntryRequest,
     store: Annotated[PortfolioStore, Depends(get_portfolio_store)],
+    current_user: Annotated[UserRecord, Depends(get_current_user)],
 ) -> PortfolioEntry:
-    """Resolve a position with its actual price. Computes outcome vs AI prediction."""
-    entry = await store.get(entry_id)
+    entry = await store.get(current_user.user_id, entry_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Portfolio entry not found")
     if entry.status in (PortfolioStatus.win, PortfolioStatus.loss):
@@ -154,18 +152,15 @@ async def resolve_portfolio_entry(
     actual_change_pct = round(
         (body.actual_price - entry.entry_price) / entry.entry_price * 100, 2
     )
-
     direction_correct: Optional[bool] = None
     if entry.ai_predicted_change_pct is not None:
         direction_correct = (entry.ai_predicted_change_pct >= 0) == (actual_change_pct >= 0)
 
-    if direction_correct is True:
-        status = PortfolioStatus.win
-    elif direction_correct is False:
-        status = PortfolioStatus.loss
-    else:
-        status = PortfolioStatus.expired  # no prediction to compare — mark expired
-
+    status = (
+        PortfolioStatus.win if direction_correct is True
+        else PortfolioStatus.loss if direction_correct is False
+        else PortfolioStatus.expired
+    )
     updated = entry.model_copy(update={
         "actual_price": body.actual_price,
         "actual_change_pct": actual_change_pct,
@@ -173,14 +168,6 @@ async def resolve_portfolio_entry(
         "status": status,
         "resolved_at": datetime.now(timezone.utc).isoformat(),
     })
-    await store.save(updated)
-    log.info(
-        "portfolio.entry_resolved",
-        id=entry_id,
-        ticker=entry.ticker,
-        predicted_pct=entry.ai_predicted_change_pct,
-        actual_pct=actual_change_pct,
-        correct=direction_correct,
-        status=status.value,
-    )
+    await store.save(updated, current_user.user_id)
+    log.info("portfolio.entry_resolved", id=entry_id, ticker=entry.ticker, status=status.value)
     return updated

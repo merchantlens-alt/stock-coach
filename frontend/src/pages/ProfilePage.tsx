@@ -53,7 +53,9 @@ function OptionButton<T extends string | number>({
   );
 }
 
-function StepHorizon({ years, onChange }: { years: number; onChange: (y: number) => void }) {
+function StepHorizon({
+  years, age, onChange,
+}: { years: number; age: number; onChange: (y: number, a: number) => void }) {
   const options: { value: number; label: string; sub: string }[] = [
     { value: 1,  label: "Less than 2 years",  sub: "Short-term — preserve capital" },
     { value: 3,  label: "2–5 years",           sub: "Medium-term — balanced approach" },
@@ -61,16 +63,36 @@ function StepHorizon({ years, onChange }: { years: number; onChange: (y: number)
     { value: 20, label: "15+ years",            sub: "Very long — maximum compounding" },
   ];
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <div>
-        <h2 className="text-base font-bold text-gray-900">When do you need this money?</h2>
+        <h2 className="text-base font-bold text-gray-900">Your timeline & age</h2>
         <p className="text-[11px] text-gray-500 mt-1">
-          A stellar stock at the wrong time is a disaster. Your timeline is the first filter.
+          Your horizon and age together determine how much risk is appropriate for you.
         </p>
       </div>
+
+      {/* Age input */}
+      <div className="space-y-1.5">
+        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Your age</p>
+        <div className="flex items-center gap-2 border border-gray-200 rounded-xl px-4 py-2.5 focus-within:border-indigo-400 bg-white">
+          <input
+            type="number"
+            min={18}
+            max={90}
+            value={age || ""}
+            onChange={e => onChange(years, Number(e.target.value))}
+            placeholder="e.g. 32"
+            className="flex-1 text-sm font-semibold text-gray-900 focus:outline-none"
+          />
+          <span className="text-xs text-gray-400 shrink-0">years old</span>
+        </div>
+      </div>
+
       <div className="space-y-2">
+        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">When do you need this money?</p>
         {options.map(o => (
-          <OptionButton key={o.value} value={o.value} selected={years} label={o.label} sub={o.sub} onClick={onChange} />
+          <OptionButton key={o.value} value={o.value} selected={years} label={o.label} sub={o.sub}
+            onClick={v => onChange(v, age)} />
         ))}
       </div>
     </div>
@@ -214,15 +236,39 @@ function StepAllocation({
 }
 
 function StepGoals({
-  goal, tax, onChange,
-}: { goal: InvestmentGoal; tax: TaxResidency; onChange: (g: InvestmentGoal, t: TaxResidency) => void }) {
+  goal, tax, monthlyAmount, onChange,
+}: {
+  goal: InvestmentGoal;
+  tax: TaxResidency;
+  monthlyAmount: number;
+  onChange: (g: InvestmentGoal, t: TaxResidency, m: number) => void;
+}) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-base font-bold text-gray-900">Goals & tax context</h2>
+        <h2 className="text-base font-bold text-gray-900">Goals, tax & monthly SIP</h2>
         <p className="text-[11px] text-gray-500 mt-1">
-          Your goal and tax residency determine whether a mutual fund or direct stock is more efficient for you.
+          These three together power your personalised allocation plan.
         </p>
+      </div>
+
+      {/* Monthly invest amount */}
+      <div className="space-y-1.5">
+        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Monthly investable amount</p>
+        <div className="flex items-center gap-2 border border-gray-200 rounded-xl px-4 py-2.5 focus-within:border-indigo-400 bg-white">
+          <span className="text-sm font-semibold text-gray-400">₹</span>
+          <input
+            type="number"
+            min={500}
+            step={500}
+            value={monthlyAmount || ""}
+            onChange={e => onChange(goal, tax, Number(e.target.value))}
+            placeholder="e.g. 25000"
+            className="flex-1 text-sm font-semibold text-gray-900 focus:outline-none"
+          />
+          <span className="text-xs text-gray-400 shrink-0">/ month</span>
+        </div>
+        <p className="text-[10px] text-gray-400">This is the amount you can consistently invest every month</p>
       </div>
 
       <div className="space-y-2">
@@ -234,7 +280,7 @@ function StepGoals({
           ["balanced",             "Balanced",            "Mix of growth and stability"],
         ] as [InvestmentGoal, string, string][]).map(([v, l, s]) => (
           <OptionButton key={v} value={v} selected={goal} label={l} sub={s}
-            onClick={(val) => onChange(val, tax)} />
+            onClick={(val) => onChange(val, tax, monthlyAmount)} />
         ))}
       </div>
 
@@ -246,7 +292,7 @@ function StepGoals({
           ["other", "Other",  "Other jurisdiction — advisor will flag tax considerations"],
         ] as [TaxResidency, string, string][]).map(([v, l, s]) => (
           <OptionButton key={v} value={v} selected={tax} label={l} sub={s}
-            onClick={(val) => onChange(goal, val)} />
+            onClick={(val) => onChange(goal, val, monthlyAmount)} />
         ))}
       </div>
     </div>
@@ -285,12 +331,19 @@ function ProfileSummaryView({
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         <div className="border border-gray-100 rounded-xl overflow-hidden">
+          {profile.age && <ProfileRow label="Age" value={`${profile.age} years`} />}
           <ProfileRow label="Investment horizon" value={horizonText[profile.horizon_label]} />
           <ProfileRow label="Risk tolerance" value={profile.risk_tolerance} />
           <ProfileRow label="Risk capacity" value={profile.risk_capacity} />
           <ProfileRow label="Emergency fund" value={`${profile.emergency_fund_months} months`} />
           <ProfileRow label="Primary goal" value={profile.primary_goal.replace(/_/g, " ")} />
           <ProfileRow label="Tax residency" value={profile.tax_residency} />
+          {profile.monthly_invest_amount && (
+            <ProfileRow
+              label="Monthly SIP"
+              value={`₹${profile.monthly_invest_amount.toLocaleString("en-IN")}`}
+            />
+          )}
         </div>
 
         {profile.existing_allocation.length > 0 && (
@@ -346,6 +399,7 @@ export function ProfilePage({ onClose, onProfileSaved }: ProfilePageProps) {
 
   // Form state — defaults filled from existing if already in cache
   const [horizonYears, setHorizonYears]       = useState(existing?.horizon_years ?? 10);
+  const [age, setAge]                         = useState(existing?.age ?? 0);
   const [tolerance, setTolerance]             = useState<RiskTolerance>(existing?.risk_tolerance ?? "moderate");
   const [capacity, setCapacity]               = useState<RiskCapacity>(existing?.risk_capacity ?? "high");
   const [emergencyMonths, setEmergencyMonths] = useState(existing?.emergency_fund_months ?? 6);
@@ -354,8 +408,9 @@ export function ProfilePage({ onClose, onProfileSaved }: ProfilePageProps) {
       ? existing.existing_allocation
       : [{ asset_class: "India Equity", percentage: 100 }]
   );
-  const [goal, setGoal] = useState<InvestmentGoal>(existing?.primary_goal ?? "capital_appreciation");
-  const [tax, setTax]   = useState<TaxResidency>(existing?.tax_residency ?? "india");
+  const [goal, setGoal]               = useState<InvestmentGoal>(existing?.primary_goal ?? "capital_appreciation");
+  const [tax, setTax]                 = useState<TaxResidency>(existing?.tax_residency ?? "india");
+  const [monthlyAmount, setMonthlyAmount] = useState(existing?.monthly_invest_amount ?? 0);
 
   // Sync form when existing profile arrives from cache (handles async load timing)
   const syncedRef = useRef(false);
@@ -363,6 +418,7 @@ export function ProfilePage({ onClose, onProfileSaved }: ProfilePageProps) {
     if (!existing || syncedRef.current) return;
     syncedRef.current = true;
     setHorizonYears(existing.horizon_years);
+    setAge(existing.age ?? 0);
     setTolerance(existing.risk_tolerance);
     setCapacity(existing.risk_capacity);
     setEmergencyMonths(existing.emergency_fund_months);
@@ -371,6 +427,7 @@ export function ProfilePage({ onClose, onProfileSaved }: ProfilePageProps) {
     }
     setGoal(existing.primary_goal);
     setTax(existing.tax_residency);
+    setMonthlyAmount(existing.monthly_invest_amount ?? 0);
     setEditMode(false); // show summary view
   }, [existing]);
 
@@ -388,6 +445,8 @@ export function ProfilePage({ onClose, onProfileSaved }: ProfilePageProps) {
       primary_goal: goal,
       tax_residency: tax,
       existing_allocation: allocation.filter(a => a.percentage > 0),
+      age: age || undefined,
+      monthly_invest_amount: monthlyAmount || undefined,
       updated_at: new Date().toISOString(),
     };
     try {
@@ -449,7 +508,13 @@ export function ProfilePage({ onClose, onProfileSaved }: ProfilePageProps) {
 
       {/* Step content */}
       <div className="flex-1 overflow-y-auto p-4">
-        {step === 1 && <StepHorizon years={horizonYears} onChange={setHorizonYears} />}
+        {step === 1 && (
+          <StepHorizon
+            years={horizonYears}
+            age={age}
+            onChange={(y, a) => { setHorizonYears(y); setAge(a); }}
+          />
+        )}
         {step === 2 && (
           <StepRisk
             tolerance={tolerance} capacity={capacity} emergencyMonths={emergencyMonths}
@@ -457,7 +522,12 @@ export function ProfilePage({ onClose, onProfileSaved }: ProfilePageProps) {
           />
         )}
         {step === 3 && <StepAllocation allocation={allocation} onChange={setAllocation} />}
-        {step === 4 && <StepGoals goal={goal} tax={tax} onChange={(g, t) => { setGoal(g); setTax(t); }} />}
+        {step === 4 && (
+          <StepGoals
+            goal={goal} tax={tax} monthlyAmount={monthlyAmount}
+            onChange={(g, t, m) => { setGoal(g); setTax(t); setMonthlyAmount(m); }}
+          />
+        )}
       </div>
 
       {/* Navigation */}

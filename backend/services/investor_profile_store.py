@@ -8,21 +8,21 @@ from core.logging import get_logger
 
 log = get_logger(__name__)
 
-_PROFILE_KEY = "investor_profile"
 _FOREVER = 60 * 60 * 24 * 365 * 10   # 10-year TTL
 
 
-class InvestorProfileStore:
-    """Single-profile store backed by CacheBackend (Redis or in-memory).
+def _profile_key(user_id: str) -> str:
+    return f"user:{user_id}:investor_profile"
 
-    Layout: one key ``investor_profile`` holds the serialised InvestorProfile.
-    """
+
+class InvestorProfileStore:
+    """User-scoped profile store backed by CacheBackend (Redis or in-memory)."""
 
     def __init__(self, cache: CacheBackend) -> None:
         self._cache = cache
 
-    async def get(self) -> Optional[InvestorProfile]:
-        data = await self._cache.get(_PROFILE_KEY)
+    async def get(self, user_id: str) -> Optional[InvestorProfile]:
+        data = await self._cache.get(_profile_key(user_id))
         if not data:
             return None
         try:
@@ -31,10 +31,10 @@ class InvestorProfileStore:
             log.warning("investor_profile_store.deserialize_failed", error=str(exc))
             return None
 
-    async def save(self, profile: InvestorProfile) -> None:
-        await self._cache.set(_PROFILE_KEY, profile.model_dump(), _FOREVER)
-        log.info("investor_profile_store.saved", horizon_years=profile.horizon_years)
+    async def save(self, profile: InvestorProfile, user_id: str) -> None:
+        await self._cache.set(_profile_key(user_id), profile.model_dump(), _FOREVER)
+        log.info("investor_profile_store.saved", horizon_years=profile.horizon_years, user_id=user_id)
 
-    async def delete(self) -> None:
-        await self._cache.delete(_PROFILE_KEY)
-        log.info("investor_profile_store.deleted")
+    async def delete(self, user_id: str) -> None:
+        await self._cache.delete(_profile_key(user_id))
+        log.info("investor_profile_store.deleted", user_id=user_id)

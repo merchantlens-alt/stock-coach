@@ -1,3 +1,11 @@
+// ── Auth ─────────────────────────────────────────────────────────────────────
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  user_id: string;
+  username: string;
+}
+
 export type Market = "us" | "india";
 export type Period = "1d" | "1w" | "1m";
 export type Sentiment = "very_positive" | "positive" | "neutral" | "negative" | "very_negative";
@@ -507,8 +515,40 @@ export interface InvestorProfile {
   primary_goal: InvestmentGoal;
   tax_residency: TaxResidency;
   existing_allocation: AllocationSlice[];
+  age?: number;
+  monthly_invest_amount?: number;
   monthly_surplus?: number;
   updated_at: string;
+}
+
+// ── Allocation Plan (cross-asset AI plan) ─────────────────────────────────────
+
+export type AllocationInstrumentType = "mutual_fund" | "etf" | "stock" | "bond" | "gold" | "reit";
+
+export interface AllocationInstrument {
+  name: string;
+  instrument_type: AllocationInstrumentType;
+  weight_pct: number;
+  why: string;
+}
+
+export interface AllocationBucket {
+  asset_class: string;
+  percentage: number;
+  monthly_amount: number;
+  rationale: string;
+  instruments: AllocationInstrument[];
+}
+
+export interface AllocationPlanResponse {
+  monthly_invest_amount: number;
+  currency: string;
+  buckets: AllocationBucket[];
+  rebalance_tip: string;
+  key_principles: string[];
+  disclaimer: string;
+  from_cache: boolean;
+  generated_at?: string;
 }
 
 export interface AdvisorRecommendation {

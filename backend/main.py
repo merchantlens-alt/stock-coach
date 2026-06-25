@@ -4,12 +4,16 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.requests import Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from jose import JWTError
 
-from api.routes import advisor, conviction, funds, gainers, growth_triggers, health, investor_profile, portfolio
+from api.routes import advisor, auth, conviction, funds, gainers, growth_triggers, health, investor_profile, portfolio
 from core.config import get_settings
 from core.logging import configure_logging, get_logger
+from core.user_auth import decode_access_token
+from models.schemas import UserRecord
 
 configure_logging()
 log = get_logger(__name__)
@@ -63,6 +67,9 @@ async def _warm_gainers_cache() -> None:
         log.warning("startup.cache_warm_failed", error=str(exc))
 
 
+_PUBLIC_PREFIXES = ("/api/auth/", "/api/health")
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
@@ -80,6 +87,29 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def auth_middleware(request: Request, call_next):
+        # Allow auth + health endpoints without a token
+        if any(request.url.path.startswith(p) for p in _PUBLIC_PREFIXES):
+            return await call_next(request)
+
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return JSONResponse(status_code=401, content={"detail": "Not authenticated."})
+
+        token = auth_header[7:]
+        try:
+            payload = decode_access_token(token, settings.jwt_secret)
+            request.state.user = UserRecord(
+                user_id=payload["sub"],
+                username=payload.get("username", ""),
+            )
+        except (JWTError, KeyError):
+            return JSONResponse(status_code=401, content={"detail": "Invalid or expired token."})
+
+        return await call_next(request)
+
+    app.include_router(auth.router, prefix="/api")
     app.include_router(health.router, prefix="/api")
     app.include_router(investor_profile.router, prefix="/api")
     app.include_router(advisor.router, prefix="/api")

@@ -71,11 +71,15 @@ def mock_analyst(mock_conviction):
 
 @pytest.fixture
 def client(mock_cache, mock_analyst):
+    from core.user_auth import create_access_token
+
     app = create_app()
     from api import deps
     app.dependency_overrides[deps.get_cache] = lambda: mock_cache
     app.dependency_overrides[deps.get_thesis_analyst] = lambda: mock_analyst
-    with TestClient(app) as c:
+    # Must match TEST_JWT_SECRET set by mock_settings fixture in conftest
+    token = create_access_token("test-user-123", "testuser", "test-secret-key-stockcoach", expire_days=1)
+    with TestClient(app, headers={"Authorization": f"Bearer {token}"}) as c:
         yield c
     app.dependency_overrides.clear()
 

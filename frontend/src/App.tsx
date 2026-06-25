@@ -1,117 +1,134 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { onUnauthenticated } from "./api/client";
+import { api } from "./api/client";
 import { Header } from "./components/Header";
+import { AllocationPlanPage } from "./pages/AllocationPlanPage";
+import { AuthPage } from "./pages/AuthPage";
 import { ConvictionPage } from "./pages/ConvictionPage";
 import { Dashboard } from "./pages/Dashboard";
 import { FundsPage } from "./pages/FundsPage";
 import { GlossaryPage } from "./pages/GlossaryPage";
-import { MegatrendsPage } from "./pages/MegatrendsPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { ProfilePage } from "./pages/ProfilePage";
+import { useAuth } from "./hooks/useAuth";
 import type { Market } from "./types";
 
-// Top-level mode: Funds is the primary home; Stocks is one switch away.
-// Each mode lazily mounts its own pages, so stock data never fetches until
-// the user actually switches into Stocks mode.
-export type AppMode   = "funds" | "stocks";
-export type FundsTab  = "build" | "scanner" | "compare" | "analyse";
-export type StocksTab = "gainers" | "megatrends" | "conviction" | "portfolio";
+// Single flat tab — no Funds/Stocks mode split.
+export type AppTab = "plan" | "stocks" | "funds" | "thesis" | "tracker";
 
 const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      refetchOnWindowFocus: false,
-    },
-  },
+  defaultOptions: { queries: { refetchOnWindowFocus: false } },
 });
 
-export default function App() {
-  const [mode, setMode]           = useState<AppMode>("funds");   // ← Funds is home
-  const [fundsTab, setFundsTab]   = useState<FundsTab>("build");
-  const [stocksTab, setStocksTab] = useState<StocksTab>("gainers");
+// Inner app — needs to be inside QueryClientProvider so it can call hooks
+function AppInner({ username, onLogout }: { username: string; onLogout: () => void }) {
+  const [tab, setTab]                 = useState<AppTab>("plan");
   const [guideOpen, setGuideOpen]     = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
 
-  // ── Cross-tab navigation state (stocks side) ────────────────────────────────
-
-  // Jump to a specific stock from another tab (e.g. Conviction "Analyse")
-  const [jumpTo, setJumpTo] = useState<{ market: Market; ticker: string } | null>(null);
-
-  // Analysis → Conviction: "Build Thesis" pre-fills the belief input
+  // Cross-tab navigation
+  const [jumpTo, setJumpTo]               = useState<{ market: Market; ticker: string } | null>(null);
   const [convictionBelief, setConvictionBelief] = useState("");
 
-  // Any cross-tab jump lands in Stocks mode on the right sub-tab, closing overlays.
-  function toStocks(tab: StocksTab) {
+  // Auto-open profile wizard if no profile is set (first-time user)
+  const { data: profile, isError: profileMissing } = useQuery({
+    queryKey: ["investor-profile"],
+    queryFn: () => api.getInvestorProfile(),
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    if (profile || profileMissing) {
+      if (!profile) {
+        autoOpenedRef.current = true;
+        setProfileOpen(true);
+      }
+    }
+  }, [profile, profileMissing]);
+
+  function closeOverlays() {
     setGuideOpen(false);
     setProfileOpen(false);
-    setMode("stocks");
-    setStocksTab(tab);
+  }
+
+  function handleTabChange(next: AppTab) {
+    closeOverlays();
+    setTab(next);
   }
 
   function handleBuildThesis(belief: string) {
     setConvictionBelief(belief);
-    toStocks("conviction");
-  }
-
-  // ── Header callbacks ────────────────────────────────────────────────────────
-
-  const activeSubTab = mode === "funds" ? fundsTab : stocksTab;
-
-  function handleModeChange(next: AppMode) {
-    setGuideOpen(false);
-    setProfileOpen(false);
-    setMode(next);
-  }
-
-  function handleSubTabChange(key: string) {
-    setGuideOpen(false);
-    setProfileOpen(false);
-    if (mode === "funds") setFundsTab(key as FundsTab);
-    else setStocksTab(key as StocksTab);
+    closeOverlays();
+    setTab("thesis");
   }
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <div className="flex flex-col h-screen bg-gray-50">
-        <Header
-          mode={mode}
-          onModeChange={handleModeChange}
-          activeSubTab={activeSubTab}
-          onSubTabChange={handleSubTabChange}
-          guideOpen={guideOpen}
-          onToggleGuide={() => { setProfileOpen(false); setGuideOpen(o => !o); }}
-          profileOpen={profileOpen}
-          onToggleProfile={() => { setGuideOpen(false); setProfileOpen(o => !o); }}
-        />
+    <div className="flex flex-col h-screen bg-gray-50">
+      <Header
+        activeTab={tab}
+        onTabChange={handleTabChange}
+        guideOpen={guideOpen}
+        onToggleGuide={() => { setProfileOpen(false); setGuideOpen(o => !o); }}
+        profileOpen={profileOpen}
+        onToggleProfile={() => { setGuideOpen(false); setProfileOpen(o => !o); }}
+        username={username}
+        onLogout={onLogout}
+      />
 
-        {/* Profile and Guide overlay mode pages while open */}
-        {profileOpen ? (
-          <ProfilePage
-            onClose={() => setProfileOpen(false)}
-            onProfileSaved={() => { setMode("stocks"); setStocksTab("gainers"); }}
-          />
-        ) : guideOpen ? (
-          <GlossaryPage />
-        ) : mode === "funds" ? (
-          <FundsPage tab={fundsTab} />
-        ) : (
-          <>
-            {stocksTab === "gainers" && (
-              <Dashboard
-                jumpTo={jumpTo}
-                onJumpConsumed={() => setJumpTo(null)}
-                onBuildThesis={handleBuildThesis}
-                onSetupProfile={() => setProfileOpen(true)}
-              />
-            )}
-            {stocksTab === "megatrends" && <MegatrendsPage />}
-            {stocksTab === "conviction" && (
-              <ConvictionPage initialBelief={convictionBelief} onBeliefConsumed={() => setConvictionBelief("")} />
-            )}
-            {stocksTab === "portfolio"  && <PortfolioPage />}
-          </>
-        )}
-      </div>
+      {/* Overlays */}
+      {profileOpen ? (
+        <ProfilePage
+          onClose={() => setProfileOpen(false)}
+          onProfileSaved={() => { setProfileOpen(false); setTab("plan"); }}
+        />
+      ) : guideOpen ? (
+        <GlossaryPage />
+      ) : tab === "plan" ? (
+        <AllocationPlanPage onSetupProfile={() => setProfileOpen(true)} />
+      ) : tab === "stocks" ? (
+        <Dashboard
+          jumpTo={jumpTo}
+          onJumpConsumed={() => setJumpTo(null)}
+          onBuildThesis={handleBuildThesis}
+          onSetupProfile={() => setProfileOpen(true)}
+        />
+      ) : tab === "funds" ? (
+        <FundsPage />
+      ) : tab === "thesis" ? (
+        <ConvictionPage
+          initialBelief={convictionBelief}
+          onBeliefConsumed={() => setConvictionBelief("")}
+        />
+      ) : (
+        <PortfolioPage />
+      )}
+    </div>
+  );
+}
+
+function AuthGate() {
+  const { isAuthenticated, username, login, register, logout } = useAuth();
+
+  // Force re-render when a 401 clears the token mid-session
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    onUnauthenticated(() => setTick((n) => n + 1));
+  }, []);
+
+  if (!isAuthenticated) {
+    return <AuthPage onLogin={login} onRegister={register} />;
+  }
+
+  return <AppInner username={username ?? ""} onLogout={logout} />;
+}
+
+export default function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AuthGate />
     </QueryClientProvider>
   );
 }

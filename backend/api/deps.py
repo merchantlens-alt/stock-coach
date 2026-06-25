@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, Request
 
 from agents.advisor_agent import AdvisorAgent
+from agents.allocation_advisor_agent import AllocationAdvisorAgent
 from agents.fund_analyst import FundAnalystAgent
 from agents.portfolio_xray_agent import PortfolioXrayAgent
 from agents.gainer_analyst import GainerAnalystAgent
@@ -12,6 +13,7 @@ from agents.growth_triggers_agent import GrowthTriggersAgent
 from agents.market_analyst import MarketAnalystAgent
 from agents.thesis_analyst import ThesisAnalystAgent
 from core.config import Settings, get_settings
+from models.schemas import UserRecord
 from services.cache import CacheBackend, build_cache
 from services.fund_data import FundDataService
 from services.us_etf_data import USETFDataService
@@ -21,6 +23,7 @@ from services.market_data import MarketDataService
 from services.news_fetcher import NewsFetcher
 from services.portfolio_store import PortfolioStore
 from services.quarterly_fetcher import QuarterlyFetcher
+from services.user_store import UserStore
 
 # Module-level singletons — lru_cache cannot be used here because
 # Pydantic v2 BaseSettings instances are not hashable.
@@ -41,6 +44,8 @@ _xray_agent: PortfolioXrayAgent | None = None
 _fund_enrichment: "FundEnrichmentProvider | None" = None
 _investor_profile_store: InvestorProfileStore | None = None
 _advisor_agent: AdvisorAgent | None = None
+_allocation_advisor: AllocationAdvisorAgent | None = None
+_user_store: UserStore | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -180,6 +185,32 @@ def get_advisor_agent(
     if _advisor_agent is None:
         _advisor_agent = AdvisorAgent(settings)
     return _advisor_agent
+
+
+def get_allocation_advisor(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AllocationAdvisorAgent:
+    global _allocation_advisor
+    if _allocation_advisor is None:
+        _allocation_advisor = AllocationAdvisorAgent(settings)
+    return _allocation_advisor
+
+
+def get_user_store(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> UserStore:
+    global _user_store
+    if _user_store is None:
+        _user_store = UserStore(get_cache(settings))
+    return _user_store
+
+
+def get_current_user(request: Request) -> UserRecord:
+    """Extract the authenticated user from request.state (populated by auth middleware)."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    return user
 
 
 def get_fundamental_enricher() -> FundamentalEnricher:

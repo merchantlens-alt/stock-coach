@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     api_port: int = 8080
     cors_origins: str = "http://localhost:5173,http://localhost:8080"
 
+    # Auth
+    jwt_secret: str = "dev-secret-change-in-production-stockcoach-2024"
+    jwt_expire_days: int = 30
+
     # Feature flags
     mock_ai: bool = False
     top_gainers_count: int = 20

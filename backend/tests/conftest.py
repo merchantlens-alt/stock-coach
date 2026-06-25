@@ -17,6 +17,11 @@ from models.schemas import (
 
 # ── Settings override ──────────────────────────────────────────────────────────
 
+TEST_USER_ID = "test-user-123"
+TEST_USERNAME = "testuser"
+TEST_JWT_SECRET = "test-secret-key-stockcoach"
+
+
 @pytest.fixture(autouse=True)
 def mock_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure tests never touch GCP or real APIs."""
@@ -24,6 +29,7 @@ def mock_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOCK_AI", "true")
     monkeypatch.setenv("REDIS_URL", "")
     monkeypatch.setenv("NEWS_API_KEY", "")
+    monkeypatch.setenv("JWT_SECRET", TEST_JWT_SECRET)
 
 
 @pytest.fixture(autouse=True)
@@ -52,6 +58,8 @@ def reset_singletons() -> None:
     deps._fund_enrichment = None
     deps._investor_profile_store = None
     deps._advisor_agent = None
+    deps._allocation_advisor = None
+    deps._user_store = None
     get_settings.cache_clear()
 
 
@@ -173,7 +181,8 @@ def sample_prediction(sample_us_gainer: StockGainer) -> StockPrediction:
 
 @pytest.fixture
 def client() -> TestClient:
-    # Import after env vars are patched
     from main import create_app
+    from core.user_auth import create_access_token
 
-    return TestClient(create_app())
+    token = create_access_token(TEST_USER_ID, TEST_USERNAME, TEST_JWT_SECRET, expire_days=1)
+    return TestClient(create_app(), headers={"Authorization": f"Bearer {token}"})

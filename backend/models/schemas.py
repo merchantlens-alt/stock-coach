@@ -819,8 +819,41 @@ class InvestorProfile(BaseModel):
     primary_goal: InvestmentGoal
     tax_residency: TaxResidency
     existing_allocation: list[AllocationSlice] = Field(default_factory=list)
-    monthly_surplus: Optional[float] = None                   # INR / USD
+    age: Optional[int] = None                                 # investor's age in years
+    monthly_invest_amount: Optional[float] = None             # monthly SIP amount in INR / USD
+    monthly_surplus: Optional[float] = None                   # legacy alias — kept for compat
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Allocation Plan (cross-asset AI plan based on full profile) ────────────────
+
+AllocationInstrumentType = Literal["mutual_fund", "etf", "stock", "bond", "gold", "reit"]
+
+
+class AllocationInstrument(BaseModel):
+    name: str
+    instrument_type: AllocationInstrumentType
+    weight_pct: float   # % weight within this bucket (bucket instruments sum to 100)
+    why: str            # one-line rationale for this instrument's role
+
+
+class AllocationBucket(BaseModel):
+    asset_class: str    # "India Equity", "US Equity", "Debt", "Gold", "Real Estate"
+    percentage: float   # % of total monthly portfolio (all buckets sum to 100)
+    monthly_amount: float                   # derived: percentage * monthly_invest_amount / 100
+    rationale: str                          # why this allocation for THIS profile
+    instruments: list[AllocationInstrument] # 2-3 specific recommendations
+
+
+class AllocationPlanResponse(BaseModel):
+    monthly_invest_amount: float
+    currency: str   # "INR" or "USD"
+    buckets: list[AllocationBucket]
+    rebalance_tip: str
+    key_principles: list[str]
+    disclaimer: str
+    from_cache: bool = False
+    generated_at: Optional[datetime] = None
 
 
 # ── Advisor Recommendation (Bucket 1 ∩ Bucket 2 → verdict) ────────────────────
@@ -856,6 +889,31 @@ class AdvisorEvaluateRequest(BaseModel):
     name: Optional[str] = None
     # Key metrics the frontend already has loaded — avoids a round-trip backend fetch
     context: dict = Field(default_factory=dict)
+
+
+# ── Auth schemas ───────────────────────────────────────────────────────────────
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    password: str = Field(min_length=6)
+
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_id: str
+    username: str
+
+
+class UserRecord(BaseModel):
+    """Decoded from JWT — carried through request lifecycle."""
+    user_id: str
+    username: str
 
 
 class AdvisorEvaluateResponse(BaseModel):

@@ -15,11 +15,11 @@ import { api } from "../api/client";
 import { CompareView } from "../components/CompareView";
 import { FundCard } from "../components/FundCard";
 import { MarketToggleFunds } from "../components/MarketToggleFunds";
-import { ModelPortfolioView } from "../components/ModelPortfolioView";
 import { PortfolioXrayView } from "../components/PortfolioXrayView";
 import { useFundScan } from "../hooks/useFunds";
-import type { FundsTab } from "../App";
 import type { Market } from "../types";
+
+type FundsSubTab = "scanner" | "compare" | "analyse";
 
 // ── Scanner ─────────────────────────────────────────────────────────────────
 
@@ -161,13 +161,45 @@ function FundScanner({ market, onMarketChange }: { market: Market; onMarketChang
   );
 }
 
+// ── Sub-tab bar ───────────────────────────────────────────────────────────────
+
+const SUB_TABS: { key: FundsSubTab; label: string }[] = [
+  { key: "scanner", label: "SCANNER" },
+  { key: "compare", label: "COMPARE" },
+  { key: "analyse", label: "X-RAY"   },
+];
+
 // ── Page shell ────────────────────────────────────────────────────────────────
 
-export function FundsPage({ tab }: { tab: FundsTab }) {
-  // Market (India MF / US ETF) is shared across the Funds sub-tabs.
+export function FundsPage() {
+  const [subTab, setSubTab] = useState<FundsSubTab>("scanner");
+  // Market (India MF / US ETF) is shared across sub-tabs.
   const [market, setMarket] = useState<Market>("india");
-  if (tab === "build") return <ModelPortfolioView market={market} onMarketChange={setMarket} />;
-  if (tab === "scanner") return <FundScanner market={market} onMarketChange={setMarket} />;
-  if (tab === "compare") return <CompareView market={market} onMarketChange={setMarket} />;
-  return <PortfolioXrayView />;
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Sub-tab bar */}
+      <div className="px-4 md:px-6 py-2 flex items-center gap-0.5 bg-white border-b border-gray-100 shrink-0">
+        {SUB_TABS.map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => setSubTab(key)}
+            className={[
+              "flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap",
+              subTab === key
+                ? "bg-gray-900 text-white shadow-sm"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100",
+            ].join(" ")}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      {subTab === "scanner" && <FundScanner market={market} onMarketChange={setMarket} />}
+      {subTab === "compare" && <CompareView market={market} onMarketChange={setMarket} />}
+      {subTab === "analyse" && <PortfolioXrayView />}
+    </div>
+  );
 }

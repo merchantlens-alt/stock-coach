@@ -499,6 +499,7 @@ class TestGainerAnalyse:
         tests short-circuits _call_gemini before it can be patched.
         """
         from core.exceptions import AIAgentError
+        from core.user_auth import create_access_token
         from main import create_app
         from api.deps import get_gainer_analyst
 
@@ -507,7 +508,8 @@ class TestGainerAnalyse:
 
         app = create_app()
         app.dependency_overrides[get_gainer_analyst] = lambda: failing_analyst
-        test_client = TestClient(app)
+        token = create_access_token("test-user-123", "testuser", "test-secret-key-stockcoach", expire_days=1)
+        test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
 
         with (
             patch("api.routes.gainers._resolve_gainer",
@@ -536,6 +538,7 @@ class TestGainerAnalyse:
     ) -> None:
         """Mock fallback responses must NOT be cached so the next request retries live Gemini."""
         from core.exceptions import AIAgentError
+        from core.user_auth import create_access_token
         from main import create_app
         from api.deps import get_gainer_analyst
 
@@ -544,7 +547,8 @@ class TestGainerAnalyse:
 
         app = create_app()
         app.dependency_overrides[get_gainer_analyst] = lambda: failing_analyst
-        test_client = TestClient(app)
+        token = create_access_token("test-user-123", "testuser", "test-secret-key-stockcoach", expire_days=1)
+        test_client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
 
         with (
             patch("api.routes.gainers._resolve_gainer",
