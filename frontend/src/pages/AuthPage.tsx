@@ -30,6 +30,10 @@ export function AuthPage({ onLogin, onRegister }: Props) {
       if (mode === "login") {
         await onLogin(username.trim(), password);
       } else {
+        if (username.trim().length < 3) {
+          setError("Username must be at least 3 characters.");
+          return;
+        }
         if (password.length < 6) {
           setError("Password must be at least 6 characters.");
           return;

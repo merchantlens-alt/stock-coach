@@ -27,9 +27,22 @@ async function callAuth(endpoint: string, username: string, password: string): P
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error((data as { detail?: string }).detail ?? `${endpoint} failed`);
-  return data as TokenResponse;
+  const data = await resp.json().catch(() => ({})) as Record<string, unknown>;
+  if (!resp.ok) {
+    // FastAPI returns detail as a string for HTTPException, array for validation errors (422)
+    const detail = data["detail"];
+    let msg: string;
+    if (typeof detail === "string") {
+      msg = detail;
+    } else if (Array.isArray(detail) && detail.length > 0) {
+      const first = detail[0] as Record<string, unknown>;
+      msg = String(first["msg"] ?? `${endpoint} failed`);
+    } else {
+      msg = `${endpoint} failed`;
+    }
+    throw new Error(msg);
+  }
+  return data as unknown as TokenResponse;
 }
 
 function persistToken(data: TokenResponse) {
