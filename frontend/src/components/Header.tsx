@@ -74,7 +74,7 @@ export function Header({
             active={mode === "stocks" && !guideOpen}
             icon={<TrendingUp size={13} />}
             label="Stocks"
-            sub="Movers & ideas"
+            sub="Search & analyse"
             onClick={() => onModeChange("stocks")}
           />
         </div>

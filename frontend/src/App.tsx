@@ -86,7 +86,10 @@ export default function App() {
 
         {/* Profile and Guide overlay mode pages while open */}
         {profileOpen ? (
-          <ProfilePage onClose={() => setProfileOpen(false)} />
+          <ProfilePage
+            onClose={() => setProfileOpen(false)}
+            onProfileSaved={() => { setMode("stocks"); setStocksTab("gainers"); }}
+          />
         ) : guideOpen ? (
           <GlossaryPage />
         ) : mode === "funds" ? (

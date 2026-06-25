@@ -1,5 +1,5 @@
-import { ArrowLeft, ArrowRight, Check, Loader2, Plus, Trash2, UserCircle } from "lucide-react";
-import { useState } from "react";
+import { ArrowLeft, ArrowRight, Check, Edit2, Loader2, Plus, Trash2, UserCircle } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useSaveProfile, useInvestorProfile } from "../hooks/useAdvisor";
 import type {
   AllocationSlice,
@@ -53,7 +53,6 @@ function OptionButton<T extends string | number>({
   );
 }
 
-// Step 1 — Horizon
 function StepHorizon({ years, onChange }: { years: number; onChange: (y: number) => void }) {
   const options: { value: number; label: string; sub: string }[] = [
     { value: 1,  label: "Less than 2 years",  sub: "Short-term — preserve capital" },
@@ -78,7 +77,6 @@ function StepHorizon({ years, onChange }: { years: number; onChange: (y: number)
   );
 }
 
-// Step 2 — Risk
 function StepRisk({
   tolerance, capacity, emergencyMonths, onChange,
 }: {
@@ -144,7 +142,6 @@ function StepRisk({
   );
 }
 
-// Step 3 — Allocation
 function StepAllocation({
   allocation, onChange,
 }: { allocation: AllocationSlice[]; onChange: (a: AllocationSlice[]) => void }) {
@@ -216,7 +213,6 @@ function StepAllocation({
   );
 }
 
-// Step 4 — Goals
 function StepGoals({
   goal, tax, onChange,
 }: { goal: InvestmentGoal; tax: TaxResidency; onChange: (g: InvestmentGoal, t: TaxResidency) => void }) {
@@ -257,30 +253,126 @@ function StepGoals({
   );
 }
 
+// ── Profile summary view (shown when profile already exists) ──────────────────
+
+function ProfileRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-50 last:border-0">
+      <span className="text-xs text-gray-500">{label}</span>
+      <span className="text-xs font-semibold text-gray-800 capitalize">{value}</span>
+    </div>
+  );
+}
+
+function ProfileSummaryView({
+  profile, onEdit, onClose,
+}: { profile: InvestorProfile; onEdit: () => void; onClose: () => void }) {
+  const horizonText: Record<InvestorHorizon, string> = {
+    short: "< 2 years", medium: "2–5 years", long: "5–15 years", very_long: "15+ years",
+  };
+
+  return (
+    <div className="flex flex-col flex-1 overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2">
+          <UserCircle size={16} className="text-indigo-600" />
+          <span className="text-sm font-bold text-gray-800">Investor Profile</span>
+        </div>
+        <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">
+          Saved ✓
+        </span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="border border-gray-100 rounded-xl overflow-hidden">
+          <ProfileRow label="Investment horizon" value={horizonText[profile.horizon_label]} />
+          <ProfileRow label="Risk tolerance" value={profile.risk_tolerance} />
+          <ProfileRow label="Risk capacity" value={profile.risk_capacity} />
+          <ProfileRow label="Emergency fund" value={`${profile.emergency_fund_months} months`} />
+          <ProfileRow label="Primary goal" value={profile.primary_goal.replace(/_/g, " ")} />
+          <ProfileRow label="Tax residency" value={profile.tax_residency} />
+        </div>
+
+        {profile.existing_allocation.length > 0 && (
+          <div className="border border-gray-100 rounded-xl overflow-hidden">
+            <div className="px-4 py-2 bg-gray-50 border-b border-gray-100">
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Portfolio Allocation</p>
+            </div>
+            {profile.existing_allocation.map(s => (
+              <div key={s.asset_class} className="flex items-center justify-between px-4 py-2.5 border-b border-gray-50 last:border-0">
+                <span className="text-xs text-gray-600">{s.asset_class}</span>
+                <span className="text-xs font-semibold text-gray-800">{s.percentage}%</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <p className="text-[10px] text-gray-400 text-center pt-1">
+          Every stock and fund analysis includes a Buy / Pass verdict based on this profile.
+        </p>
+      </div>
+
+      <div className="px-4 py-3 border-t border-gray-100 flex items-center gap-2 shrink-0">
+        <button type="button" onClick={onClose}
+          className="text-xs font-semibold text-gray-500 hover:text-gray-700 px-3 py-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition-all">
+          Close
+        </button>
+        <div className="flex-1" />
+        <button type="button" onClick={onEdit}
+          className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl px-4 py-2.5 text-sm transition-colors">
+          <Edit2 size={13} />
+          Edit Profile
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main ProfilePage ──────────────────────────────────────────────────────────
 
 const TOTAL_STEPS = 4;
 
 interface ProfilePageProps {
   onClose: () => void;
+  onProfileSaved?: () => void;
 }
 
-export function ProfilePage({ onClose }: ProfilePageProps) {
+export function ProfilePage({ onClose, onProfileSaved }: ProfilePageProps) {
   const { data: existing } = useInvestorProfile();
   const save = useSaveProfile();
   const [step, setStep] = useState(1);
   const [saved, setSaved] = useState(false);
+  const [editMode, setEditMode] = useState(!existing);
 
-  // Form state — pre-fill from existing profile if set
+  // Form state — defaults filled from existing if already in cache
   const [horizonYears, setHorizonYears]       = useState(existing?.horizon_years ?? 10);
   const [tolerance, setTolerance]             = useState<RiskTolerance>(existing?.risk_tolerance ?? "moderate");
   const [capacity, setCapacity]               = useState<RiskCapacity>(existing?.risk_capacity ?? "high");
   const [emergencyMonths, setEmergencyMonths] = useState(existing?.emergency_fund_months ?? 6);
   const [allocation, setAllocation]           = useState<AllocationSlice[]>(
-    existing?.existing_allocation ?? [{ asset_class: "India Equity", percentage: 100 }]
+    existing?.existing_allocation?.length
+      ? existing.existing_allocation
+      : [{ asset_class: "India Equity", percentage: 100 }]
   );
-  const [goal, setGoal]         = useState<InvestmentGoal>(existing?.primary_goal ?? "capital_appreciation");
-  const [tax, setTax]           = useState<TaxResidency>(existing?.tax_residency ?? "india");
+  const [goal, setGoal] = useState<InvestmentGoal>(existing?.primary_goal ?? "capital_appreciation");
+  const [tax, setTax]   = useState<TaxResidency>(existing?.tax_residency ?? "india");
+
+  // Sync form when existing profile arrives from cache (handles async load timing)
+  const syncedRef = useRef(false);
+  useEffect(() => {
+    if (!existing || syncedRef.current) return;
+    syncedRef.current = true;
+    setHorizonYears(existing.horizon_years);
+    setTolerance(existing.risk_tolerance);
+    setCapacity(existing.risk_capacity);
+    setEmergencyMonths(existing.emergency_fund_months);
+    if (existing.existing_allocation.length > 0) {
+      setAllocation(existing.existing_allocation);
+    }
+    setGoal(existing.primary_goal);
+    setTax(existing.tax_residency);
+    setEditMode(false); // show summary view
+  }, [existing]);
 
   function handleRiskChange(t: RiskTolerance, c: RiskCapacity, em: number) {
     setTolerance(t); setCapacity(c); setEmergencyMonths(em);
@@ -298,9 +390,14 @@ export function ProfilePage({ onClose }: ProfilePageProps) {
       existing_allocation: allocation.filter(a => a.percentage > 0),
       updated_at: new Date().toISOString(),
     };
-    await save.mutateAsync(profile);
-    setSaved(true);
-    setTimeout(onClose, 800);
+    try {
+      await save.mutateAsync(profile);
+      setSaved(true);
+      onProfileSaved?.();
+      setTimeout(onClose, 800);
+    } catch {
+      // save.error is set — button re-enables automatically
+    }
   }
 
   if (saved) {
@@ -315,6 +412,18 @@ export function ProfilePage({ onClose }: ProfilePageProps) {
     );
   }
 
+  // If profile exists and not in edit mode — show summary
+  if (existing && !editMode) {
+    return (
+      <ProfileSummaryView
+        profile={existing}
+        onEdit={() => { setStep(1); setEditMode(true); }}
+        onClose={onClose}
+      />
+    );
+  }
+
+  // Wizard
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
       {/* Header */}
@@ -322,6 +431,11 @@ export function ProfilePage({ onClose }: ProfilePageProps) {
         <div className="flex items-center gap-2">
           <UserCircle size={16} className="text-indigo-600" />
           <span className="text-sm font-bold text-gray-800">Investor Profile</span>
+          {existing && (
+            <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-semibold">
+              Editing
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <span className="text-[10px] text-gray-400">Step {step} of {TOTAL_STEPS}</span>
@@ -353,6 +467,12 @@ export function ProfilePage({ onClose }: ProfilePageProps) {
             className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 px-3 py-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition-all">
             <ArrowLeft size={13} />
             Back
+          </button>
+        ) : existing ? (
+          <button type="button" onClick={() => setEditMode(false)}
+            className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 px-3 py-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition-all">
+            <ArrowLeft size={13} />
+            Cancel edit
           </button>
         ) : (
           <button type="button" onClick={onClose}
