@@ -89,6 +89,9 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
+        # Only protect /api/ routes — let static files and the SPA through unconditionally
+        if not request.url.path.startswith("/api/"):
+            return await call_next(request)
         # Allow auth + health endpoints without a token
         if any(request.url.path.startswith(p) for p in _PUBLIC_PREFIXES):
             return await call_next(request)
