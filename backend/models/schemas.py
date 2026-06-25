@@ -790,3 +790,78 @@ class PortfolioXrayResponse(BaseModel):
     narrative: str = ""
     funds: list[XrayFundLine] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Investor Profile (Bucket 1 — personal context) ────────────────────────────
+
+InvestorHorizon = Literal["short", "medium", "long", "very_long"]
+# short: <2 yr, medium: 2-5 yr, long: 5-15 yr, very_long: 15+ yr
+
+RiskTolerance  = Literal["conservative", "moderate", "aggressive"]
+RiskCapacity   = Literal["low", "medium", "high"]
+InvestmentGoal = Literal["capital_appreciation", "income", "tax_efficiency", "balanced"]
+TaxResidency   = Literal["india", "us", "other"]
+
+
+class AllocationSlice(BaseModel):
+    """One slice of the investor's current portfolio."""
+    asset_class: str   # "India Equity", "US Equity", "Debt", "Gold", "Real Estate", "Cash"
+    percentage: float  # 0–100
+
+
+class InvestorProfile(BaseModel):
+    """Bucket 1: everything we need to know about the investor before analysing any asset."""
+    horizon_years: int                                         # e.g. 10
+    horizon_label: InvestorHorizon                            # derived: "long"
+    risk_tolerance: RiskTolerance                             # psychological comfort with drawdowns
+    risk_capacity: RiskCapacity                               # financial ability to absorb losses
+    emergency_fund_months: int                                # 0, 3, 6, 12
+    primary_goal: InvestmentGoal
+    tax_residency: TaxResidency
+    existing_allocation: list[AllocationSlice] = Field(default_factory=list)
+    monthly_surplus: Optional[float] = None                   # INR / USD
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Advisor Recommendation (Bucket 1 ∩ Bucket 2 → verdict) ────────────────────
+
+AdvisorVerdict         = Literal["buy", "pass", "conditional"]
+AdvisorConfidenceLevel = Literal["high", "medium", "low"]
+
+
+class AdvisorRecommendation(BaseModel):
+    verdict: AdvisorVerdict
+    confidence: AdvisorConfidenceLevel
+    investor_match_score: float = Field(ge=0.0, le=100.0)
+    horizon_fit: str        # one sentence on horizon alignment
+    risk_fit: str           # one sentence on risk alignment
+    allocation_fit: str     # one sentence on portfolio-fit / gap-fill
+    reasons_for: list[str] = Field(default_factory=list)      # 2-4 bullets
+    reasons_against: list[str] = Field(default_factory=list)  # 1-3 bullets
+    suggested_sizing: Optional[str] = None   # e.g. "5-8% of investable surplus"
+    caveats: Optional[str] = None            # conditional factors / wrapper notes
+    summary: str                             # 1-2 sentence overall verdict
+    disclaimer: str = Field(
+        default=(
+            "This is AI-generated analysis for educational purposes only. "
+            "It is not investment advice. Always consult a registered financial advisor."
+        )
+    )
+
+
+class AdvisorEvaluateRequest(BaseModel):
+    asset_type: Literal["stock", "fund"]
+    ticker: str                          # stock ticker or fund scheme_code
+    market: Market
+    name: Optional[str] = None
+    # Key metrics the frontend already has loaded — avoids a round-trip backend fetch
+    context: dict = Field(default_factory=dict)
+
+
+class AdvisorEvaluateResponse(BaseModel):
+    recommendation: AdvisorRecommendation
+    ticker: str
+    asset_type: str
+    profile_horizon_years: int
+    from_cache: bool = False
+    evaluated_at: Optional[datetime] = None

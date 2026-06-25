@@ -4,25 +4,22 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from agents.catalyst_analyst import CatalystAnalystAgent
+from agents.advisor_agent import AdvisorAgent
 from agents.fund_analyst import FundAnalystAgent
 from agents.portfolio_xray_agent import PortfolioXrayAgent
 from agents.gainer_analyst import GainerAnalystAgent
 from agents.growth_triggers_agent import GrowthTriggersAgent
 from agents.market_analyst import MarketAnalystAgent
-from agents.radar_analyst import RadarAnalystAgent
 from agents.thesis_analyst import ThesisAnalystAgent
 from core.config import Settings, get_settings
 from services.cache import CacheBackend, build_cache
-from services.catalyst_scanner import CatalystScannerService
 from services.fund_data import FundDataService
 from services.us_etf_data import USETFDataService
 from services.fundamental_enricher import FundamentalEnricher
+from services.investor_profile_store import InvestorProfileStore
 from services.market_data import MarketDataService
 from services.news_fetcher import NewsFetcher
-from services.dip_scanner import DipScannerService
 from services.portfolio_store import PortfolioStore
-from services.value_recovery_scanner import ValueRecoveryScannerService
 from services.quarterly_fetcher import QuarterlyFetcher
 
 # Module-level singletons — lru_cache cannot be used here because
@@ -33,20 +30,17 @@ _news_fetcher: NewsFetcher | None = None
 _gainer_analyst: GainerAnalystAgent | None = None
 _market_analyst: MarketAnalystAgent | None = None
 _thesis_analyst: ThesisAnalystAgent | None = None
-_radar_analyst: RadarAnalystAgent | None = None
 _quarterly_fetcher: QuarterlyFetcher | None = None
-_catalyst_analyst: CatalystAnalystAgent | None = None
-_catalyst_scanner: CatalystScannerService | None = None
 _growth_triggers_agent: GrowthTriggersAgent | None = None
 _portfolio_store: PortfolioStore | None = None
-_dip_scanner: DipScannerService | None = None
 _fundamental_enricher: FundamentalEnricher | None = None
-_value_recovery_scanner: ValueRecoveryScannerService | None = None
 _fund_analyst: FundAnalystAgent | None = None
 _fund_data: FundDataService | None = None
 _us_etf_data: USETFDataService | None = None
 _xray_agent: PortfolioXrayAgent | None = None
 _fund_enrichment: "FundEnrichmentProvider | None" = None
+_investor_profile_store: InvestorProfileStore | None = None
+_advisor_agent: AdvisorAgent | None = None
 
 
 def get_cache(settings: Annotated[Settings, Depends(get_settings)]) -> CacheBackend:
@@ -97,15 +91,6 @@ def get_thesis_analyst(
     return _thesis_analyst
 
 
-def get_radar_analyst(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> RadarAnalystAgent:
-    global _radar_analyst
-    if _radar_analyst is None:
-        _radar_analyst = RadarAnalystAgent(settings)
-    return _radar_analyst
-
-
 def get_quarterly_fetcher(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> QuarterlyFetcher:
@@ -113,29 +98,6 @@ def get_quarterly_fetcher(
     if _quarterly_fetcher is None:
         _quarterly_fetcher = QuarterlyFetcher(settings)
     return _quarterly_fetcher
-
-
-def get_catalyst_analyst(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> CatalystAnalystAgent:
-    global _catalyst_analyst
-    if _catalyst_analyst is None:
-        _catalyst_analyst = CatalystAnalystAgent(settings)
-    return _catalyst_analyst
-
-
-def get_catalyst_scanner(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> CatalystScannerService:
-    global _catalyst_scanner
-    if _catalyst_scanner is None:
-        _catalyst_scanner = CatalystScannerService(
-            settings,
-            get_market_data(settings),
-            get_news_fetcher(settings),
-            get_catalyst_analyst(settings),
-        )
-    return _catalyst_scanner
 
 
 def get_growth_triggers_agent(
@@ -147,15 +109,6 @@ def get_growth_triggers_agent(
     return _growth_triggers_agent
 
 
-def get_dip_scanner(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> DipScannerService:
-    global _dip_scanner
-    if _dip_scanner is None:
-        _dip_scanner = DipScannerService(settings)
-    return _dip_scanner
-
-
 def get_portfolio_store(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> PortfolioStore:
@@ -163,15 +116,6 @@ def get_portfolio_store(
     if _portfolio_store is None:
         _portfolio_store = PortfolioStore(get_cache(settings))
     return _portfolio_store
-
-
-def get_value_recovery_scanner(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> ValueRecoveryScannerService:
-    global _value_recovery_scanner
-    if _value_recovery_scanner is None:
-        _value_recovery_scanner = ValueRecoveryScannerService(settings)
-    return _value_recovery_scanner
 
 
 def get_fund_analyst(
@@ -218,6 +162,24 @@ def get_xray_agent(
     if _xray_agent is None:
         _xray_agent = PortfolioXrayAgent(settings)
     return _xray_agent
+
+
+def get_investor_profile_store(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> InvestorProfileStore:
+    global _investor_profile_store
+    if _investor_profile_store is None:
+        _investor_profile_store = InvestorProfileStore(get_cache(settings))
+    return _investor_profile_store
+
+
+def get_advisor_agent(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AdvisorAgent:
+    global _advisor_agent
+    if _advisor_agent is None:
+        _advisor_agent = AdvisorAgent(settings)
+    return _advisor_agent
 
 
 def get_fundamental_enricher() -> FundamentalEnricher:

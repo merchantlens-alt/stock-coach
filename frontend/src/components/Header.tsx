@@ -1,8 +1,9 @@
 import {
   ArrowLeftRight, BookOpen, Layers, Lightbulb, Microscope,
-  Radio, ScanSearch, Sparkles, Target, TrendingUp,
+  ScanSearch, Sparkles, Target, TrendingUp, UserCircle,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { useInvestorProfile } from "../hooks/useAdvisor";
 import type { AppMode } from "../App";
 
 interface HeaderProps {
@@ -12,6 +13,8 @@ interface HeaderProps {
   onSubTabChange: (key: string) => void;
   guideOpen: boolean;
   onToggleGuide: () => void;
+  profileOpen: boolean;
+  onToggleProfile: () => void;
 }
 
 interface SubTab {
@@ -28,15 +31,17 @@ const FUNDS_TABS: SubTab[] = [
 ];
 
 const STOCKS_TABS: SubTab[] = [
-  { key: "gainers",    label: "MARKET", icon: <TrendingUp size={12} /> },
-  { key: "radar",      label: "RADAR",  icon: <Radio size={12} /> },
-  { key: "conviction", label: "THESIS", icon: <Lightbulb size={12} /> },
-  { key: "portfolio",  label: "PLAYS",  icon: <Target size={12} /> },
+  { key: "gainers",    label: "ANALYSE",    icon: <TrendingUp size={12} /> },
+  { key: "megatrends", label: "MEGATRENDS", icon: <Sparkles size={12} /> },
+  { key: "conviction", label: "THESIS",     icon: <Lightbulb size={12} /> },
+  { key: "portfolio",  label: "PLAYS",      icon: <Target size={12} /> },
 ];
 
 export function Header({
-  mode, onModeChange, activeSubTab, onSubTabChange, guideOpen, onToggleGuide,
+  mode, onModeChange, activeSubTab, onSubTabChange,
+  guideOpen, onToggleGuide, profileOpen, onToggleProfile,
 }: HeaderProps) {
+  const { data: profile } = useInvestorProfile();
   const subTabs = mode === "funds" ? FUNDS_TABS : STOCKS_TABS;
 
   return (
@@ -74,20 +79,39 @@ export function Header({
           />
         </div>
 
-        {/* Guide corner icon */}
-        <button
-          onClick={onToggleGuide}
-          title="Glossary — every term explained"
-          className={[
-            "flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-all shrink-0",
-            guideOpen
-              ? "bg-indigo-600 text-white"
-              : "text-gray-500 hover:text-gray-700 hover:bg-gray-100",
-          ].join(" ")}
-        >
-          <BookOpen size={14} />
-          <span className="hidden md:inline">Guide</span>
-        </button>
+        {/* Profile + Guide icons */}
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={onToggleProfile}
+            title="Investor Profile — personalise every verdict"
+            className={[
+              "relative flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-all",
+              profileOpen
+                ? "bg-indigo-600 text-white"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100",
+            ].join(" ")}
+          >
+            <UserCircle size={14} />
+            <span className="hidden md:inline">Profile</span>
+            {/* Dot indicator when no profile set */}
+            {!profile && !profileOpen && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-amber-400 rounded-full" />
+            )}
+          </button>
+          <button
+            onClick={onToggleGuide}
+            title="Glossary — every term explained"
+            className={[
+              "flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-all",
+              guideOpen
+                ? "bg-indigo-600 text-white"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100",
+            ].join(" ")}
+          >
+            <BookOpen size={14} />
+            <span className="hidden md:inline">Guide</span>
+          </button>
+        </div>
       </div>
 
       {/* ── Row 2: sub-tabs for the active mode ──────────────────────────────── */}

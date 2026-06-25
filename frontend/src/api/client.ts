@@ -1,4 +1,4 @@
-import type { AddPortfolioEntryRequest, CatalystScanResponse, CompareRequest, CompareResponse, ConvictionRequest, ConvictionResponse, DipScanResponse, FundScanResponse, GainerDetail, GainersListResponse, GrowthTriggersReport, Market, ModelPortfolioResponse, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PortfolioXrayResponse, PriceHistory, RadarResponse, RiskProfile, StockAnalysisResponse, ValueRecoveryScanResponse, XrayRequest } from "../types";
+import type { AddPortfolioEntryRequest, AdvisorEvaluateRequest, AdvisorEvaluateResponse, CompareRequest, CompareResponse, ConvictionRequest, ConvictionResponse, FundScanResponse, GainerDetail, GrowthTriggersReport, InvestorProfile, Market, ModelPortfolioResponse, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PortfolioXrayResponse, PriceHistory, RiskProfile, StockAnalysisResponse, XrayRequest } from "../types";
 
 const BASE_URL = "/api";
 
@@ -26,14 +26,6 @@ async function fetchJSON<T>(path: string, options: FetchOptions = {}): Promise<T
 }
 
 export const api = {
-  getGainers: (market: Market, period = "1d", options: FetchOptions = {}): Promise<GainersListResponse> => {
-    const params = new URLSearchParams();
-    if (period !== "1d") params.set("period", period);
-    if (options.refresh) params.set("refresh", "true");
-    const qs = params.toString();
-    return fetchJSON(`/gainers/${market}${qs ? `?${qs}` : ""}`, options);
-  },
-
   getGainerDetail: (market: Market, ticker: string, options: FetchOptions = {}): Promise<GainerDetail> =>
     fetchJSON(`/gainers/${market}/${ticker}${options.refresh ? "?refresh=true" : ""}`, options),
 
@@ -55,14 +47,6 @@ export const api = {
   /** OHLCV candlestick data. Cached 30 min. */
   getPriceHistory: (market: Market, ticker: string, period = "3mo"): Promise<PriceHistory> =>
     fetchJSON(`/gainers/${market}/${ticker}/history?period=${period}`),
-
-  /** Catalyst radar — structural themes from today's news. Cached 12 h. */
-  getRadar: (market: Market): Promise<RadarResponse> =>
-    fetchJSON(`/radar/${market}`),
-
-  /** Catalyst Scanner — top movers with confirmed catalysts. Cached 30 min. */
-  getCatalystScan: (market: Market): Promise<CatalystScanResponse> =>
-    fetchJSON(`/catalyst/${market}`),
 
   /** Growth Triggers research note. Cached 24 h. Cold: ~15-25 s (grounded AI). */
   getGrowthTriggers: (market: Market, ticker: string, options: FetchOptions = {}): Promise<GrowthTriggersReport> =>
@@ -98,14 +82,6 @@ export const api = {
   getPortfolioPrices: (tickers: string[], market: Market): Promise<PortfolioPricesResponse> =>
     fetchJSON(`/portfolio/prices?tickers=${tickers.join(",")}&market=${market}`),
 
-  /** Dip scanner — stocks down 8-45% from recent high but fundamentally sound. Cached 1 h. */
-  getDips: (market: Market): Promise<DipScanResponse> =>
-    fetchJSON(`/dips/${market}`),
-
-  /** Value Recovery scanner — compressed valuations + ≥2 fundamental inflection signals. Cached 2 h. */
-  getValueRecovery: (market: Market, options: FetchOptions = {}): Promise<ValueRecoveryScanResponse> =>
-    fetchJSON(`/recovery/${market}${options.refresh ? "?refresh=true" : ""}`, options),
-
   /** Fund scanner — India mutual funds or US ETFs with metrics + entry verdict. Cached 6 h. */
   getFundScan: (market: Market = "india", category?: string, options: FetchOptions = {}): Promise<FundScanResponse> => {
     const params = new URLSearchParams({ market });
@@ -132,6 +108,26 @@ export const api = {
   /** Portfolio X-ray: allocation, US sector/company look-through, gaps, AI summary. */
   xrayPortfolio: (body: XrayRequest): Promise<PortfolioXrayResponse> =>
     fetchJSON("/funds/xray", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+    }),
+
+  /** Investor profile — returns 404 if not set yet. */
+  getInvestorProfile: (): Promise<InvestorProfile> =>
+    fetchJSON("/investor-profile"),
+
+  /** Save / update investor profile. */
+  saveInvestorProfile: (profile: InvestorProfile): Promise<InvestorProfile> =>
+    fetchJSON("/investor-profile", {
+      method: "PUT",
+      body: JSON.stringify(profile),
+      headers: { "Content-Type": "application/json" },
+    }),
+
+  /** Get personalised Buy/Pass verdict for a stock or fund. */
+  evaluateAdvisor: (body: AdvisorEvaluateRequest): Promise<AdvisorEvaluateResponse> =>
+    fetchJSON("/advisor/evaluate", {
       method: "POST",
       body: JSON.stringify(body),
       headers: { "Content-Type": "application/json" },

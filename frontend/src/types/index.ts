@@ -135,18 +135,6 @@ export interface StockPrediction {
   disclaimer: string;
 }
 
-export interface MarketSummary {
-  market: Market;
-  narrative: string;
-  themes: string[];
-  dominant_sector?: string;
-  sentiment: MarketSentiment;
-  watch_list: string[];
-  watch_reason: string;
-  from_cache: boolean;
-  generated_at: string;
-}
-
 export interface GainerDetail {
   gainer: StockGainer;
   fundamentals?: FundamentalsData;
@@ -215,16 +203,6 @@ export interface StockAnalysisResponse {
   analysed_at?: string;
 }
 
-export interface GainersListResponse {
-  market: Market;
-  period: Period;
-  date: string;
-  gainers: StockGainer[];
-  summary?: MarketSummary;
-  from_cache: boolean;
-  fetched_at: string;
-}
-
 // ── Conviction / Thesis types ─────────────────────────────────────────────────
 
 export type ThesisRiskLevel = "lower" | "focused" | "higher";
@@ -286,27 +264,6 @@ export interface PriceHistory {
   candles: Candle[];
 }
 
-// ── Radar / catalyst-scanner ──────────────────────────────────────────────────
-
-export interface RadarSignal {
-  theme: string;
-  narrative: string;
-  tickers: string[];
-  catalyst_type: CatalystType;
-  conviction: number;       // 0–1
-  time_frame: string;
-  evidence: string;
-  source_headlines: string[];
-}
-
-export interface RadarResponse {
-  market: Market;
-  signals: RadarSignal[];
-  no_signals_reason?: string | null;
-  from_cache: boolean;
-  generated_at: string;
-}
-
 // ── Growth Triggers ───────────────────────────────────────────────────────────
 
 export type TriggerConviction = "HIGH" | "MEDIUM" | "OPTIONALITY";
@@ -346,10 +303,6 @@ export interface GrowthTriggersReport {
   generated_at: string;
   disclaimer: string;
 }
-
-// ── Catalyst Scanner ──────────────────────────────────────────────────────────
-
-export type CatalystSignal = "strong_move" | "emerging" | "noise" | "potential";
 
 // ── Portfolio tracker ─────────────────────────────────────────────────────────
 
@@ -405,117 +358,6 @@ export interface PortfolioSummary {
 /** Returned by GET /portfolio/prices */
 export interface PortfolioPricesResponse {
   prices: Record<string, number>;
-}
-
-// ── Dip Scanner ───────────────────────────────────────────────────────────────
-
-export type DipQuality = "prime" | "watch";
-
-export interface DipStock {
-  ticker: string;
-  name: string;
-  market: Market;
-  sector?: string;
-  price: number;
-  change_pct_1d: number;
-  change_pct_from_high: number;   // negative, e.g. -18.4 means 18.4% below recent high
-  three_month_high: number;
-  fifty_two_week_high?: number;
-  fifty_two_week_low?: number;
-  pct_of_52w_range?: number;      // 0 = at 52w low, 100 = at 52w high
-  rsi_14?: number;
-  analyst_consensus?: string;
-  analyst_target?: number;
-  upside_to_target?: number;      // % upside from current to analyst target
-  revenue_growth_yoy?: number;    // decimal, 0.15 = 15% growth
-  dip_quality: DipQuality;
-  dip_score: number;              // 0-100
-  dip_reason: string;
-  avg_volume?: number;
-}
-
-export interface DipScanResponse {
-  market: Market;
-  dips: DipStock[];
-  from_cache: boolean;
-  scanned_at: string;
-}
-
-// ── Value Recovery Scanner ────────────────────────────────────────────────────
-
-export type RecoverySignal =
-  | "eps_growing"
-  | "revenue_growing"
-  | "pe_contracting"
-  | "strong_roe"
-  | "low_debt"
-  | "profitable"
-  | "analyst_bullish"
-  | "rdcf_mispriced";
-
-export type RecoveryQuality = "strong" | "emerging";
-
-export interface ValueRecoveryStock {
-  ticker: string;
-  name: string;
-  market: Market;
-  sector?: string;
-  price: number;
-  change_pct_1d: number;
-  pe_ratio?: number;
-  forward_pe?: number;
-  pe_contraction_pct?: number;     // % by which forward P/E is below trailing
-  signals: RecoverySignal[];
-  recovery_quality: RecoveryQuality;
-  recovery_score: number;          // 0-100
-  recovery_thesis: string;
-  earnings_growth_yoy?: number;    // decimal, 0.20 = 20%
-  revenue_growth_yoy?: number;     // decimal
-  roe?: number;                    // decimal
-  de_ratio?: number;               // yfinance percentage units (80 = 0.8× D/E)
-  profit_margin?: number;          // decimal
-  analyst_consensus?: string;
-  analyst_target?: number;
-  upside_to_target?: number;       // % upside from current price to analyst target
-  implied_growth_pct?: number;     // EPS CAGR % the current PE is pricing in (reverse DCF)
-  avg_volume?: number;
-}
-
-export interface ValueRecoveryScanResponse {
-  market: Market;
-  stocks: ValueRecoveryStock[];
-  from_cache: boolean;
-  scanned_at: string;
-}
-
-// ── Catalyst Scanner ──────────────────────────────────────────────────────────
-
-export interface CatalystPlay {
-  ticker: string;
-  name: string;
-  market: Market;
-  sector?: string;
-  price: number;
-  change_pct: number;
-  change_abs: number;
-  volume: number;
-  avg_volume?: number;
-  volume_ratio?: number;      // current / 20-day avg
-  momentum_score: number;     // 0-100
-  catalyst_type: CatalystType;
-  signal: CatalystSignal;
-  headline_catalyst?: string;
-  ai_verdict: string;
-  /** Enriched from analysis cache — undefined if stock hasn't been analysed yet */
-  ai_prediction_pct?: number;
-  ai_prediction_confidence?: number;
-}
-
-export interface CatalystScanResponse {
-  market: Market;
-  plays: CatalystPlay[];
-  from_cache: boolean;
-  scanned_at: string;
 }
 
 // ── Fund Scanner (ETFs + India mutual funds) ──────────────────────────────────
@@ -639,6 +481,66 @@ export interface CompareResponse {
   user_funds: CompareFundReturn[];
   model_funds: CompareFundReturn[];
   generated_at: string;
+}
+
+// ── Investor Profile (Bucket 1 — personal context) ────────────────────────────
+
+export type InvestorHorizon  = "short" | "medium" | "long" | "very_long";
+export type RiskTolerance    = "conservative" | "moderate" | "aggressive";
+export type RiskCapacity     = "low" | "medium" | "high";
+export type InvestmentGoal   = "capital_appreciation" | "income" | "tax_efficiency" | "balanced";
+export type TaxResidency     = "india" | "us" | "other";
+export type AdvisorVerdict   = "buy" | "pass" | "conditional";
+export type AdvisorConfidence = "high" | "medium" | "low";
+
+export interface AllocationSlice {
+  asset_class: string;   // "India Equity", "US Equity", "Debt", "Gold", etc.
+  percentage: number;    // 0-100
+}
+
+export interface InvestorProfile {
+  horizon_years: number;
+  horizon_label: InvestorHorizon;
+  risk_tolerance: RiskTolerance;
+  risk_capacity: RiskCapacity;
+  emergency_fund_months: number;
+  primary_goal: InvestmentGoal;
+  tax_residency: TaxResidency;
+  existing_allocation: AllocationSlice[];
+  monthly_surplus?: number;
+  updated_at: string;
+}
+
+export interface AdvisorRecommendation {
+  verdict: AdvisorVerdict;
+  confidence: AdvisorConfidence;
+  investor_match_score: number;
+  horizon_fit: string;
+  risk_fit: string;
+  allocation_fit: string;
+  reasons_for: string[];
+  reasons_against: string[];
+  suggested_sizing?: string | null;
+  caveats?: string | null;
+  summary: string;
+  disclaimer: string;
+}
+
+export interface AdvisorEvaluateRequest {
+  asset_type: "stock" | "fund";
+  ticker: string;
+  market: Market;
+  name?: string;
+  context?: Record<string, unknown>;
+}
+
+export interface AdvisorEvaluateResponse {
+  recommendation: AdvisorRecommendation;
+  ticker: string;
+  asset_type: string;
+  profile_horizon_years: number;
+  from_cache: boolean;
+  evaluated_at?: string;
 }
 
 // ── Portfolio X-ray (analyse your funds) ──────────────────────────────────────

@@ -5,6 +5,8 @@ import {
 } from "lucide-react";
 import type { FundamentalsData, GainerDetail, GrowthTrigger, GrowthTriggersReport, Period, PeerComparison, PortfolioEntry, QuarterlySnapshot, RiskItem, ScorecardRow, StockAnalysisResponse, TechnicalSignals, TriggerConviction, ValuationBand, ValuationClassification } from "../types";
 import { CandleChart } from "./CandleChart";
+import { AdvisorVerdictCard, AdvisorVerdictLoading, AdvisorVerdictPrompt } from "./AdvisorVerdictCard";
+import { useAdvisorVerdict, useInvestorProfile } from "../hooks/useAdvisor";
 import { useGrowthTriggers } from "../hooks/useGainers";
 import { TrackModal } from "./TrackModal";
 
@@ -1052,11 +1054,13 @@ interface Props {
   /** Called when user wants to build a conviction thesis — switches to Thesis tab */
   onBuildThesis?: (belief: string) => void;
   onTrack?: () => void;
+  /** Called when user clicks "Set up profile" in the advisor verdict prompt */
+  onSetupProfile?: () => void;
 }
 
 type ActiveTab = "analysis" | "growth_triggers";
 
-export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d", onClose, convictionMatches, onRefresh, isRefreshing, onBuildThesis }: Props) {
+export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d", onClose, convictionMatches, onRefresh, isRefreshing, onBuildThesis, onSetupProfile }: Props) {
   const { gainer, fundamentals, news } = detail;
   const ai = analysis;
   const currency = gainer.market === "india" ? "₹" : "$";
@@ -1104,6 +1108,43 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
     fundamentals.debt_equity != null ||
     fundamentals.analyst_recommendation != null ||
     fundamentals.analyst_target_price != null
+  );
+
+  // Advisor verdict — only fires when a profile exists
+  const { data: investorProfile } = useInvestorProfile();
+  const advisorContext: Record<string, unknown> = {
+    name: gainer.name,
+    sector: gainer.sector,
+    market_cap: gainer.market_cap,
+    ...(fundamentals && {
+      pe_ratio: fundamentals.pe_ratio,
+      forward_pe: fundamentals.forward_pe,
+      roe: fundamentals.roe,
+      debt_equity: fundamentals.debt_equity,
+      revenue_growth_yoy: fundamentals.revenue_growth_yoy,
+      earnings_growth_yoy: fundamentals.earnings_growth_yoy,
+      profit_margin: fundamentals.profit_margin,
+      analyst_recommendation: fundamentals.analyst_recommendation,
+    }),
+    ...(ai?.enriched_fundamentals && {
+      valuation_classification: ai.enriched_fundamentals.valuation_classification,
+      pe_signal: ai.enriched_fundamentals.pe_signal,
+    }),
+    ...(ai?.prediction && {
+      predicted_change_pct: ai.prediction.predicted_change_pct,
+      valuation_signal: ai.prediction.valuation_signal,
+    }),
+  };
+  const {
+    data: advisorData,
+    isLoading: advisorLoading,
+  } = useAdvisorVerdict(
+    "stock",
+    gainer.ticker,
+    gainer.market,
+    gainer.name,
+    advisorContext,
+    !!investorProfile,
   );
 
   return (
@@ -1250,6 +1291,15 @@ export function AnalysisPanel({ detail, analysis, analysisLoading, period = "1d"
               <span className="text-xs text-indigo-500">{convictionMatches.join(" · ")}</span>
             </div>
           </div>
+        )}
+
+        {/* ── ADVISOR VERDICT ───────────────────────────────────────────────── */}
+        {!investorProfile && onSetupProfile && (
+          <AdvisorVerdictPrompt onSetupProfile={onSetupProfile} />
+        )}
+        {investorProfile && advisorLoading && <AdvisorVerdictLoading />}
+        {investorProfile && !advisorLoading && advisorData && (
+          <AdvisorVerdictCard recommendation={advisorData.recommendation} />
         )}
 
         {/* ── PRICE STATS ──────────────────────────────────────────────────── */}

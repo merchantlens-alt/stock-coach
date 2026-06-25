@@ -42,17 +42,16 @@ def reset_singletons() -> None:
     deps._gainer_analyst = None
     deps._market_analyst = None
     deps._thesis_analyst = None
-    deps._radar_analyst = None
     deps._quarterly_fetcher = None
     deps._portfolio_store = None
-    deps._dip_scanner = None
     deps._fundamental_enricher = None
-    deps._value_recovery_scanner = None
     deps._fund_analyst = None
     deps._fund_data = None
     deps._us_etf_data = None
     deps._xray_agent = None
     deps._fund_enrichment = None
+    deps._investor_profile_store = None
+    deps._advisor_agent = None
     get_settings.cache_clear()
 
 
