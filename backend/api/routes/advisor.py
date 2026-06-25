@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from agents.advisor_agent import AdvisorAgent
 from agents.allocation_advisor_agent import AllocationAdvisorAgent
@@ -70,6 +70,7 @@ async def get_allocation_plan(
     agent: Annotated[AllocationAdvisorAgent, Depends(get_allocation_advisor)],
     market_data: Annotated[MarketDataService, Depends(get_market_data)],
     current_user: Annotated[UserRecord, Depends(get_current_user)],
+    refresh: Annotated[bool, Query()] = False,
 ) -> AllocationPlanResponse:
     profile = await store.get(current_user.user_id)
     if not profile:
@@ -81,7 +82,7 @@ async def get_allocation_plan(
     key = f"user:{current_user.user_id}:allocation-plan:{ph}"
 
     cached = await cache.get(key)
-    if cached:
+    if cached and not refresh:
         log.info("advisor.allocation_plan.cache_hit", user=current_user.username)
         plan = AllocationPlanResponse.model_validate(cached)
         plan.from_cache = True

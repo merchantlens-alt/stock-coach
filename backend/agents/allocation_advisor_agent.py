@@ -173,10 +173,9 @@ class AllocationAdvisorAgent:
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=8))
     async def _call_gemini(self, messages: list[dict[str, Any]]) -> str:
-        import asyncio
         import httpx
 
-        token = await asyncio.to_thread(get_token)
+        token = await get_token()
         url = (
             f"https://{self._settings.google_cloud_region}-aiplatform.googleapis.com"
             f"/v1/projects/{self._settings.google_cloud_project}"

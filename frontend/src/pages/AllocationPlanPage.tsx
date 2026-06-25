@@ -225,12 +225,18 @@ export function AllocationPlanPage({ onSetupProfile }: AllocationPlanPageProps) 
         )}
 
         {planError && !plan && (
-          <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-400">
-            <p className="text-sm font-medium text-red-500">Couldn't generate your plan</p>
+          <div className="flex flex-col items-center justify-center py-16 gap-4 text-gray-400">
+            <div className="text-center">
+              <p className="text-sm font-medium text-red-500">Couldn't generate your plan</p>
+              {planError instanceof Error && (
+                <p className="text-xs text-gray-400 mt-1 max-w-xs mx-auto">{planError.message}</p>
+              )}
+            </div>
             <button
               onClick={handleRefresh}
-              className="text-xs font-semibold text-indigo-600 hover:underline"
+              className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:underline"
             >
+              <RefreshCw size={12} />
               Try again
             </button>
           </div>

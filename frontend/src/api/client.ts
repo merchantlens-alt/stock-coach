@@ -154,7 +154,7 @@ export const api = {
 
   /** AI cross-asset allocation plan based on full investor profile. Cached 24 h. */
   getAllocationPlan: (options: FetchOptions = {}): Promise<AllocationPlanResponse> =>
-    fetchJSON("/advisor/allocation-plan", options),
+    fetchJSON(`/advisor/allocation-plan${options.refresh ? "?refresh=true" : ""}`, options),
 
   /** Get personalised Buy/Pass verdict for a stock or fund. */
   evaluateAdvisor: (body: AdvisorEvaluateRequest): Promise<AdvisorEvaluateResponse> =>

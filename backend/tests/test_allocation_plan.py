@@ -205,6 +205,37 @@ class TestAllocationPlan:
 
         assert resp.status_code == 503
 
+    def test_refresh_param_bypasses_cache(
+        self,
+        client: TestClient,
+        sample_profile: InvestorProfile,
+        sample_plan: AllocationPlanResponse,
+    ) -> None:
+        """?refresh=true must skip the cached plan and call the agent."""
+        cached_data = sample_plan.model_dump(mode="json")
+        with (
+            patch(
+                "services.investor_profile_store.InvestorProfileStore.get",
+                new=AsyncMock(return_value=sample_profile),
+            ),
+            patch(
+                "services.cache.InMemoryCache.get",
+                new=AsyncMock(return_value=cached_data),
+            ),
+            patch(
+                "services.market_data.MarketDataService.get_gainers",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "agents.allocation_advisor_agent.AllocationAdvisorAgent.create_plan",
+                new=AsyncMock(return_value=sample_plan),
+            ) as mock_agent,
+        ):
+            resp = client.get("/api/advisor/allocation-plan?refresh=true")
+
+        assert resp.status_code == 200
+        mock_agent.assert_called_once()  # agent was called, not returned from cache
+
     def test_gainers_failure_does_not_block_plan(
         self,
         client: TestClient,
