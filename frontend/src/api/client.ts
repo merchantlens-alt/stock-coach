@@ -156,6 +156,14 @@ export const api = {
   getAllocationPlan: (options: FetchOptions = {}): Promise<AllocationPlanResponse> =>
     fetchJSON(`/advisor/allocation-plan${options.refresh ? "?refresh=true" : ""}`, options),
 
+  /** Generate a custom plan with user-specified allocation overrides. Never cached. */
+  customizeAllocationPlan: (preferences: Record<string, number>): Promise<AllocationPlanResponse> =>
+    fetchJSON("/advisor/allocation-plan", {
+      method: "POST",
+      body: JSON.stringify({ user_preferences: preferences }),
+      headers: { "Content-Type": "application/json" },
+    }),
+
   /** Get personalised Buy/Pass verdict for a stock or fund. */
   evaluateAdvisor: (body: AdvisorEvaluateRequest): Promise<AdvisorEvaluateResponse> =>
     fetchJSON("/advisor/evaluate", {

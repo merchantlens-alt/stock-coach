@@ -549,7 +549,13 @@ export interface AllocationPlanResponse {
   disclaimer: string;
   from_cache: boolean;
   generated_at?: string;
+  user_preferences_applied?: Record<string, number>;
 }
+
+export type AllocationPreferences = Record<string, number>;
+
+export const ASSET_CLASSES = ["India Equity", "US Equity", "Debt", "Gold", "Real Estate"] as const;
+export type AssetClass = typeof ASSET_CLASSES[number];
 
 export interface AdvisorRecommendation {
   verdict: AdvisorVerdict;

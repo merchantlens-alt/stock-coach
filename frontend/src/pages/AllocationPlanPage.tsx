@@ -9,12 +9,13 @@
  * Cache: 24 h per profile hash (backend rotates automatically on profile change).
  */
 
-import { ArrowRight, Loader2, RefreshCw, Sparkles, TrendingUp, UserCircle } from "lucide-react";
+import { ArrowRight, Loader2, RefreshCw, Sliders, Sparkles, TrendingUp, UserCircle, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api/client";
 import { useAllocationPlan, useInvestorProfile } from "../hooks/useAdvisor";
-import type { AllocationBucket, AllocationInstrument } from "../types";
+import type { AllocationBucket, AllocationInstrument, AllocationPreferences } from "../types";
+import { ASSET_CLASSES } from "../types";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -146,6 +147,110 @@ function NoMonthlyAmountState({ onSetupProfile }: { onSetupProfile: () => void }
   );
 }
 
+// ── Preference editor panel ───────────────────────────────────────────────────
+
+interface PreferencePanelProps {
+  currentPlan: AllocationBucket[] | undefined;
+  preferences: AllocationPreferences;
+  onChange: (prefs: AllocationPreferences) => void;
+  onClose: () => void;
+  onApply: () => void;
+  loading: boolean;
+}
+
+function PreferencePanel({ currentPlan, preferences, onChange, onClose, onApply, loading }: PreferencePanelProps) {
+  const lockedSum = Object.values(preferences).reduce((s, v) => s + v, 0);
+  const remaining = Math.max(0, 100 - lockedSum);
+  const isOver = lockedSum > 100;
+
+  function handleChange(cls: string, raw: string) {
+    const val = parseInt(raw, 10);
+    if (raw === "" || isNaN(val)) {
+      const next = { ...preferences };
+      delete next[cls];
+      onChange(next);
+    } else {
+      onChange({ ...preferences, [cls]: Math.min(100, Math.max(0, val)) });
+    }
+  }
+
+  function currentPct(cls: string): number {
+    return currentPlan?.find(b => b.asset_class === cls)?.percentage ?? 0;
+  }
+
+  return (
+    <div className="rounded-xl border border-indigo-100 bg-indigo-50 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2.5 bg-indigo-600">
+        <div className="flex items-center gap-2">
+          <Sliders size={13} className="text-indigo-200" />
+          <span className="text-xs font-bold text-white">Customise Allocation</span>
+        </div>
+        <button onClick={onClose} className="text-indigo-200 hover:text-white">
+          <X size={14} />
+        </button>
+      </div>
+      <div className="px-4 py-3 space-y-2.5">
+        <p className="text-[10px] text-indigo-700 leading-relaxed">
+          Set a target % for any asset class. Leave the rest blank — the AI will distribute the remaining <strong>{remaining}%</strong> based on your profile.
+        </p>
+
+        <div className="space-y-1.5">
+          {ASSET_CLASSES.map(cls => {
+            const locked = preferences[cls] !== undefined;
+            return (
+              <div key={cls} className="flex items-center gap-3">
+                <span className={`text-xs flex-1 ${locked ? "font-semibold text-indigo-800" : "text-gray-600"}`}>
+                  {cls}
+                </span>
+                <span className="text-[10px] text-gray-400 w-12 text-right">
+                  {locked ? "" : `AI: ${currentPct(cls)}%`}
+                </span>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    placeholder={String(currentPct(cls))}
+                    value={preferences[cls] ?? ""}
+                    onChange={e => handleChange(cls, e.target.value)}
+                    className={`w-16 text-xs text-right rounded-lg border px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-300
+                      ${locked ? "border-indigo-400 bg-white font-semibold text-indigo-800" : "border-gray-200 bg-white text-gray-700"}`}
+                  />
+                  {locked && (
+                    <span className="absolute -right-1 -top-1 w-2 h-2 rounded-full bg-indigo-600" />
+                  )}
+                </div>
+                <span className="text-xs text-gray-400">%</span>
+              </div>
+            );
+          })}
+        </div>
+
+        {isOver && (
+          <p className="text-[10px] text-red-500 font-medium">Total exceeds 100% — reduce one or more values.</p>
+        )}
+
+        <div className="flex items-center justify-between pt-1">
+          <button
+            onClick={() => onChange({})}
+            className="text-[10px] text-indigo-500 hover:underline"
+          >
+            Reset to AI default
+          </button>
+          <button
+            onClick={onApply}
+            disabled={loading || isOver}
+            className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg px-3 py-1.5 transition-colors"
+          >
+            {loading && <Loader2 size={11} className="animate-spin" />}
+            Regenerate plan
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 interface AllocationPlanPageProps {
@@ -155,21 +260,49 @@ interface AllocationPlanPageProps {
 export function AllocationPlanPage({ onSetupProfile }: AllocationPlanPageProps) {
   const { data: profile, isLoading: profileLoading } = useInvestorProfile();
   const hasMonthly = !!(profile?.monthly_invest_amount);
-  const { data: plan, isLoading: planLoading, error: planError } = useAllocationPlan(
+  const { data: cachedPlan, isLoading: planLoading, error: planError } = useAllocationPlan(
     !!profile && hasMonthly,
   );
 
   const queryClient = useQueryClient();
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing]     = useState(false);
+  const [showPrefs, setShowPrefs]       = useState(false);
+  const [preferences, setPreferences]   = useState<AllocationPreferences>({});
+  // activePlan is either the customised result or the cached default
+  const [activePlan, setActivePlan]     = useState<typeof cachedPlan>(undefined);
+
+  // Use the custom plan if one exists, otherwise fall back to the react-query cache
+  const plan = activePlan ?? cachedPlan;
 
   async function handleRefresh() {
     if (refreshing) return;
     setRefreshing(true);
+    setActivePlan(undefined);
     try {
       const fresh = await api.getAllocationPlan({ refresh: true });
       queryClient.setQueryData(["advisor", "allocation-plan"], fresh);
     } catch {
       queryClient.invalidateQueries({ queryKey: ["advisor", "allocation-plan"] });
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function handleApplyPreferences() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const fresh = Object.keys(preferences).length > 0
+        ? await api.customizeAllocationPlan(preferences)
+        : await api.getAllocationPlan({ refresh: true });
+      setActivePlan(fresh);
+      // Also update the query cache if no preferences (pure refresh)
+      if (!Object.keys(preferences).length) {
+        queryClient.setQueryData(["advisor", "allocation-plan"], fresh);
+      }
+      setShowPrefs(false);
+    } catch {
+      /* error is surfaced via planError — nothing extra needed */
     } finally {
       setRefreshing(false);
     }
@@ -188,6 +321,7 @@ export function AllocationPlanPage({ onSetupProfile }: AllocationPlanPageProps) 
   if (!hasMonthly) return <NoMonthlyAmountState onSetupProfile={onSetupProfile} />;
 
   const isLoading = planLoading || refreshing;
+  const hasPrefs  = Object.keys(preferences).length > 0;
 
   return (
     <div className="flex flex-col h-full bg-gray-50 overflow-hidden">
@@ -201,20 +335,60 @@ export function AllocationPlanPage({ onSetupProfile }: AllocationPlanPageProps) 
               ₹{profile.monthly_invest_amount!.toLocaleString("en-IN")}/month · {profile.horizon_years}yr horizon · {profile.risk_tolerance} risk
             </p>
           </div>
-          <button
-            onClick={handleRefresh}
-            disabled={isLoading}
-            title="Regenerate plan"
-            className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-800 disabled:opacity-40"
-          >
-            <RefreshCw size={13} className={isLoading ? "animate-spin" : ""} />
-            <span className="hidden sm:inline">Refresh</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Customise button */}
+            <button
+              onClick={() => setShowPrefs(v => !v)}
+              className={`flex items-center gap-1.5 text-xs font-medium rounded-lg px-2.5 py-1.5 border transition-colors
+                ${showPrefs
+                  ? "bg-indigo-600 text-white border-indigo-600"
+                  : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}
+            >
+              <Sliders size={12} />
+              <span>Customise</span>
+              {hasPrefs && !showPrefs && (
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+              )}
+            </button>
+            {/* Refresh */}
+            <button
+              onClick={handleRefresh}
+              disabled={isLoading}
+              title="Regenerate plan with AI defaults"
+              className="flex items-center gap-1.5 text-xs font-medium border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+            >
+              <RefreshCw size={12} className={isLoading ? "animate-spin" : ""} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          </div>
         </div>
+
+        {/* Applied preferences badge */}
+        {plan?.user_preferences_applied && Object.keys(plan.user_preferences_applied).length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {Object.entries(plan.user_preferences_applied).map(([cls, pct]) => (
+              <span key={cls} className="text-[9px] font-bold bg-indigo-100 text-indigo-700 rounded-full px-2 py-0.5 uppercase tracking-wide">
+                {cls} {pct}% locked
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 space-y-3">
+
+        {/* Preference panel */}
+        {showPrefs && (
+          <PreferencePanel
+            currentPlan={plan?.buckets}
+            preferences={preferences}
+            onChange={setPreferences}
+            onClose={() => setShowPrefs(false)}
+            onApply={handleApplyPreferences}
+            loading={refreshing}
+          />
+        )}
 
         {isLoading && !plan && (
           <div className="flex flex-col items-center justify-center py-20 gap-3 text-gray-400">
@@ -224,7 +398,14 @@ export function AllocationPlanPage({ onSetupProfile }: AllocationPlanPageProps) 
           </div>
         )}
 
-        {planError && !plan && (
+        {isLoading && plan && (
+          <div className="flex items-center justify-center gap-2 py-3 text-indigo-500">
+            <Loader2 size={14} className="animate-spin" />
+            <span className="text-xs font-medium">Regenerating with your preferences…</span>
+          </div>
+        )}
+
+        {!isLoading && planError && !plan && (
           <div className="flex flex-col items-center justify-center py-16 gap-4 text-gray-400">
             <div className="text-center">
               <p className="text-sm font-medium text-red-500">Couldn't generate your plan</p>

@@ -25,9 +25,11 @@ from models.schemas import (
     AdvisorEvaluateResponse,
     AdvisorRecommendation,
     AllocationPlanResponse,
+    CustomizePlanRequest,
     UserRecord,
 )
 from services.cache import CacheBackend
+from services.fundamental_scoring import enrich_candidates_with_fundamentals
 from services.investor_profile_store import InvestorProfileStore
 from services.market_data import MarketDataService
 
@@ -102,11 +104,19 @@ async def get_allocation_plan(
     if isinstance(us_raw, Exception):
         log.warning("advisor.allocation_plan.us_candidates_failed", error=str(us_raw))
 
+    # Enrich candidates with fundamental scores — use investor's actual risk profile
+    risk_profile = profile.risk_tolerance  # "aggressive" | "moderate" | "conservative"
+    india_candidates, us_candidates = await asyncio.gather(
+        enrich_candidates_with_fundamentals(india_candidates, "india", risk_profile, cache),
+        enrich_candidates_with_fundamentals(us_candidates, "us", risk_profile, cache),
+    )
+
     log.info(
         "advisor.allocation_plan.generate",
         user=current_user.username,
         india_candidates=len(india_candidates),
         us_candidates=len(us_candidates),
+        risk_profile=risk_profile,
     )
     try:
         plan = await agent.create_plan(profile, india_candidates=india_candidates, us_candidates=us_candidates)
@@ -117,6 +127,63 @@ async def get_allocation_plan(
     plan.generated_at = datetime.utcnow()
     await cache.set(key, plan.model_dump(mode="json"), _PLAN_TTL)
     return plan
+
+
+@router.post("/allocation-plan", response_model=AllocationPlanResponse)
+async def customize_allocation_plan(
+    body: CustomizePlanRequest,
+    store: Annotated[InvestorProfileStore, Depends(get_investor_profile_store)],
+    cache: Annotated[CacheBackend, Depends(get_cache)],
+    agent: Annotated[AllocationAdvisorAgent, Depends(get_allocation_advisor)],
+    market_data: Annotated[MarketDataService, Depends(get_market_data)],
+    current_user: Annotated[UserRecord, Depends(get_current_user)],
+) -> AllocationPlanResponse:
+    """Generate a plan with user-specified allocation overrides. Never cached."""
+    profile = await store.get(current_user.user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="No investor profile set. Create your profile first.")
+    if not profile.monthly_invest_amount:
+        raise HTTPException(status_code=422, detail="Monthly investable amount is required for the allocation plan.")
+
+    prefs = body.user_preferences
+    if prefs and sum(prefs.values()) > 100:
+        raise HTTPException(status_code=422, detail="User allocation preferences sum to more than 100%.")
+
+    import asyncio
+    india_raw, us_raw = await asyncio.gather(
+        market_data.get_gainers("india"),
+        market_data.get_gainers("us"),
+        return_exceptions=True,
+    )
+    india_candidates = _filter_candidates(india_raw) if not isinstance(india_raw, Exception) else []
+    us_candidates    = _filter_candidates(us_raw)    if not isinstance(us_raw,    Exception) else []
+
+    risk_profile = profile.risk_tolerance
+    india_candidates, us_candidates = await asyncio.gather(
+        enrich_candidates_with_fundamentals(india_candidates, "india", risk_profile, cache),
+        enrich_candidates_with_fundamentals(us_candidates,   "us",    risk_profile, cache),
+    )
+
+    log.info(
+        "advisor.allocation_plan.customize",
+        user=current_user.username,
+        preferences=prefs,
+        india_candidates=len(india_candidates),
+        us_candidates=len(us_candidates),
+    )
+    try:
+        plan = await agent.create_plan(
+            profile,
+            india_candidates=india_candidates,
+            us_candidates=us_candidates,
+            user_preferences=prefs or None,
+        )
+    except AIAgentError as exc:
+        log.error("advisor.allocation_plan.customize_ai_failed", error=str(exc))
+        raise HTTPException(status_code=503, detail="Allocation plan AI unavailable. Try again shortly.")
+
+    plan.generated_at = datetime.utcnow()
+    return plan   # intentionally not cached — custom plans are one-off
 
 
 @router.post("/evaluate", response_model=AdvisorEvaluateResponse)

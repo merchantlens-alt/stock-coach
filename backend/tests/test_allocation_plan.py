@@ -140,6 +140,10 @@ class TestAllocationPlan:
                 new=AsyncMock(return_value=[]),
             ),
             patch(
+                "services.fundamental_scoring.enrich_candidates_with_fundamentals",
+                new=AsyncMock(side_effect=lambda candidates, *a, **kw: candidates),
+            ),
+            patch(
                 "agents.allocation_advisor_agent.AllocationAdvisorAgent.create_plan",
                 new=AsyncMock(return_value=sample_plan),
             ),
@@ -197,6 +201,10 @@ class TestAllocationPlan:
                 new=AsyncMock(return_value=[]),
             ),
             patch(
+                "services.fundamental_scoring.enrich_candidates_with_fundamentals",
+                new=AsyncMock(side_effect=lambda candidates, *a, **kw: candidates),
+            ),
+            patch(
                 "agents.allocation_advisor_agent.AllocationAdvisorAgent.create_plan",
                 new=AsyncMock(side_effect=AIAgentError("Gemini timeout")),
             ),
@@ -227,6 +235,10 @@ class TestAllocationPlan:
                 new=AsyncMock(return_value=[]),
             ),
             patch(
+                "services.fundamental_scoring.enrich_candidates_with_fundamentals",
+                new=AsyncMock(side_effect=lambda candidates, *a, **kw: candidates),
+            ),
+            patch(
                 "agents.allocation_advisor_agent.AllocationAdvisorAgent.create_plan",
                 new=AsyncMock(return_value=sample_plan),
             ) as mock_agent,
@@ -253,6 +265,10 @@ class TestAllocationPlan:
             patch(
                 "services.market_data.MarketDataService.get_gainers",
                 new=AsyncMock(side_effect=MarketDataError("yfinance timeout")),
+            ),
+            patch(
+                "services.fundamental_scoring.enrich_candidates_with_fundamentals",
+                new=AsyncMock(side_effect=lambda candidates, *a, **kw: candidates),
             ),
             patch(
                 "agents.allocation_advisor_agent.AllocationAdvisorAgent.create_plan",

@@ -845,6 +845,17 @@ class AllocationBucket(BaseModel):
     instruments: list[AllocationInstrument] # 2-3 specific recommendations
 
 
+class CustomizePlanRequest(BaseModel):
+    user_preferences: dict[str, float] = {}
+    """
+    Optional hard allocation targets per asset class.
+    Keys must match the asset_class names: "India Equity", "US Equity",
+    "Debt", "Gold", "Real Estate".
+    Values are target percentages (0-100). Must not sum to more than 100.
+    The AI distributes the remaining % across unspecified asset classes.
+    """
+
+
 class AllocationPlanResponse(BaseModel):
     monthly_invest_amount: float
     currency: str   # "INR" or "USD"
@@ -854,6 +865,7 @@ class AllocationPlanResponse(BaseModel):
     disclaimer: str
     from_cache: bool = False
     generated_at: Optional[datetime] = None
+    user_preferences_applied: Optional[dict[str, float]] = None
 
 
 # ── Advisor Recommendation (Bucket 1 ∩ Bucket 2 → verdict) ────────────────────

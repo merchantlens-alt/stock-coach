@@ -120,10 +120,21 @@ Emergency fund = 0: reduce equity 5%, shift to debt, call this out explicitly.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 INSTRUMENT SELECTION (real names only)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-India Equity MFs: HDFC Flexi Cap Fund, Parag Parikh Flexi Cap Fund, Mirae Asset Large Cap Fund, Nippon India Small Cap Fund (aggressive only)
-Direct India stocks (aggressive only): SELECT ONLY from the LIVE INDIA STOCK CANDIDATES provided in the user message. Rank by quality_score (higher = better), then signal_tier ("confirmed" > "catalyst" > "mover"). Pick max 3 stocks. If no candidates provided, skip direct stocks and allocate fully to MFs.
-US Equity (India residents): Motilal Oswal Nasdaq 100 ETF (low tracking error, AUM ₹8,000Cr+), Mirae Asset NYSE FANG+ ETF, Parag Parikh Flexi Cap (has ~35% US allocation — no LRS needed)
-Direct US stocks (for NRI / US residents only): SELECT ONLY from the LIVE US STOCK CANDIDATES provided in the user message. Pick max 2-3 stocks across different sectors. If no candidates provided, use ETFs only.
+India Equity MFs — pick instruments from DIFFERENT categories, never two from the same:
+  • Flexi-cap (pick at most ONE): Parag Parikh Flexi Cap Fund (preferred — has ~35% US equity built in, no LRS), HDFC Flexi Cap Fund
+  • Large-cap (if moderate/conservative, or as second pick for aggressive): Mirae Asset Large Cap Fund
+  • Small/mid-cap (aggressive with horizon > 7yr only): Nippon India Small Cap Fund, Mirae Asset Emerging Bluechip Fund
+  • Category rule: if Parag Parikh Flexi Cap is chosen, do NOT also pick HDFC Flexi Cap — they overlap heavily. Instead pair Parag Parikh with a large-cap or small-cap fund depending on risk profile.
+
+Direct India stocks (aggressive only): SELECT ONLY from the LIVE INDIA STOCK CANDIDATES provided in the user message.
+  - PRIMARY selection criterion: fundamental_score (0–10, based on 5yr price CAGR vs Nifty, ROE, revenue growth, debt safety, institutional interest — weighted for this investor's risk profile)
+  - SECONDARY: grade (A/B/C/D/F — only pick A or B grade stocks for core holdings; a C may appear if no better option exists)
+  - DISQUALIFIERS: any stock with a "warnings" entry citing negative 5-year return OR negative ROE must be excluded, regardless of signal_tier
+  - Pick max 2 stocks across different sectors. If no candidates have fundamental_score ≥ 6.0, skip direct stocks entirely and allocate that portion to MFs.
+
+US Equity (India residents): Motilal Oswal Nasdaq 100 ETF (low tracking error, AUM ₹8,000Cr+), Mirae Asset NYSE FANG+ ETF
+  • If Parag Parikh Flexi Cap is in the India Equity bucket, note that it already has ~35% US exposure — size the US bucket accordingly to avoid double-counting.
+Direct US stocks (for NRI / US residents only): SELECT ONLY from the LIVE US STOCK CANDIDATES provided in the user message. Apply same fundamental_score ≥ 6.0 threshold. Pick max 2-3 stocks across different sectors. If no candidates qualify, use ETFs only.
 Debt: HDFC Short Duration Fund, ICICI Prudential Corporate Bond Fund, Aditya Birla Sun Life Savings Fund, RBI Floating Rate Bonds (7yr, sovereign-backed)
 Gold: Secondary market SGB via NSE/BSE (for long horizon), Nippon India Gold ETF or SBI Gold ETF (expense ~0.35%, for shorter horizon or liquidity need)
 REIT: Embassy Office Parks REIT, Mindspace Business Parks REIT, Brookfield India Real Estate Trust
@@ -201,6 +212,7 @@ class AllocationAdvisorAgent:
         profile: InvestorProfile,
         india_candidates: list[dict] | None = None,
         us_candidates: list[dict] | None = None,
+        user_preferences: dict[str, float] | None = None,
     ) -> AllocationPlanResponse:
         import asyncio
 
@@ -212,14 +224,40 @@ class AllocationAdvisorAgent:
             else "not yet specified"
         )
 
+        def _format_preferences(prefs: dict[str, float] | None) -> str:
+            if not prefs:
+                return ""
+            locked_sum = sum(prefs.values())
+            remaining  = max(0.0, 100.0 - locked_sum)
+            lines = "\n".join(
+                f"  - {asset}: {pct:.0f}% (USER SPECIFIED — allocate EXACTLY this percentage)"
+                for asset, pct in prefs.items()
+            )
+            free_classes = [a for a in ("India Equity", "US Equity", "Debt", "Gold", "Real Estate") if a not in prefs]
+            return (
+                f"\nUser allocation overrides (HARD CONSTRAINTS):\n{lines}\n"
+                f"Distribute the remaining {remaining:.0f}% across {', '.join(free_classes)} "
+                f"according to the investor profile rules. "
+                f"All bucket percentages must still sum to exactly 100.\n"
+            )
+
         def _format_candidates(candidates: list[dict] | None, market: str) -> str:
             if not candidates:
                 return f"LIVE {market} STOCK CANDIDATES: none available today — use MFs/ETFs only for equity."
-            rows = "\n".join(
-                f"  • {c['ticker']} | {c['name']} | {c['sector']} | quality={c.get('quality_score', '?')} | tier={c.get('signal_tier', '?')} | change={c.get('change_pct', 0):+.1f}%"
-                for c in candidates
-            )
-            return f"LIVE {market} STOCK CANDIDATES (pick from these only):\n{rows}"
+            rows: list[str] = []
+            for c in candidates:
+                fscore = c.get("fundamental_score")
+                grade  = c.get("grade", "?")
+                km     = c.get("key_metrics", {})
+                warns  = c.get("warnings", [])
+                metrics_str = " | ".join(f"{k}={v}" for k, v in km.items()) if km else "metrics unavailable"
+                warn_str    = " ⚠ " + "; ".join(warns) if warns else ""
+                rows.append(
+                    f"  • {c['ticker']} | {c['name']} | {c.get('sector', '?')}"
+                    f" | fundamental_score={fscore if fscore is not None else '?'}/10 grade={grade}"
+                    f" | {metrics_str}{warn_str}"
+                )
+            return f"LIVE {market} STOCK CANDIDATES (select using fundamental_score as primary criterion):\n" + "\n".join(rows)
 
         user_prompt = f"""Create a personalised SIP allocation plan:
 
@@ -235,7 +273,7 @@ Profile:
 {_format_candidates(india_candidates, "INDIA")}
 
 {_format_candidates(us_candidates, "US")}
-
+{_format_preferences(user_preferences)}
 Output the JSON allocation plan."""
 
         messages = [{"role": "user", "parts": [{"text": user_prompt}]}]
@@ -271,6 +309,7 @@ Output the JSON allocation plan."""
                 buckets=buckets,
                 rebalance_tip=data.get("rebalance_tip", ""),
                 key_principles=data.get("key_principles", []),
+                user_preferences_applied=user_preferences or None,
                 disclaimer=_DISCLAIMER,
             )
         except (KeyError, ValueError, TypeError) as exc:
