@@ -178,6 +178,49 @@ Rules:
 Output only the JSON object. No preamble, no code fences."""
 
 
+def _extract_json(raw: str) -> str:
+    """
+    Pull clean JSON out of a Gemini response that may contain:
+    - Markdown code fences (```json ... ```)
+    - Leading/trailing prose
+    - JS-style // comments (stripped line by line)
+
+    Finds the outermost { ... } and returns that substring.
+    """
+    text = raw.strip()
+
+    # Strip markdown code fences
+    if text.startswith("```"):
+        lines = text.splitlines()
+        # drop first fence line (```json or ```)
+        inner = lines[1:] if len(lines) > 1 else lines
+        # drop last fence line if it's just ```
+        if inner and inner[-1].strip() == "```":
+            inner = inner[:-1]
+        text = "\n".join(inner).strip()
+
+    # Strip JS-style line comments that Gemini sometimes inserts
+    cleaned_lines = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("//"):
+            continue  # drop comment-only lines
+        # inline comment: remove from  //  onwards (crude but effective for JSON)
+        comment_idx = line.find("//")
+        if comment_idx != -1:
+            line = line[:comment_idx].rstrip().rstrip(",")
+        cleaned_lines.append(line)
+    text = "\n".join(cleaned_lines)
+
+    # Extract the outermost JSON object { ... }
+    start = text.find("{")
+    end   = text.rfind("}")
+    if start != -1 and end > start:
+        return text[start : end + 1]
+
+    return text   # best effort — let json.loads report the real error
+
+
 class AllocationAdvisorAgent:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -284,7 +327,7 @@ Output the JSON allocation plan."""
             raise AIAgentError(f"Allocation advisor call failed: {exc}") from exc
 
         try:
-            data = json.loads(raw)
+            data = json.loads(_extract_json(raw))
             buckets = [
                 AllocationBucket(
                     asset_class=b["asset_class"],
@@ -313,4 +356,5 @@ Output the JSON allocation plan."""
                 disclaimer=_DISCLAIMER,
             )
         except (KeyError, ValueError, TypeError) as exc:
+            log.error("allocation_advisor.parse_failed", error=str(exc), raw=raw[:800])
             raise AIAgentError(f"Allocation plan parse failed: {exc}") from exc
