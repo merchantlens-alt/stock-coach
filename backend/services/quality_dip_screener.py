@@ -16,7 +16,7 @@ import asyncio
 from typing import Any
 
 from core.logging import get_logger
-from services.fundamental_scoring import get_fundamental_score
+from services.fundamental_scoring import _SCORE_CACHE_VERSION, get_fundamental_score
 
 log = get_logger(__name__)
 
@@ -77,10 +77,11 @@ async def _score_ticker(
     market: str,
     risk_profile: str,
     cache: Any,
+    refresh: bool = False,
 ) -> dict | None:
     """Fetch fundamental score + dip depth. Returns None if data unavailable."""
     try:
-        result = await get_fundamental_score(ticker, market, risk_profile, cache)
+        result = await get_fundamental_score(ticker, market, risk_profile, cache, refresh=refresh)
         if result is None:
             return None
 
@@ -159,7 +160,8 @@ async def get_quality_dip_candidates(
     Return top QARP candidates for the given market and investor risk profile.
     Cached 24 h per market+profile combination.
     """
-    cache_key = f"quality_dips:{market}:{risk_profile}"
+    # Versioned so a scoring-logic change auto-invalidates stale candidate lists on deploy.
+    cache_key = f"quality_dips:{_SCORE_CACHE_VERSION}:{market}:{risk_profile}"
 
     if not refresh:
         cached = await cache.get(cache_key)
@@ -172,7 +174,7 @@ async def get_quality_dip_candidates(
 
     async def _guarded(ticker: str) -> dict | None:
         async with sem:
-            return await _score_ticker(ticker, market, risk_profile, cache)
+            return await _score_ticker(ticker, market, risk_profile, cache, refresh=refresh)
 
     log.info("quality_dip.screen_start", market=market, universe=len(universe))
     raw = await asyncio.gather(*[_guarded(t) for t in universe], return_exceptions=True)

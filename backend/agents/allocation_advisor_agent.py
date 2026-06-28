@@ -47,6 +47,7 @@ Selection rules:
 - QUALITY FLOOR: never pick a stock with fundamental_score < 5.5 or grade worse than C, no matter how deep the dip — a falling knife is not a bargain.
 - PREFER A/B grade. A C-grade name is acceptable ONLY when its dip is steep (dip_quality >= 6) AND fundamentals are stable (no disqualifying warnings).
 - DISQUALIFIER: skip any stock with "negative 5-year return" OR "negative ROE" in warnings — a dip on a deteriorating business is a value trap, not an opportunity.
+- VALUATION CHECK: a steep dip does NOT make an expensive stock cheap. If a candidate carries a "P/B" or "P/E" warning, or its key_metrics show price_to_book above ~8x, treat the dip as LOW margin of safety and down-rank it versus similarly-graded names at reasonable multiples. Only override this if the dip is exceptional (dip_quality >= 8) AND the business is best-in-class.
 - Tie-break between similar composite scores using the higher fundamental_score.
 - Diversification: no two stocks from the same sector.
 - For conservative profile: return empty lists — no direct stocks.
