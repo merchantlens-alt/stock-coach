@@ -94,6 +94,38 @@ class TestComputeFundamentalScore:
         slow = compute_fundamental_score(info_slow, 0.15, "india", "aggressive")
         assert fast["fundamental_score"] >= slow["fundamental_score"]
 
+    # ── Valuation component ──────────────────────────────────────────────────
+
+    def test_valuation_in_breakdown_and_metrics(self) -> None:
+        info = self._make_info(priceToBook=3.0)
+        result = compute_fundamental_score(info, 0.15, "india", "moderate")
+        assert "valuation" in result["breakdown"]
+        assert "price_to_book" in result["key_metrics"]
+
+    def test_extreme_price_to_book_lowers_score_and_warns(self) -> None:
+        """A MAZDOCK-style name: great fundamentals but P/B ~10x is not QARP."""
+        strong = dict(returnOnEquity=0.28, revenueGrowth=0.21, debtToEquity=4.0,
+                      heldPercentInstitutions=0.30, trailingPE=38.0)
+        cheap     = compute_fundamental_score({**strong, "priceToBook": 2.0},  0.30, "india", "moderate")
+        expensive = compute_fundamental_score({**strong, "priceToBook": 10.2}, 0.30, "india", "moderate")
+        assert expensive["fundamental_score"] < cheap["fundamental_score"]
+        assert any("P/B" in w for w in expensive["warnings"])
+
+    def test_negative_price_to_book_does_not_score_perfect(self) -> None:
+        """Buyback names (MCD, ABBV) have negative book equity — must NOT read as 'cheap'."""
+        info = self._make_info(priceToBook=-149.0, trailingPE=25.0)
+        result = compute_fundamental_score(info, 0.14, "us", "moderate")
+        # Should fall back to P/E (25x → moderate), never the P/B<=1 perfect score
+        assert "P/B" not in result["breakdown"]["valuation"]
+        assert "P/E" in result["breakdown"]["valuation"]
+        assert not any("P/B" in w for w in result["warnings"])
+
+    def test_negative_pe_and_no_book_is_neutral_not_cheap(self) -> None:
+        """Loss-making with no usable book value → valuation neutral, not a perfect 'cheap'."""
+        info = self._make_info(priceToBook=-3.0, trailingPE=-12.0)
+        result = compute_fundamental_score(info, 0.10, "us", "moderate")
+        assert "unavailable" in result["breakdown"]["valuation"].lower()
+
 
 class TestEnrichCandidates:
     """Integration-level tests for the enrichment pipeline — mocked I/O."""

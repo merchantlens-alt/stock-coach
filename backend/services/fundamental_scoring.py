@@ -39,25 +39,28 @@ _CACHE_TTL = 24 * 3600   # 24 h — fundamentals are slow-moving
 
 _WEIGHTS: dict[str, dict[str, float]] = {
     "aggressive": {
-        "historical_performance": 0.35,
-        "revenue_growth":         0.25,
-        "profitability_roe":      0.20,
+        "historical_performance": 0.30,
+        "revenue_growth":         0.22,
+        "profitability_roe":      0.18,
         "debt_safety":            0.10,
         "institutional_interest": 0.10,
+        "valuation":              0.10,   # growth investors tolerate premium; still can't ignore it
     },
     "moderate": {
-        "historical_performance": 0.25,
-        "revenue_growth":         0.20,
-        "profitability_roe":      0.25,
-        "debt_safety":            0.20,
+        "historical_performance": 0.20,
+        "revenue_growth":         0.18,
+        "profitability_roe":      0.22,
+        "debt_safety":            0.18,
         "institutional_interest": 0.10,
+        "valuation":              0.12,
     },
     "conservative": {
-        "historical_performance": 0.20,
-        "revenue_growth":         0.15,
-        "profitability_roe":      0.25,
+        "historical_performance": 0.15,
+        "revenue_growth":         0.10,
+        "profitability_roe":      0.20,
         "debt_safety":            0.30,
         "institutional_interest": 0.10,
+        "valuation":              0.15,   # conservative investors must not overpay
     },
 }
 
@@ -131,6 +134,42 @@ def _score_debt(de_raw: Optional[float]) -> tuple[float, str]:
     return 0.0, f"D/E {de:.2f}x (dangerous leverage)"
 
 
+def _score_valuation(pb: Optional[float], pe: Optional[float]) -> tuple[float, str]:
+    """
+    Price-to-book as the primary valuation anchor, with P/E as fallback.
+    A deep dip that still leaves you at P/B 10x is not margin of safety.
+
+    Only POSITIVE P/B is a valid value signal. Negative P/B means negative book
+    equity (heavy buybacks like MCD/ABBV, or accumulated losses) — it tells us
+    nothing about cheapness, so we fall back to P/E. Likewise only positive P/E
+    is meaningful; a negative P/E (loss-making) is left to ROE/margins to penalise.
+    """
+    if pb is not None and pb > 0:
+        if pb <= 1.0:
+            return 10.0, f"P/B {pb:.1f}x (at or below book — strong margin of safety)"
+        if pb <= 2.5:
+            return 8.0,  f"P/B {pb:.1f}x (reasonable premium for quality)"
+        if pb <= 4.0:
+            return 6.0,  f"P/B {pb:.1f}x (moderate premium)"
+        if pb <= 6.0:
+            return 4.0,  f"P/B {pb:.1f}x (expensive — dip does not create deep value)"
+        if pb <= 10.0:
+            return 2.0,  f"P/B {pb:.1f}x (very expensive — price dip still leaves high premium)"
+        return 0.5,      f"P/B {pb:.1f}x (extreme premium — even after dip, far from value)"
+
+    # Fallback: P/E, only meaningful when positive (profitable)
+    if pe is not None and pe > 0:
+        if pe <= 15:
+            return 8.0, f"P/E {pe:.0f}x (reasonable)"
+        if pe <= 25:
+            return 6.0, f"P/E {pe:.0f}x (moderate premium)"
+        if pe <= 40:
+            return 4.0, f"P/E {pe:.0f}x (expensive)"
+        return 1.5, f"P/E {pe:.0f}x (very expensive — limited margin of safety)"
+
+    return 5.0, "valuation data unavailable (negative book value / no earnings)"
+
+
 def _score_institutional(held_pct: Optional[float]) -> tuple[float, str]:
     """heldPercentInstitutions is a decimal (0.35 = 35%)."""
     if held_pct is None:
@@ -183,6 +222,7 @@ def compute_fundamental_score(
     de_raw     = _safe("debtToEquity")
     inst_held  = _safe("heldPercentInstitutions")
     pe         = _safe("trailingPE")
+    pb         = _safe("priceToBook")
     div_yield  = _safe("dividendYield")
     eps_growth = _safe("earningsGrowth")
     profit_margin = _safe("profitMargins")
@@ -193,6 +233,7 @@ def compute_fundamental_score(
     rev_score,  rev_desc  = _score_revenue_growth(rev_growth)
     debt_score, debt_desc = _score_debt(de_raw)
     inst_score, inst_desc = _score_institutional(inst_held)
+    val_score,  val_desc  = _score_valuation(pb, pe)
 
     breakdown = {
         "historical_performance": (hist_score, hist_desc),
@@ -200,6 +241,7 @@ def compute_fundamental_score(
         "revenue_growth":         (rev_score,  rev_desc),
         "debt_safety":            (debt_score, debt_desc),
         "institutional_interest": (inst_score, inst_desc),
+        "valuation":              (val_score,  val_desc),
     }
 
     # Weighted total (0–10)
@@ -211,7 +253,7 @@ def compute_fundamental_score(
     # Risk-profile bonuses / penalties
     if risk_profile == "conservative":
         if pe and pe > 30:
-            total -= 1.0
+            total -= 0.5   # softened — the valuation component now carries most of this
         if div_yield and div_yield > 0.02:
             total += 0.5   # bonus for income component
     elif risk_profile == "aggressive":
@@ -242,8 +284,17 @@ def compute_fundamental_score(
         warnings.append(f"Revenue contracting ({rev_growth*100:.1f}% YoY)")
     if de_raw is not None and de_raw / 100 > 1.5:
         warnings.append(f"High leverage (D/E {de_raw/100:.1f}x) — interest cost risk")
-    if risk_profile == "conservative" and pe and pe > 30:
-        warnings.append(f"P/E {pe:.0f}x is expensive for a conservative portfolio")
+    # Valuation warnings — apply to all profiles, thresholds shift by profile.
+    # Only positive P/B is meaningful (negative = negative book equity, not "cheap").
+    pb_warn_threshold = 6.0 if risk_profile == "conservative" else 8.0
+    if pb is not None and pb > pb_warn_threshold:
+        warnings.append(
+            f"P/B {pb:.1f}x — expensive even after price dip; "
+            f"paying {pb:.0f}x book for every rupee of assets limits margin of safety"
+        )
+    pe_warn_threshold = 30 if risk_profile == "conservative" else 45
+    if pe is not None and pe > pe_warn_threshold:
+        warnings.append(f"P/E {pe:.0f}x — growth priced in; limited room for error")
 
     key_metrics: dict[str, Any] = {}
     if five_yr_cagr is not None:
@@ -256,6 +307,8 @@ def compute_fundamental_score(
         key_metrics["debt_equity"] = f"{de_raw/100:.2f}x"
     if pe is not None:
         key_metrics["pe_ratio"] = f"{pe:.1f}x"
+    if pb is not None:
+        key_metrics["price_to_book"] = f"{pb:.1f}x"
     if profit_margin is not None:
         key_metrics["profit_margin"] = f"{profit_margin*100:.1f}%"
     if div_yield and div_yield > 0:

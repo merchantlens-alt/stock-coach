@@ -32,7 +32,11 @@ _INDIA_SECTORS: list[dict[str, Any]] = [
         "cyclicality": "low",
         "growth_tag": "High Growth",
         "macro_theme": "AI services exports, digital transformation; ~35% of Nifty IT revenue from US clients",
-        "tickers": ["TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "TECHM.NS", "LTIM.NS"],
+        "tickers": [
+            "TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "TECHM.NS", "LTIM.NS",
+            "PERSISTENT.NS", "MPHASIS.NS", "COFORGE.NS", "KPIT.NS", "TATAELXSI.NS",
+            "HAPPSTMNDS.NS", "OFSS.NS",
+        ],
     },
     {
         "name": "Pharmaceuticals & Healthcare",
@@ -128,7 +132,7 @@ _INDIA_SECTORS: list[dict[str, Any]] = [
         "cyclicality": "low",
         "growth_tag": "Defensive",
         "macro_theme": "5G rollout, ARPU expansion, data consumption 2x by 2028; tower REITs emerging",
-        "tickers": ["BHARTIARTL.NS", "INDUSINDBK.NS", "RAILTEL.NS", "HCLTECH.NS", "TATACOMM.NS"],
+        "tickers": ["BHARTIARTL.NS", "TATACOMM.NS", "RAILTEL.NS", "STLTECH.NS", "HFCL.NS", "TEJASNET.NS"],
     },
     {
         "name": "Agri-Tech & Food Processing",
@@ -192,7 +196,7 @@ _INDIA_SECTORS: list[dict[str, Any]] = [
         "cyclicality": "mid",
         "growth_tag": "Emerging",
         "macro_theme": "NEP 2020 reform; K-12 hybrid model; NEP vocational training push",
-        "tickers": ["CAREEREDGE.NS", "MTARTECH.NS", "NAVNETEDUL.NS", "PRAXIS.NS"],
+        "tickers": ["CAREEREDGE.NS", "NAVNETEDUL.NS", "PRAXIS.NS", "NIITLTD.NS", "CLNINDIA.NS"],
     },
     {
         "name": "Metals & Mining",
