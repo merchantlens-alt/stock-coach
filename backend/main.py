@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from jose import JWTError
 
-from api.routes import advisor, auth, conviction, funds, gainers, growth_triggers, health, investor_profile, portfolio
+from api.routes import advisor, auth, conviction, funds, gainers, growth_triggers, health, investor_profile, portfolio, sectors
 from core.config import get_settings
 from core.logging import configure_logging, get_logger
 from core.user_auth import decode_access_token
@@ -121,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(conviction.router, prefix="/api")
     app.include_router(portfolio.router, prefix="/api")
     app.include_router(funds.router, prefix="/api")
+    app.include_router(sectors.router, prefix="/api")
 
     # Serve React frontend — only if the built static directory exists (production)
     static_dir = Path(__file__).parent / "static"

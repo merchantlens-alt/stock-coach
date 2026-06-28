@@ -935,3 +935,44 @@ class AdvisorEvaluateResponse(BaseModel):
     profile_horizon_years: int
     from_cache: bool = False
     evaluated_at: Optional[datetime] = None
+
+
+# ── Sector Scanner schemas ─────────────────────────────────────────────────────
+
+SectorCyclicality = Literal["low", "mid", "high"]
+SectorGrowthTag   = Literal["High Growth", "Defensive", "Cyclical-Mod", "Cyclical", "Emerging"]
+
+
+class SectorStock(BaseModel):
+    ticker: str
+    name: str
+    price: Optional[float] = None
+    change_1yr_pct: Optional[float] = None     # % return over past 1 year
+    change_6m_pct:  Optional[float] = None     # % return over past 6 months
+    pe_ratio: Optional[float] = None
+    market_cap_cr: Optional[float] = None      # crores for India, USD millions for US
+    fifty_two_week_high: Optional[float] = None
+    fifty_two_week_low:  Optional[float] = None
+    pct_from_52w_high: Optional[float] = None  # negative = below 52w high (dip indicator)
+    fundamental_score: Optional[float] = None  # 0–10 composite quality score
+    grade: Optional[str] = None                # A / B / C / D / F
+    fundamental_rank: Optional[int] = None     # rank by fundamental_score within sector
+    opportunity_rank: Optional[int] = None     # rank after applying dip bonus
+    is_dip_opportunity: bool = False           # True when opportunity_rank < fundamental_rank
+
+
+class SectorInfo(BaseModel):
+    name: str
+    rank: int
+    sort_score: int                            # 0-100 composite: growth - cyclicality + macro tailwind
+    cyclicality: SectorCyclicality
+    growth_tag: SectorGrowthTag
+    macro_theme: str                           # 1-line structural tailwind / headwind
+    top_stocks: list[SectorStock] = Field(default_factory=list)
+
+
+class SectorScanResponse(BaseModel):
+    market: Market
+    sectors: list[SectorInfo] = Field(default_factory=list)
+    from_cache: bool = False
+    generated_at: datetime = Field(default_factory=datetime.utcnow)

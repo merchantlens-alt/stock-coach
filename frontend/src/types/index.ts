@@ -552,11 +552,6 @@ export interface AllocationPlanResponse {
   user_preferences_applied?: Record<string, number>;
 }
 
-export type AllocationPreferences = Record<string, number>;
-
-export const ASSET_CLASSES = ["India Equity", "US Equity", "Debt", "Gold", "Real Estate"] as const;
-export type AssetClass = typeof ASSET_CLASSES[number];
-
 export interface AdvisorRecommendation {
   verdict: AdvisorVerdict;
   confidence: AdvisorConfidence;
@@ -631,3 +626,47 @@ export interface PortfolioXrayResponse {
   funds: XrayFundLine[];
   generated_at: string;
 }
+
+// ── Sector Scanner ─────────────────────────────────────────────────────────────
+
+export type SectorCyclicality = "low" | "mid" | "high";
+export type SectorGrowthTag   = "High Growth" | "Defensive" | "Cyclical-Mod" | "Cyclical" | "Emerging";
+
+export interface SectorStock {
+  ticker: string;
+  name: string;
+  price?: number;
+  change_1yr_pct?: number;
+  change_6m_pct?: number;
+  pe_ratio?: number;
+  market_cap_cr?: number;
+  fifty_two_week_high?: number;
+  fifty_two_week_low?: number;
+  pct_from_52w_high?: number;
+  fundamental_score?: number;
+  grade?: string;
+  fundamental_rank?: number;
+  opportunity_rank?: number;
+  is_dip_opportunity?: boolean;
+}
+
+export interface SectorInfo {
+  name: string;
+  rank: number;
+  sort_score: number;
+  cyclicality: SectorCyclicality;
+  growth_tag: SectorGrowthTag;
+  macro_theme: string;
+  top_stocks: SectorStock[];
+}
+
+export interface SectorScanResponse {
+  market: Market;
+  sectors: SectorInfo[];
+  from_cache: boolean;
+  generated_at: string;
+}
+
+export type AllocationPreferences = Record<string, number>;
+export const ASSET_CLASSES = ["India Equity", "US Equity", "Debt", "Gold", "Real Estate"] as const;
+export type AssetClass = typeof ASSET_CLASSES[number];

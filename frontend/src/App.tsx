@@ -11,11 +11,12 @@ import { FundsPage } from "./pages/FundsPage";
 import { GlossaryPage } from "./pages/GlossaryPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { ProfilePage } from "./pages/ProfilePage";
+import { SectorsPage } from "./pages/SectorsPage";
 import { useAuth } from "./hooks/useAuth";
 import type { Market } from "./types";
 
 // Single flat tab — no Funds/Stocks mode split.
-export type AppTab = "plan" | "stocks" | "funds" | "thesis" | "tracker";
+export type AppTab = "plan" | "stocks" | "sectors" | "funds" | "thesis" | "tracker";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false } },
@@ -23,7 +24,10 @@ const queryClient = new QueryClient({
 
 // Inner app — needs to be inside QueryClientProvider so it can call hooks
 function AppInner({ username, onLogout }: { username: string; onLogout: () => void }) {
-  const [tab, setTab]                 = useState<AppTab>("plan");
+  // Land on SECTORS by default — the allocation plan (expensive AI call) only
+  // fetches when the user actually navigates to the PLAN tab, since that page
+  // is conditionally mounted and its query is gated behind the mount.
+  const [tab, setTab]                 = useState<AppTab>("sectors");
   const [guideOpen, setGuideOpen]     = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
 
@@ -95,6 +99,8 @@ function AppInner({ username, onLogout }: { username: string; onLogout: () => vo
           onBuildThesis={handleBuildThesis}
           onSetupProfile={() => setProfileOpen(true)}
         />
+      ) : tab === "sectors" ? (
+        <SectorsPage />
       ) : tab === "funds" ? (
         <FundsPage />
       ) : tab === "thesis" ? (

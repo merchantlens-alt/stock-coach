@@ -16,7 +16,7 @@ from agents.advisor_agent import AdvisorAgent
 from agents.allocation_advisor_agent import AllocationAdvisorAgent
 from api.deps import (
     get_advisor_agent, get_allocation_advisor, get_cache,
-    get_current_user, get_investor_profile_store, get_market_data,
+    get_current_user, get_investor_profile_store,
 )
 from core.exceptions import AIAgentError
 from core.logging import get_logger
@@ -29,9 +29,8 @@ from models.schemas import (
     UserRecord,
 )
 from services.cache import CacheBackend
-from services.fundamental_scoring import enrich_candidates_with_fundamentals
 from services.investor_profile_store import InvestorProfileStore
-from services.market_data import MarketDataService
+from services.quality_dip_screener import get_quality_dip_candidates
 
 router = APIRouter(prefix="/advisor", tags=["advisor"])
 log = get_logger(__name__)
@@ -45,24 +44,26 @@ def _profile_hash(profile_dict: dict) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
-def _filter_candidates(gainers: list, max_n: int = 15) -> list[dict]:
-    """Keep quality-scored stocks; prefer confirmed/catalyst tiers."""
-    scored = [
-        g for g in gainers
-        if g.signal_tier in ("confirmed", "catalyst") or (g.quality_score or 0) >= 50
-    ]
-    scored.sort(key=lambda g: (-(g.quality_score or 0)))
-    return [
-        {
-            "ticker": g.ticker,
-            "name": g.name,
-            "sector": g.sector or "Unknown",
-            "quality_score": round(g.quality_score or 0, 1),
-            "signal_tier": g.signal_tier,
-            "change_pct": round(g.change_pct, 2),
-        }
-        for g in scored[:max_n]
-    ]
+
+async def _fetch_dip_candidates(
+    risk_profile: str,
+    cache: CacheBackend,
+    refresh: bool = False,
+) -> tuple[list[dict], list[dict]]:
+    """Fetch QARP dip candidates for India and US in parallel."""
+    import asyncio
+    india, us = await asyncio.gather(
+        get_quality_dip_candidates("india", risk_profile, cache, refresh=refresh),
+        get_quality_dip_candidates("us",    risk_profile, cache, refresh=refresh),
+        return_exceptions=True,
+    )
+    india_candidates = india if not isinstance(india, Exception) else []
+    us_candidates    = us    if not isinstance(us,    Exception) else []
+    if isinstance(india, Exception):
+        log.warning("advisor.dip_candidates.india_failed", error=str(india))
+    if isinstance(us, Exception):
+        log.warning("advisor.dip_candidates.us_failed", error=str(us))
+    return india_candidates, us_candidates
 
 
 @router.get("/allocation-plan", response_model=AllocationPlanResponse)
@@ -70,7 +71,6 @@ async def get_allocation_plan(
     store: Annotated[InvestorProfileStore, Depends(get_investor_profile_store)],
     cache: Annotated[CacheBackend, Depends(get_cache)],
     agent: Annotated[AllocationAdvisorAgent, Depends(get_allocation_advisor)],
-    market_data: Annotated[MarketDataService, Depends(get_market_data)],
     current_user: Annotated[UserRecord, Depends(get_current_user)],
     refresh: Annotated[bool, Query()] = False,
 ) -> AllocationPlanResponse:
@@ -90,26 +90,8 @@ async def get_allocation_plan(
         plan.from_cache = True
         return plan
 
-    # Fetch live stock candidates for both markets in parallel; never block the plan on failure
-    import asyncio
-    india_raw, us_raw = await asyncio.gather(
-        market_data.get_gainers("india"),
-        market_data.get_gainers("us"),
-        return_exceptions=True,
-    )
-    india_candidates = _filter_candidates(india_raw) if not isinstance(india_raw, Exception) else []
-    us_candidates = _filter_candidates(us_raw) if not isinstance(us_raw, Exception) else []
-    if isinstance(india_raw, Exception):
-        log.warning("advisor.allocation_plan.india_candidates_failed", error=str(india_raw))
-    if isinstance(us_raw, Exception):
-        log.warning("advisor.allocation_plan.us_candidates_failed", error=str(us_raw))
-
-    # Enrich candidates with fundamental scores — use investor's actual risk profile
-    risk_profile = profile.risk_tolerance  # "aggressive" | "moderate" | "conservative"
-    india_candidates, us_candidates = await asyncio.gather(
-        enrich_candidates_with_fundamentals(india_candidates, "india", risk_profile, cache),
-        enrich_candidates_with_fundamentals(us_candidates, "us", risk_profile, cache),
-    )
+    risk_profile = profile.risk_tolerance
+    india_candidates, us_candidates = await _fetch_dip_candidates(risk_profile, cache, refresh=refresh)
 
     log.info(
         "advisor.allocation_plan.generate",
@@ -135,7 +117,6 @@ async def customize_allocation_plan(
     store: Annotated[InvestorProfileStore, Depends(get_investor_profile_store)],
     cache: Annotated[CacheBackend, Depends(get_cache)],
     agent: Annotated[AllocationAdvisorAgent, Depends(get_allocation_advisor)],
-    market_data: Annotated[MarketDataService, Depends(get_market_data)],
     current_user: Annotated[UserRecord, Depends(get_current_user)],
 ) -> AllocationPlanResponse:
     """Generate a plan with user-specified allocation overrides. Never cached."""
@@ -149,20 +130,8 @@ async def customize_allocation_plan(
     if prefs and sum(prefs.values()) > 100:
         raise HTTPException(status_code=422, detail="User allocation preferences sum to more than 100%.")
 
-    import asyncio
-    india_raw, us_raw = await asyncio.gather(
-        market_data.get_gainers("india"),
-        market_data.get_gainers("us"),
-        return_exceptions=True,
-    )
-    india_candidates = _filter_candidates(india_raw) if not isinstance(india_raw, Exception) else []
-    us_candidates    = _filter_candidates(us_raw)    if not isinstance(us_raw,    Exception) else []
-
     risk_profile = profile.risk_tolerance
-    india_candidates, us_candidates = await asyncio.gather(
-        enrich_candidates_with_fundamentals(india_candidates, "india", risk_profile, cache),
-        enrich_candidates_with_fundamentals(us_candidates,   "us",    risk_profile, cache),
-    )
+    india_candidates, us_candidates = await _fetch_dip_candidates(risk_profile, cache)
 
     log.info(
         "advisor.allocation_plan.customize",

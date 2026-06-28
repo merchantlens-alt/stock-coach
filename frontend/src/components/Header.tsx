@@ -1,5 +1,5 @@
 import {
-  BookOpen, Layers, LayoutDashboard, Lightbulb, LogOut, Target, TrendingUp, UserCircle,
+  BookOpen, Globe, Layers, LayoutDashboard, Lightbulb, LogOut, Target, TrendingUp, UserCircle,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useInvestorProfile } from "../hooks/useAdvisor";
@@ -25,6 +25,7 @@ interface Tab {
 const TABS: Tab[] = [
   { key: "plan",    label: "PLAN",    icon: <LayoutDashboard size={12} /> },
   { key: "stocks",  label: "STOCKS",  icon: <TrendingUp size={12} /> },
+  { key: "sectors", label: "SECTORS", icon: <Globe size={12} /> },
   { key: "funds",   label: "FUNDS",   icon: <Layers size={12} /> },
   { key: "thesis",  label: "THESIS",  icon: <Lightbulb size={12} /> },
   { key: "tracker", label: "TRACKER", icon: <Target size={12} /> },

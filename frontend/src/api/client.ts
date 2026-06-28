@@ -1,4 +1,4 @@
-import type { AddPortfolioEntryRequest, AdvisorEvaluateRequest, AdvisorEvaluateResponse, AllocationPlanResponse, CompareRequest, CompareResponse, ConvictionRequest, ConvictionResponse, FundScanResponse, GainerDetail, GrowthTriggersReport, InvestorProfile, Market, ModelPortfolioResponse, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PortfolioXrayResponse, PriceHistory, RiskProfile, StockAnalysisResponse, XrayRequest } from "../types";
+import type { AddPortfolioEntryRequest, AdvisorEvaluateRequest, AdvisorEvaluateResponse, AllocationPlanResponse, CompareRequest, CompareResponse, ConvictionRequest, ConvictionResponse, FundScanResponse, GainerDetail, GrowthTriggersReport, InvestorProfile, Market, ModelPortfolioResponse, PortfolioEntry, PortfolioPricesResponse, PortfolioSummary, PortfolioXrayResponse, PriceHistory, RiskProfile, SectorScanResponse, StockAnalysisResponse, XrayRequest } from "../types";
 
 const BASE_URL = "/api";
 const TOKEN_KEY = "sc_token";
@@ -171,4 +171,11 @@ export const api = {
       body: JSON.stringify(body),
       headers: { "Content-Type": "application/json" },
     }),
+
+  /** Sector scan — ranked sectors with top 5 stocks each. Cached 24 h. */
+  getSectors: (market: Market, options: FetchOptions = {}): Promise<SectorScanResponse> => {
+    const params = new URLSearchParams({ market });
+    if (options.refresh) params.set("refresh", "true");
+    return fetchJSON(`/sectors/${market}?${params.toString()}`, options);
+  },
 };
