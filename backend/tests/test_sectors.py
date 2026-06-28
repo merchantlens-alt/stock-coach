@@ -7,6 +7,25 @@ import pytest
 from fastapi.testclient import TestClient
 
 from models.schemas import SectorInfo, SectorScanResponse, SectorStock
+from services.sector_service import _opportunity_score
+
+
+class TestOpportunityScore:
+    """The opportunity rank must enforce a quality floor — a dip on junk is not an opportunity."""
+
+    def test_strong_quality_outranks_weak_with_big_dip(self) -> None:
+        strong = {"fundamental_score": 8.5, "pct_from_52w_high": 0.0}    # great, no dip
+        weak   = {"fundamental_score": 5.0, "pct_from_52w_high": -35.0}  # junk, huge dip
+        assert _opportunity_score(strong) > _opportunity_score(weak)
+
+    def test_dip_rewards_quality_names(self) -> None:
+        no_dip = {"fundamental_score": 7.0, "pct_from_52w_high": 0.0}
+        dipped = {"fundamental_score": 7.0, "pct_from_52w_high": -25.0}
+        assert _opportunity_score(dipped) > _opportunity_score(no_dip)
+
+    def test_sub_floor_stock_gets_no_dip_credit(self) -> None:
+        below = {"fundamental_score": 5.0, "pct_from_52w_high": -30.0}
+        assert _opportunity_score(below) == 5.0 * 0.6   # dip bonus denied
 
 
 def _make_sector_response(market: str = "india") -> SectorScanResponse:

@@ -37,36 +37,41 @@ _CACHE_TTL = 24 * 3600   # 24 h — fundamentals are slow-moving
 # Bump this whenever the SCORING LOGIC changes (new component, reweighting,
 # threshold change). It is part of the score cache key, so a deploy with a new
 # version silently invalidates every stale cached score — no manual refresh or
-# Redis flush needed. v2 = added valuation (P/B) component.
-_SCORE_CACHE_VERSION = "v2"
+# Redis flush needed.
+#   v2 = added valuation (P/B) component
+#   v3 = GARP valuation (P/E primary; P/B only penalised when ROE doesn't justify it)
+#   v4 = valuation reweighted up (~0.18-0.22) so price genuinely moves the grade
+#   v5 = dividend_yield fixed (yfinance now returns a percent, was ×100 wrong)
+#   v6 = cyclical sectors valued on P/B (P/E misleads at cycle peaks/troughs)
+_SCORE_CACHE_VERSION = "v6"
 
 
 # ── Weights by risk profile ──────────────────────────────────────────────────
 
 _WEIGHTS: dict[str, dict[str, float]] = {
     "aggressive": {
-        "historical_performance": 0.30,
-        "revenue_growth":         0.22,
+        "historical_performance": 0.24,
+        "revenue_growth":         0.20,
         "profitability_roe":      0.18,
         "debt_safety":            0.10,
         "institutional_interest": 0.10,
-        "valuation":              0.10,   # growth investors tolerate premium; still can't ignore it
+        "valuation":              0.18,   # even growth investors must respect price
     },
     "moderate": {
-        "historical_performance": 0.20,
-        "revenue_growth":         0.18,
+        "historical_performance": 0.15,
+        "revenue_growth":         0.16,
         "profitability_roe":      0.22,
-        "debt_safety":            0.18,
+        "debt_safety":            0.17,
         "institutional_interest": 0.10,
-        "valuation":              0.12,
+        "valuation":              0.20,   # QARP: price is a first-class factor, not a footnote
     },
     "conservative": {
-        "historical_performance": 0.15,
+        "historical_performance": 0.12,
         "revenue_growth":         0.10,
-        "profitability_roe":      0.20,
+        "profitability_roe":      0.18,
         "debt_safety":            0.30,
-        "institutional_interest": 0.10,
-        "valuation":              0.15,   # conservative investors must not overpay
+        "institutional_interest": 0.08,
+        "valuation":              0.22,   # conservative investors must not overpay
     },
 }
 
@@ -140,40 +145,92 @@ def _score_debt(de_raw: Optional[float]) -> tuple[float, str]:
     return 0.0, f"D/E {de:.2f}x (dangerous leverage)"
 
 
-def _score_valuation(pb: Optional[float], pe: Optional[float]) -> tuple[float, str]:
-    """
-    Price-to-book as the primary valuation anchor, with P/E as fallback.
-    A deep dip that still leaves you at P/B 10x is not margin of safety.
+_ROE_JUSTIFIES_PREMIUM = 0.18   # ROE >= 18% earns a high price-to-book
 
-    Only POSITIVE P/B is a valid value signal. Negative P/B means negative book
-    equity (heavy buybacks like MCD/ABBV, or accumulated losses) — it tells us
-    nothing about cheapness, so we fall back to P/E. Likewise only positive P/E
-    is meaningful; a negative P/E (loss-making) is left to ROE/margins to penalise.
-    """
-    if pb is not None and pb > 0:
-        if pb <= 1.0:
-            return 10.0, f"P/B {pb:.1f}x (at or below book — strong margin of safety)"
-        if pb <= 2.5:
-            return 8.0,  f"P/B {pb:.1f}x (reasonable premium for quality)"
-        if pb <= 4.0:
-            return 6.0,  f"P/B {pb:.1f}x (moderate premium)"
-        if pb <= 6.0:
-            return 4.0,  f"P/B {pb:.1f}x (expensive — dip does not create deep value)"
-        if pb <= 10.0:
-            return 2.0,  f"P/B {pb:.1f}x (very expensive — price dip still leaves high premium)"
-        return 0.5,      f"P/B {pb:.1f}x (extreme premium — even after dip, far from value)"
+# Yahoo `sector` values whose earnings swing hard with the economic cycle. For
+# these, P/E is a trap (trough earnings → high P/E looks "expensive"; peak earnings
+# → low P/E looks "cheap"), so valuation is anchored on the far-steadier P/B.
+_CYCLICAL_YF_SECTORS = {"Basic Materials", "Energy", "Consumer Cyclical"}
 
-    # Fallback: P/E, only meaningful when positive (profitable)
+
+def _is_cyclical(info: dict[str, Any]) -> bool:
+    return info.get("sector") in _CYCLICAL_YF_SECTORS
+
+
+def _score_valuation(
+    pb: Optional[float],
+    pe: Optional[float],
+    roe: Optional[float],
+    cyclical: bool = False,
+) -> tuple[float, str]:
+    """
+    Growth-at-a-reasonable-price (GARP) valuation.
+
+    For CYCLICALS (metals, energy, autos): P/B is the anchor — earnings (P/E) swing
+    with the cycle and mislead, so a low P/E may just be peak earnings and a high P/E
+    just a trough. Book value is far steadier. ROE is NOT used to excuse a high P/B
+    here, because a cyclical's ROE is also peak-inflated.
+
+    For NON-CYCLICALS: P/E is the primary anchor (it self-adjusts for quality better
+    than P/B). P/B is a secondary check — a high price-to-book is JUSTIFIED when ROE
+    is high (SUZLON at 8x book / 40% ROE is fair), but a red flag when not earned.
+
+    Only positive P/E is meaningful; negative P/E (loss-making) falls back to P/B,
+    and negative P/B (buyback names like MCD/ABBV) falls through to neutral.
+    """
+    if cyclical:
+        if pb is not None and pb > 0:
+            if pb <= 1.0:
+                return 9.0, f"P/B {pb:.1f}x (cyclical — cheap on book)"
+            if pb <= 2.0:
+                return 7.0, f"P/B {pb:.1f}x (cyclical — fair on book)"
+            if pb <= 3.5:
+                return 4.5, f"P/B {pb:.1f}x (cyclical — full on book)"
+            if pb <= 5.0:
+                return 2.5, f"P/B {pb:.1f}x (cyclical — expensive on book)"
+            return 1.0,     f"P/B {pb:.1f}x (cyclical — very expensive, likely cycle peak)"
+        # No book value — fall back to P/E but neutralise its cyclical distortion
+        if pe is not None and pe > 0:
+            if pe <= 10:
+                return 6.0, f"P/E {pe:.0f}x (cyclical — low, but earnings may be peaking)"
+            if pe <= 25:
+                return 5.0, f"P/E {pe:.0f}x (cyclical)"
+            return 3.5,     f"P/E {pe:.0f}x (cyclical — earnings may be depressed)"
+        return 5.0, "valuation data unavailable"
+
+    roe_justifies_premium = roe is not None and roe >= _ROE_JUSTIFIES_PREMIUM
+
+    # Primary: P/E when the company is profitable
     if pe is not None and pe > 0:
         if pe <= 15:
-            return 8.0, f"P/E {pe:.0f}x (reasonable)"
-        if pe <= 25:
-            return 6.0, f"P/E {pe:.0f}x (moderate premium)"
-        if pe <= 40:
-            return 4.0, f"P/E {pe:.0f}x (expensive)"
-        return 1.5, f"P/E {pe:.0f}x (very expensive — limited margin of safety)"
+            base, desc = 9.0, f"P/E {pe:.0f}x (cheap)"
+        elif pe <= 25:
+            base, desc = 7.0, f"P/E {pe:.0f}x (fair)"
+        elif pe <= 40:
+            base, desc = 4.5, f"P/E {pe:.0f}x (expensive)"
+        elif pe <= 60:
+            base, desc = 2.5, f"P/E {pe:.0f}x (very expensive)"
+        else:
+            base, desc = 1.0, f"P/E {pe:.0f}x (extreme)"
+    # Fallback: P/B when earnings are unusable (negative/zero P/E)
+    elif pb is not None and pb > 0:
+        if pb <= 1.5:
+            base, desc = 9.0, f"P/B {pb:.1f}x (cheap on assets)"
+        elif pb <= 3.0:
+            base, desc = 7.0, f"P/B {pb:.1f}x (fair)"
+        elif pb <= 6.0:
+            base, desc = 4.5, f"P/B {pb:.1f}x (expensive)"
+        else:
+            base, desc = 2.0, f"P/B {pb:.1f}x (very expensive)"
+    else:
+        return 5.0, "valuation data unavailable (negative book value / no earnings)"
 
-    return 5.0, "valuation data unavailable (negative book value / no earnings)"
+    # Secondary: an extreme book premium NOT supported by returns is a real red flag
+    if pb is not None and pb > 6.0 and not roe_justifies_premium:
+        base = min(base, 2.0)
+        desc += f"; P/B {pb:.1f}x not supported by ROE"
+
+    return round(base, 1), desc
 
 
 def _score_institutional(held_pct: Optional[float]) -> tuple[float, str]:
@@ -239,7 +296,8 @@ def compute_fundamental_score(
     rev_score,  rev_desc  = _score_revenue_growth(rev_growth)
     debt_score, debt_desc = _score_debt(de_raw)
     inst_score, inst_desc = _score_institutional(inst_held)
-    val_score,  val_desc  = _score_valuation(pb, pe)
+    cyclical = _is_cyclical(info)
+    val_score,  val_desc  = _score_valuation(pb, pe, roe, cyclical=cyclical)
 
     breakdown = {
         "historical_performance": (hist_score, hist_desc),
@@ -260,7 +318,7 @@ def compute_fundamental_score(
     if risk_profile == "conservative":
         if pe and pe > 30:
             total -= 0.5   # softened — the valuation component now carries most of this
-        if div_yield and div_yield > 0.02:
+        if div_yield and div_yield > 2.0:   # yfinance dividendYield is a percent (5.5 = 5.5%)
             total += 0.5   # bonus for income component
     elif risk_profile == "aggressive":
         if eps_growth and eps_growth > 0.20:
@@ -290,17 +348,25 @@ def compute_fundamental_score(
         warnings.append(f"Revenue contracting ({rev_growth*100:.1f}% YoY)")
     if de_raw is not None and de_raw / 100 > 1.5:
         warnings.append(f"High leverage (D/E {de_raw/100:.1f}x) — interest cost risk")
-    # Valuation warnings — apply to all profiles, thresholds shift by profile.
-    # Only positive P/B is meaningful (negative = negative book equity, not "cheap").
-    pb_warn_threshold = 6.0 if risk_profile == "conservative" else 8.0
-    if pb is not None and pb > pb_warn_threshold:
-        warnings.append(
-            f"P/B {pb:.1f}x — expensive even after price dip; "
-            f"paying {pb:.0f}x book for every rupee of assets limits margin of safety"
-        )
-    pe_warn_threshold = 30 if risk_profile == "conservative" else 45
-    if pe is not None and pe > pe_warn_threshold:
-        warnings.append(f"P/E {pe:.0f}x — growth priced in; limited room for error")
+    # Valuation warnings. For cyclicals, P/B is the signal (P/E is unreliable); a rich
+    # book multiple flags a likely cycle peak. For non-cyclicals, a high P/B only warns
+    # when ROE doesn't justify it, plus a separate P/E warning.
+    if cyclical:
+        if pb is not None and pb > 3.5:
+            warnings.append(
+                f"P/B {pb:.1f}x on a cyclical — book multiple is rich, likely near a cycle peak"
+            )
+    else:
+        roe_justifies_premium = roe is not None and roe >= _ROE_JUSTIFIES_PREMIUM
+        pb_warn_threshold = 6.0 if risk_profile == "conservative" else 8.0
+        if pb is not None and pb > pb_warn_threshold and not roe_justifies_premium:
+            warnings.append(
+                f"P/B {pb:.1f}x not supported by ROE — paying {pb:.0f}x book "
+                f"without the returns to justify it; low margin of safety"
+            )
+        pe_warn_threshold = 30 if risk_profile == "conservative" else 45
+        if pe is not None and pe > pe_warn_threshold:
+            warnings.append(f"P/E {pe:.0f}x — growth priced in; limited room for error")
 
     key_metrics: dict[str, Any] = {}
     if five_yr_cagr is not None:
@@ -318,7 +384,7 @@ def compute_fundamental_score(
     if profit_margin is not None:
         key_metrics["profit_margin"] = f"{profit_margin*100:.1f}%"
     if div_yield and div_yield > 0:
-        key_metrics["dividend_yield"] = f"{div_yield*100:.1f}%"
+        key_metrics["dividend_yield"] = f"{div_yield:.1f}%"   # already a percent from yfinance
 
     return {
         "fundamental_score": total,

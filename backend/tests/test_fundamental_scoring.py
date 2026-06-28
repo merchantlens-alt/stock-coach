@@ -81,11 +81,17 @@ class TestComputeFundamentalScore:
         assert "5yr_cagr" in result["key_metrics"]
 
     def test_dividend_bonus_for_conservative(self) -> None:
-        info_div    = self._make_info(dividendYield=0.03)   # 3% dividend
+        info_div    = self._make_info(dividendYield=3.0)   # 3% (yfinance percent form)
         info_no_div = self._make_info(dividendYield=0.0)
         with_div    = compute_fundamental_score(info_div,    0.12, "india", "conservative")
         without_div = compute_fundamental_score(info_no_div, 0.12, "india", "conservative")
         assert with_div["fundamental_score"] >= without_div["fundamental_score"]
+
+    def test_dividend_yield_displayed_as_percent_not_multiplied(self) -> None:
+        """yfinance returns dividendYield already as a percent — must NOT ×100 (552% bug)."""
+        info = self._make_info(dividendYield=5.52)   # ITC-style 5.52%
+        result = compute_fundamental_score(info, 0.12, "india", "moderate")
+        assert result["key_metrics"]["dividend_yield"] == "5.5%"
 
     def test_earnings_growth_bonus_for_aggressive(self) -> None:
         info_fast = self._make_info(earningsGrowth=0.25)
@@ -102,14 +108,45 @@ class TestComputeFundamentalScore:
         assert "valuation" in result["breakdown"]
         assert "price_to_book" in result["key_metrics"]
 
-    def test_extreme_price_to_book_lowers_score_and_warns(self) -> None:
-        """A MAZDOCK-style name: great fundamentals but P/B ~10x is not QARP."""
-        strong = dict(returnOnEquity=0.28, revenueGrowth=0.21, debtToEquity=4.0,
-                      heldPercentInstitutions=0.30, trailingPE=38.0)
-        cheap     = compute_fundamental_score({**strong, "priceToBook": 2.0},  0.30, "india", "moderate")
-        expensive = compute_fundamental_score({**strong, "priceToBook": 10.2}, 0.30, "india", "moderate")
-        assert expensive["fundamental_score"] < cheap["fundamental_score"]
+    def test_high_pb_unsupported_by_roe_is_penalised_and_warns(self) -> None:
+        """High P/B with MEDIOCRE ROE = genuinely overvalued → penalise + warn."""
+        weak_roe = dict(returnOnEquity=0.10, revenueGrowth=0.10, debtToEquity=40.0,
+                        heldPercentInstitutions=0.20, trailingPE=20.0)
+        fair      = compute_fundamental_score({**weak_roe, "priceToBook": 2.0},  0.12, "india", "moderate")
+        expensive = compute_fundamental_score({**weak_roe, "priceToBook": 9.0},  0.12, "india", "moderate")
+        assert expensive["fundamental_score"] < fair["fundamental_score"]
         assert any("P/B" in w for w in expensive["warnings"])
+
+    def test_high_pb_justified_by_high_roe_is_not_penalised(self) -> None:
+        """SUZLON-style: 8x book but 40% ROE and reasonable P/E → no P/B penalty or warning."""
+        suzlon = dict(returnOnEquity=0.40, revenueGrowth=0.45, debtToEquity=6.0,
+                      heldPercentInstitutions=0.21, trailingPE=24.7, priceToBook=8.3)
+        result = compute_fundamental_score(suzlon, 0.52, "india", "moderate")
+        assert not any("P/B" in w for w in result["warnings"])
+        # P/E 24.7 is "fair" — valuation should not be in the very-expensive band
+        assert "fair" in result["breakdown"]["valuation"].lower()
+
+    # ── Cyclical valuation (P/B anchor, not P/E) ─────────────────────────────
+
+    def test_cyclical_trough_high_pe_low_pb_is_not_penalised(self) -> None:
+        """A steel stock in a downturn: high P/E on depressed earnings, but P/B ~1x = cheap."""
+        base = dict(returnOnEquity=0.08, revenueGrowth=0.05, debtToEquity=60.0,
+                    heldPercentInstitutions=0.30, sector="Basic Materials")
+        cyclical_cheap = compute_fundamental_score({**base, "trailingPE": 55.0, "priceToBook": 1.0},
+                                                   0.10, "india", "moderate")
+        # Same P/E in a NON-cyclical would read "very expensive"; here P/B 1.0 rules.
+        assert "cyclical" in cyclical_cheap["breakdown"]["valuation"].lower()
+        assert "cheap" in cyclical_cheap["breakdown"]["valuation"].lower()
+        # No P/E warning for a cyclical
+        assert not any("P/E" in w for w in cyclical_cheap["warnings"])
+
+    def test_cyclical_peak_high_pb_warns(self) -> None:
+        """A cyclical at a rich book multiple is flagged as a likely cycle peak."""
+        info = dict(returnOnEquity=0.35, revenueGrowth=0.40, debtToEquity=40.0,
+                    heldPercentInstitutions=0.30, trailingPE=12.0, priceToBook=5.5,
+                    sector="Energy")
+        result = compute_fundamental_score(info, 0.30, "india", "moderate")
+        assert any("cyclical" in w.lower() for w in result["warnings"])
 
     def test_negative_price_to_book_does_not_score_perfect(self) -> None:
         """Buyback names (MCD, ABBV) have negative book equity — must NOT read as 'cheap'."""

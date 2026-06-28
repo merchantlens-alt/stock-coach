@@ -470,6 +470,25 @@ def _dip_bonus(pct_from_high: float | None) -> float:
     return 0.0
 
 
+_QUALITY_FLOOR = 5.5   # below this, a stock is not a quality name — a dip is a value-trap risk
+
+
+def _opportunity_score(s: dict) -> float:
+    """
+    Quality × 0.6 + dip × 0.4, with a quality floor.
+
+    A dip only counts as an OPPORTUNITY on a fundamentally sound business. Below
+    the quality floor we deny the dip bonus entirely, so a weak-but-beaten-down
+    stock can't float above a strong one — the same QARP discipline the allocation
+    picker enforces.
+    """
+    fscore = s.get("fundamental_score") or 5.0  # neutral default when unscored
+    if fscore < _QUALITY_FLOOR:
+        return fscore * 0.6
+    dip = _dip_bonus(s.get("pct_from_52w_high"))
+    return fscore * 0.6 + dip * 0.4
+
+
 async def _build_sector(
     sector_def: dict,
     rank: int,
@@ -520,11 +539,6 @@ async def _build_sector(
     fundamental_rank_map = {s["ticker"]: i + 1 for i, s in enumerate(stocks_by_fundamental)}
 
     # ── Opportunity rank: fundamental quality × 0.6 + dip attractiveness × 0.4 ─
-    def _opportunity_score(s: dict) -> float:
-        fscore = s.get("fundamental_score") or 5.0  # neutral default
-        dip    = _dip_bonus(s.get("pct_from_52w_high"))
-        return fscore * 0.6 + dip * 0.4
-
     stocks_by_opportunity = sorted(stocks, key=_opportunity_score, reverse=True)
     opportunity_rank_map  = {s["ticker"]: i + 1 for i, s in enumerate(stocks_by_opportunity)}
 
