@@ -34,6 +34,12 @@ _BENCHMARK_CAGR: dict[str, float] = {
 
 _CACHE_TTL = 24 * 3600   # 24 h — fundamentals are slow-moving
 
+# Bump this whenever the SCORING LOGIC changes (new component, reweighting,
+# threshold change). It is part of the score cache key, so a deploy with a new
+# version silently invalidates every stale cached score — no manual refresh or
+# Redis flush needed. v2 = added valuation (P/B) component.
+_SCORE_CACHE_VERSION = "v2"
+
 
 # ── Weights by risk profile ──────────────────────────────────────────────────
 
@@ -369,29 +375,35 @@ async def get_fundamental_score(
     market: str,
     risk_profile: str,
     cache: CacheBackend,
+    refresh: bool = False,
 ) -> dict[str, Any]:
     """
     Fetch, score, and cache fundamental data for a single ticker.
 
     Cache key is per-ticker + market (not risk_profile) — we cache the raw
-    metrics and re-score for each profile on the fly.
+    metrics and re-score for each profile on the fly. The score key carries
+    _SCORE_CACHE_VERSION so a scoring-logic change invalidates stale scores.
+
+    refresh=True bypasses both caches and re-fetches live data from yfinance.
     """
     raw_key   = f"fundamentals:raw:{market}:{ticker}"
-    score_key = f"fundamentals:score:{market}:{ticker}:{risk_profile}"
+    score_key = f"fundamentals:score:{_SCORE_CACHE_VERSION}:{market}:{ticker}:{risk_profile}"
 
     # Check if score for this profile is already cached
-    cached_score = await cache.get(score_key)
-    if cached_score:
-        log.info("fundamental_scoring.cache_hit", ticker=ticker, profile=risk_profile)
-        return cached_score
+    if not refresh:
+        cached_score = await cache.get(score_key)
+        if cached_score:
+            log.info("fundamental_scoring.cache_hit", ticker=ticker, profile=risk_profile)
+            return cached_score
 
-    # Check if raw metrics are cached (avoids yfinance re-fetch)
-    raw = await cache.get(raw_key)
+    # Check if raw metrics are cached (avoids yfinance re-fetch). On refresh we
+    # always re-fetch so the user gets live numbers.
+    raw = None if refresh else await cache.get(raw_key)
     if raw:
         info         = raw["info"]
         five_yr_cagr = raw["five_yr_cagr"]
     else:
-        log.info("fundamental_scoring.fetch", ticker=ticker, market=market)
+        log.info("fundamental_scoring.fetch", ticker=ticker, market=market, refresh=refresh)
         info, five_yr_cagr = await _fetch_yf_data(ticker, market)
         await cache.set(raw_key, {"info": info, "five_yr_cagr": five_yr_cagr}, _CACHE_TTL)
 

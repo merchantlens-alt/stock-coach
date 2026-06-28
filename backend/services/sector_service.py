@@ -15,7 +15,7 @@ from typing import Any
 
 from core.logging import get_logger
 from models.schemas import SectorInfo, SectorScanResponse, SectorStock
-from services.fundamental_scoring import get_fundamental_score
+from services.fundamental_scoring import _SCORE_CACHE_VERSION, get_fundamental_score
 
 log = get_logger(__name__)
 
@@ -475,6 +475,7 @@ async def _build_sector(
     rank: int,
     cache: Any,
     max_stocks: int = 5,
+    refresh: bool = False,
 ) -> SectorInfo:
     """Fetch price data + fundamental scores for all tickers; rank by both fundamental quality and dip opportunity."""
     tickers = sector_def["tickers"]
@@ -486,10 +487,10 @@ async def _build_sector(
             price_data = await _fetch_stock_data(ticker)
             if price_data is None:
                 return None
-            # Enrich with fundamental score (uses cache — fast if already scored)
+            # Enrich with fundamental score (cached unless refresh forces recompute)
             try:
                 fscore_data = await asyncio.wait_for(
-                    get_fundamental_score(ticker, market, "moderate", cache),
+                    get_fundamental_score(ticker, market, "moderate", cache, refresh=refresh),
                     timeout=15.0,
                 )
             except Exception:
@@ -563,7 +564,8 @@ async def _build_sector(
 
 async def get_sector_scan(market: str, cache: Any, refresh: bool = False) -> SectorScanResponse:
     """Return full sector scan for market. Cached 24 h."""
-    cache_key = f"sectors:{market}"
+    # Scan response embeds fundamental scores, so rotate it with the score version too.
+    cache_key = f"sectors:{_SCORE_CACHE_VERSION}:{market}"
 
     if not refresh:
         cached = await cache.get(cache_key)
@@ -583,7 +585,7 @@ async def get_sector_scan(market: str, cache: Any, refresh: bool = False) -> Sec
 
     async def _guarded_sector(defn: dict, rank: int) -> SectorInfo:
         async with sector_sem:
-            return await _build_sector(defn, rank, cache)
+            return await _build_sector(defn, rank, cache, refresh=refresh)
 
     results = await asyncio.gather(
         *[_guarded_sector(s, i + 1) for i, s in enumerate(sector_defs)],
