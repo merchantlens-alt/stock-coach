@@ -43,7 +43,8 @@ _CACHE_TTL = 24 * 3600   # 24 h — fundamentals are slow-moving
 #   v4 = valuation reweighted up (~0.18-0.22) so price genuinely moves the grade
 #   v5 = dividend_yield fixed (yfinance now returns a percent, was ×100 wrong)
 #   v6 = cyclical sectors valued on P/B (P/E misleads at cycle peaks/troughs)
-_SCORE_CACHE_VERSION = "v6"
+#   v7 = financials (banks/NBFCs) no longer penalised for structural high D/E
+_SCORE_CACHE_VERSION = "v7"
 
 
 # ── Weights by risk profile ──────────────────────────────────────────────────
@@ -155,6 +156,14 @@ _CYCLICAL_YF_SECTORS = {"Basic Materials", "Energy", "Consumer Cyclical"}
 
 def _is_cyclical(info: dict[str, Any]) -> bool:
     return info.get("sector") in _CYCLICAL_YF_SECTORS
+
+
+# Banks and NBFCs: high debt-to-equity is the business model, not a risk signal.
+_FINANCIAL_YF_SECTORS = {"Financial Services"}
+
+
+def _is_financial(info: dict[str, Any]) -> bool:
+    return info.get("sector") in _FINANCIAL_YF_SECTORS
 
 
 def _score_valuation(
@@ -291,10 +300,17 @@ def compute_fundamental_score(
     profit_margin = _safe("profitMargins")
 
     # Component scores
+    financial = _is_financial(info)
     hist_score, hist_desc = _score_historical(five_yr_cagr, benchmark)
     roe_score,  roe_desc  = _score_roe(roe)
     rev_score,  rev_desc  = _score_revenue_growth(rev_growth)
-    debt_score, debt_desc = _score_debt(de_raw)
+    if financial:
+        # Banks/NBFCs borrow-to-lend — a high D/E is the business model, not a risk
+        # flag, and yfinance has no asset-quality (NPA/capital-adequacy) data to judge
+        # real balance-sheet risk. Neutralise debt and let ROE/growth/valuation carry it.
+        debt_score, debt_desc = 5.0, "leverage is structural for lenders — D/E not comparable to non-financials"
+    else:
+        debt_score, debt_desc = _score_debt(de_raw)
     inst_score, inst_desc = _score_institutional(inst_held)
     cyclical = _is_cyclical(info)
     val_score,  val_desc  = _score_valuation(pb, pe, roe, cyclical=cyclical)
@@ -346,7 +362,7 @@ def compute_fundamental_score(
         warnings.append(f"Negative ROE — business not generating profit on equity")
     if rev_growth is not None and rev_growth < 0:
         warnings.append(f"Revenue contracting ({rev_growth*100:.1f}% YoY)")
-    if de_raw is not None and de_raw / 100 > 1.5:
+    if not financial and de_raw is not None and de_raw / 100 > 1.5:
         warnings.append(f"High leverage (D/E {de_raw/100:.1f}x) — interest cost risk")
     # Valuation warnings. For cyclicals, P/B is the signal (P/E is unreliable); a rich
     # book multiple flags a likely cycle peak. For non-cyclicals, a high P/B only warns

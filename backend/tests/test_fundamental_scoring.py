@@ -55,6 +55,24 @@ class TestComputeFundamentalScore:
         result = compute_fundamental_score(info, five_yr_cagr=0.14, market="india", risk_profile="conservative")
         assert any("leverage" in w.lower() for w in result["warnings"])
 
+    def test_financial_high_de_not_penalised_or_warned(self) -> None:
+        """A strong NBFC (Muthoot Finance-style): D/E ~380 is structural, not a red flag."""
+        nbfc = self._make_info(returnOnEquity=0.30, revenueGrowth=0.50, debtToEquity=380.0,
+                               trailingPE=11.0, sector="Financial Services")
+        result = compute_fundamental_score(nbfc, 0.17, "india", "moderate")
+        assert not any("leverage" in w.lower() for w in result["warnings"])
+        assert "structural" in result["breakdown"]["debt_safety"].lower()
+        # vs the same numbers without the financial tag, which WOULD be penalised
+        manufacturer = compute_fundamental_score({**nbfc, "sector": "Industrials"}, 0.17, "india", "moderate")
+        assert result["fundamental_score"] > manufacturer["fundamental_score"]
+
+    def test_financial_tag_does_not_rescue_weak_nbfc(self) -> None:
+        """Muthoot Capital-style: neutralising debt must NOT rescue a genuinely weak lender."""
+        weak = self._make_info(returnOnEquity=0.017, revenueGrowth=-0.005, debtToEquity=482.0,
+                               trailingPE=30.0, sector="Financial Services")
+        result = compute_fundamental_score(weak, -0.13, "india", "moderate")
+        assert result["grade"] in ("D", "F")
+
     def test_high_pe_penalises_conservative_not_aggressive(self) -> None:
         info = self._make_info(trailingPE=45.0)
         conservative = compute_fundamental_score(info, five_yr_cagr=0.15, market="india", risk_profile="conservative")
